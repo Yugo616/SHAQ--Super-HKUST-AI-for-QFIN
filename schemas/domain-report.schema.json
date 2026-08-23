@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Daily Oracle V6 DomainReport",
+  "title": "SHAQ Daily Oracle DomainReport",
   "type": "object",
   "additionalProperties": false,
   "required": ["domain", "as_of_et", "horizon", "verdict", "thesis", "antithesis", "unknowns", "invalidation", "evidence_ids", "lineage_root_ids"],

@@ -45,7 +45,7 @@ def _previous_weekday(value: date) -> date:
 
 
 def _run_id(runtime_root: Path, session_date: date) -> tuple[str, Path]:
-    prefix = f"V6-CANARY-{session_date.isoformat()}-"
+    prefix = f"SHAQ-CANARY-{session_date.isoformat()}-"
     existing = sorted(path for path in runtime_root.glob(prefix + "*") if path.is_dir())
     for path in reversed(existing):
         if not (path / "audit_complete.json").exists():
@@ -526,8 +526,8 @@ class Workflow:
 
     def failure_record(self, error: Exception) -> Path:
         current = self.now()
-        candidates = sorted(self.runtime_root.glob("V6-CANARY-*"), key=lambda path: path.stat().st_mtime)
-        runtime = candidates[-1] if candidates else self.runtime_root / f"V6-CANARY-{current.date().isoformat()}-FAILED"
+        candidates = sorted(self.runtime_root.glob("SHAQ-CANARY-*"), key=lambda path: path.stat().st_mtime)
+        runtime = candidates[-1] if candidates else self.runtime_root / f"SHAQ-CANARY-{current.date().isoformat()}-FAILED"
         runtime.mkdir(parents=True, exist_ok=True)
         payload = {
             "schema_version": 6,
@@ -539,8 +539,8 @@ class Workflow:
         }
         _write(runtime / "workflow_failure.json", payload, immutable=not (runtime / "workflow_failure.json").exists())
         body = (
-            "<!doctype html><html><head><meta charset=\"utf-8\"><title>Daily Oracle V6 fail-closed report</title></head>"
-            f"<body><h1>Daily Oracle V6 — fail closed</h1><p>{type(error).__name__}</p>"
+            "<!doctype html><html><head><meta charset=\"utf-8\"><title>SHAQ Daily Oracle fail-closed report</title></head>"
+            f"<body><h1>SHAQ Daily Oracle — fail closed</h1><p>{type(error).__name__}</p>"
             "<p>No forecast was promoted and no order was submitted.</p></body></html>"
         )
         (runtime / "professor_report.html").write_text(body, encoding="utf-8")

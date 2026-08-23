@@ -4,7 +4,7 @@ from typing import Any
 
 
 class ContractError(ValueError):
-    """A public report violates the compact V6 interface."""
+    """A public report violates the compact SHAQ interface."""
 
 
 DOMAINS = {

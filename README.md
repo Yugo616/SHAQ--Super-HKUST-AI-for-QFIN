@@ -1,6 +1,6 @@
-# Daily Oracle V6
+# SHAQ Daily Oracle
 
-Daily Oracle V6 is a reference-grounded workflow for forecasting the absolute direction of US stocks from the official regular-session open to close. Six professional domain skills analyze frozen evidence, a non-voting adversary checks the result, and deterministic code enforces time, provenance, independence and paper-trading safety.
+SHAQ Daily Oracle is a reference-grounded workflow for forecasting the absolute direction of US stocks from the official regular-session open to close. Six professional domain skills analyze frozen evidence, a non-voting adversary checks the result, and deterministic code enforces time, provenance, independence and paper-trading safety.
 
 ## Architecture
 
@@ -45,8 +45,8 @@ No Codex installation is required to review the architecture. Start with `skills
 Install the standalone Python safety core from the repository:
 
 ```bash
-git clone https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN.git daily-oracle-v6
-cd daily-oracle-v6
+git clone https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN.git shaq-daily-oracle
+cd shaq-daily-oracle
 python3 -m venv .venv
 source .venv/bin/activate
 python3 -m pip install -e ".[test]"

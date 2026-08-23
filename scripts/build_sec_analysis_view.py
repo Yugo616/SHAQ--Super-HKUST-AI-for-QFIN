@@ -9,7 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from daily_oracle_v6 import build_sec_analysis_text, build_sec_view_receipt  # noqa: E402
+from shaq_daily_oracle import build_sec_analysis_text, build_sec_view_receipt  # noqa: E402
 
 
 def main() -> int:

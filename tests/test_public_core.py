@@ -14,7 +14,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from daily_oracle_v6 import (  # noqa: E402
+from shaq_daily_oracle import (  # noqa: E402
     CandidateError,
     CanaryError,
     ContractError,
@@ -64,7 +64,7 @@ from daily_oracle_v6 import (  # noqa: E402
     merge_evidence_manifests,
     reconciled_journal_status,
 )
-from daily_oracle_v6.hashing import sha256_payload  # noqa: E402
+from shaq_daily_oracle.hashing import sha256_payload  # noqa: E402
 
 
 class PublicCoreTests(unittest.TestCase):
@@ -113,7 +113,7 @@ class PublicCoreTests(unittest.TestCase):
 
     def policy(self, created_at: str = "2026-08-20T08:30:00-04:00") -> dict:
         return {
-            "run_id": "V6-CANARY-001",
+            "run_id": "SHAQ-CANARY-001",
             "created_at": created_at,
             "intent_created_at": created_at,
             "portfolio_observed_at": created_at,
@@ -777,7 +777,7 @@ class PublicCoreTests(unittest.TestCase):
             forecasts=[{"symbol": "NVDA", "direction": "bullish", "score_eligible": True}],
             portfolio={
                 "account_alias": "US_SIMULATE_CANARY", "trd_env": "SIMULATE",
-                "positions": [{"symbol": "NVDA", "quantity": 10, "origin": "v6"}],
+                "positions": [{"symbol": "NVDA", "quantity": 10, "origin": "shaq"}],
             },
             borrowable={}, policy=self.policy(),
         )
@@ -892,7 +892,7 @@ class PublicCoreTests(unittest.TestCase):
         )
         unsigned = {
             "schema_version": 6,
-            "run_id": "V6-CANARY-001",
+            "run_id": "SHAQ-CANARY-001",
             "created_at": "2026-08-20T08:30:00-04:00",
             "cutoff_et": self.cutoff,
             "mode": "canary",
@@ -919,7 +919,7 @@ class PublicCoreTests(unittest.TestCase):
         borrowability_payload = {"trd_env": "SIMULATE", "borrowable": {}}
         intent_unsigned = {
             "schema_version": 6,
-            "run_id": "V6-CANARY-001",
+            "run_id": "SHAQ-CANARY-001",
             "created_at": "2026-08-20T08:31:00-04:00",
             "mode": "canary",
             "trd_env": "SIMULATE",
@@ -957,7 +957,7 @@ class PublicCoreTests(unittest.TestCase):
             "portfolio_post_exit.json": {"trd_env": "SIMULATE"},
             "labels_provisional.json": {
                 "schema_version": 6,
-                "run_id": "V6-CANARY-001",
+                "run_id": "SHAQ-CANARY-001",
                 "provider": "Futu OpenD",
                 "captured_at_et": "2026-08-20T16:05:00-04:00",
                 "adjustment": "NONE",
@@ -969,7 +969,7 @@ class PublicCoreTests(unittest.TestCase):
             },
             "evaluations_provisional.json": {
                 "schema_version": 6,
-                "run_id": "V6-CANARY-001",
+                "run_id": "SHAQ-CANARY-001",
                 "official_label_status": "provisional",
                 "evaluations": [],
             },
@@ -1099,7 +1099,7 @@ class PublicCoreTests(unittest.TestCase):
             borrowable={}, policy=self.policy(),
         )
         frozen_unsigned = {
-            "run_id": "V6-CANARY-001", "mode": "canary",
+            "run_id": "SHAQ-CANARY-001", "mode": "canary",
             "predictions": [{"symbol": "AAPL", "direction": "bullish"}],
         }
         frozen = {**frozen_unsigned, "run_sha256": sha256_payload(frozen_unsigned)}
@@ -1322,7 +1322,7 @@ class PublicCoreTests(unittest.TestCase):
     def test_no_ai_fallback_freezes_six_unavailable_domains_and_no_prediction(self):
         intake = {"candidates": [{"symbol": "MSFT"}, {"symbol": "AAPL"}]}
         result = build_no_ai_run_input(
-            run_id="V6-CANARY-001",
+            run_id="SHAQ-CANARY-001",
             created_at="2026-08-20T08:30:00-04:00",
             cutoff_et=self.cutoff,
             candidate_intake=intake,
@@ -1383,13 +1383,13 @@ class PublicCoreTests(unittest.TestCase):
 
     def test_unadjusted_regular_session_label_and_flat_policy(self):
         up = build_label_row(
-            run_id="V6-CANARY-001", symbol="AAPL", direction="bullish", trade_date="2026-08-20",
+            run_id="SHAQ-CANARY-001", symbol="AAPL", direction="bullish", trade_date="2026-08-20",
             rows=[{"time_key": "2026-08-20 00:00:00", "open": 100, "close": 102}],
             phase="provisional", adjustment="NONE",
         )
         self.assertTrue(up["correct"])
         flat = build_label_row(
-            run_id="V6-CANARY-001", symbol="AAPL", direction="bearish", trade_date="2026-08-20",
+            run_id="SHAQ-CANARY-001", symbol="AAPL", direction="bearish", trade_date="2026-08-20",
             rows=[{"time_key": "2026-08-20 00:00:00", "open": 100, "close": 100}],
             phase="final", adjustment="NONE",
         )
@@ -1397,13 +1397,13 @@ class PublicCoreTests(unittest.TestCase):
         self.assertFalse(flat["correct"])
         with self.assertRaises(Exception):
             build_label_row(
-                run_id="V6-CANARY-001", symbol="AAPL", direction="bullish", trade_date="2026-08-20",
+                run_id="SHAQ-CANARY-001", symbol="AAPL", direction="bullish", trade_date="2026-08-20",
                 rows=[{"time_key": "2026-08-20", "open": 100, "close": 102}],
                 phase="final", adjustment="QFQ",
             )
         with self.assertRaises(Exception):
             build_label_row(
-                run_id="V6-CANARY-001", symbol="AAPL", direction="bullish", trade_date="2026-08-20",
+                run_id="SHAQ-CANARY-001", symbol="AAPL", direction="bullish", trade_date="2026-08-20",
                 rows=[{"time_key": "2026-08-19", "open": 100, "close": 102}],
                 phase="final", adjustment="NONE",
             )
@@ -1650,7 +1650,7 @@ class PublicCoreTests(unittest.TestCase):
             "veto_reason": "",
         }
         value = {
-            "run_id": "V6-CANARY-001",
+            "run_id": "SHAQ-CANARY-001",
             "created_at": "2026-08-20T08:30:00-04:00",
             "cutoff_et": self.cutoff,
             "evidence": [self.record("e1", "event")],

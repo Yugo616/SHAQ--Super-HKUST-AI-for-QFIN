@@ -292,7 +292,7 @@ def audit_runtime(runtime: str | Path, stage: str) -> dict[str, Any]:
         raise AuditError("label placeholder count differs from forecast count")
     external = set(intents.get("external_positions", []))
     if any(intent["symbol"] in external for intent in intents.get("intents", [])):
-        raise AuditError("an external position entered V6 intents")
+        raise AuditError("an external position entered SHAQ intents")
     configured_quantity = int(execution_policy.get("shares_per_forecast", 0))
     if configured_quantity <= 0 or any(
         intent.get("quantity") != configured_quantity for intent in intents.get("intents", [])
@@ -317,7 +317,7 @@ def audit_runtime(runtime: str | Path, stage: str) -> dict[str, Any]:
         }
         intended_symbols = {row["symbol"] for row in intents.get("intents", [])}
         if post_symbols & intended_symbols:
-            raise AuditError("a V6 intent symbol remains in the post-exit portfolio")
+            raise AuditError("a SHAQ intent symbol remains in the post-exit portfolio")
         if len(ledger.get("round_trips", [])) != len(intents.get("intents", [])):
             raise AuditError("execution ledger and intent counts differ")
         if any(

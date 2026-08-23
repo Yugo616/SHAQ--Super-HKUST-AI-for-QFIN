@@ -11,7 +11,7 @@ from .lineage import build_lineage_graph
 
 
 class RunError(ValueError):
-    """A V6 run cannot be frozen."""
+    """A SHAQ run cannot be frozen."""
 
 
 def _time(value: str) -> datetime:

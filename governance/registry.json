@@ -41,9 +41,9 @@
     ,"DEC-DEEP-EVIDENCE-001": "Collect relationship context, event-level order flow and option distributions with explicit provider status; never infer unavailable semantics."
   },
   "experiments": {
-    "EXP-CANARY-001": "First one-share V6 Futu SIMULATE canary.",
-    "EXP-V6-PROBABILITY-001": "Prospective V6 decision-signature calibration.",
-    "EXP-V6-COST-001": "Prospective paper execution-cost collection.",
-    "EXP-V6-NET-EV-001": "Prospective V6 net expected-value and concentration gate."
+    "EXP-CANARY-001": "First one-share SHAQ Futu SIMULATE canary.",
+    "EXP-SHAQ-PROBABILITY-001": "Prospective SHAQ decision-signature calibration.",
+    "EXP-SHAQ-COST-001": "Prospective paper execution-cost collection.",
+    "EXP-SHAQ-NET-EV-001": "Prospective SHAQ net expected-value and concentration gate."
   }
 }

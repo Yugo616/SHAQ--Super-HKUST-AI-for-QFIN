@@ -9,11 +9,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from daily_oracle_v6.ledger import evaluation_record, execution_cost_components  # noqa: E402
+from shaq_daily_oracle.ledger import evaluation_record, execution_cost_components  # noqa: E402
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Build an immutable fill-to-fill V6 paper ledger")
+    parser = argparse.ArgumentParser(description="Build an immutable fill-to-fill SHAQ paper ledger")
     parser.add_argument("--intents", type=Path, required=True)
     parser.add_argument("--journal", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)

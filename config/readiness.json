@@ -8,14 +8,14 @@
     "risk_coverage_fractions": [0.25, 0.5, 0.75, 1.0],
     "reference_id": "REF-PROPER-SCORES-001",
     "decision_id": "DEC-PROBABILITY-GATE-001",
-    "experiment_id": "EXP-V6-PROBABILITY-001",
+    "experiment_id": "EXP-SHAQ-PROBABILITY-001",
     "parameter_bindings": {
-      "minimum_trading_days": ["REF-PROPER-SCORES-001", "DEC-PROBABILITY-GATE-001", "EXP-V6-PROBABILITY-001"],
-      "minimum_evaluated_forecasts": ["REF-PROPER-SCORES-001", "DEC-PROBABILITY-GATE-001", "EXP-V6-PROBABILITY-001"],
-      "bootstrap_block_days": ["REF-BLOCK-BOOTSTRAP-001", "DEC-PROBABILITY-GATE-001", "EXP-V6-PROBABILITY-001"],
-      "bootstrap_repetitions": ["REF-BLOCK-BOOTSTRAP-001", "DEC-PROBABILITY-GATE-001", "EXP-V6-PROBABILITY-001"],
-      "bootstrap_seed": ["REF-BLOCK-BOOTSTRAP-001", "DEC-PROBABILITY-GATE-001", "EXP-V6-PROBABILITY-001"],
-      "risk_coverage_fractions": ["REF-PROPER-SCORES-001", "DEC-PROBABILITY-GATE-001", "EXP-V6-PROBABILITY-001"]
+      "minimum_trading_days": ["REF-PROPER-SCORES-001", "DEC-PROBABILITY-GATE-001", "EXP-SHAQ-PROBABILITY-001"],
+      "minimum_evaluated_forecasts": ["REF-PROPER-SCORES-001", "DEC-PROBABILITY-GATE-001", "EXP-SHAQ-PROBABILITY-001"],
+      "bootstrap_block_days": ["REF-BLOCK-BOOTSTRAP-001", "DEC-PROBABILITY-GATE-001", "EXP-SHAQ-PROBABILITY-001"],
+      "bootstrap_repetitions": ["REF-BLOCK-BOOTSTRAP-001", "DEC-PROBABILITY-GATE-001", "EXP-SHAQ-PROBABILITY-001"],
+      "bootstrap_seed": ["REF-BLOCK-BOOTSTRAP-001", "DEC-PROBABILITY-GATE-001", "EXP-SHAQ-PROBABILITY-001"],
+      "risk_coverage_fractions": ["REF-PROPER-SCORES-001", "DEC-PROBABILITY-GATE-001", "EXP-SHAQ-PROBABILITY-001"]
     }
   },
   "cost": {
@@ -23,10 +23,10 @@
     "minimum_round_trips": 20,
     "reference_id": "REF-IMPLEMENTATION-SHORTFALL-001",
     "decision_id": "DEC-COST-GATE-001",
-    "experiment_id": "EXP-V6-COST-001",
+    "experiment_id": "EXP-SHAQ-COST-001",
     "parameter_bindings": {
-      "minimum_trading_days": ["REF-IMPLEMENTATION-SHORTFALL-001", "DEC-COST-GATE-001", "EXP-V6-COST-001"],
-      "minimum_round_trips": ["REF-IMPLEMENTATION-SHORTFALL-001", "DEC-COST-GATE-001", "EXP-V6-COST-001"]
+      "minimum_trading_days": ["REF-IMPLEMENTATION-SHORTFALL-001", "DEC-COST-GATE-001", "EXP-SHAQ-COST-001"],
+      "minimum_round_trips": ["REF-IMPLEMENTATION-SHORTFALL-001", "DEC-COST-GATE-001", "EXP-SHAQ-COST-001"]
     }
   },
   "net_profit": {
@@ -37,13 +37,13 @@
     "bootstrap_seed": 6002,
     "reference_id": "REF-BLOCK-BOOTSTRAP-001",
     "decision_id": "DEC-NET-EV-GATE-001",
-    "experiment_id": "EXP-V6-NET-EV-001",
+    "experiment_id": "EXP-SHAQ-NET-EV-001",
     "parameter_bindings": {
-      "minimum_trading_days": ["REF-PROPER-SCORES-001", "DEC-NET-EV-GATE-001", "EXP-V6-NET-EV-001"],
-      "minimum_round_trips": ["REF-IMPLEMENTATION-SHORTFALL-001", "DEC-NET-EV-GATE-001", "EXP-V6-NET-EV-001"],
-      "bootstrap_block_days": ["REF-BLOCK-BOOTSTRAP-001", "DEC-NET-EV-GATE-001", "EXP-V6-NET-EV-001"],
-      "bootstrap_repetitions": ["REF-BLOCK-BOOTSTRAP-001", "DEC-NET-EV-GATE-001", "EXP-V6-NET-EV-001"],
-      "bootstrap_seed": ["REF-BLOCK-BOOTSTRAP-001", "DEC-NET-EV-GATE-001", "EXP-V6-NET-EV-001"]
+      "minimum_trading_days": ["REF-PROPER-SCORES-001", "DEC-NET-EV-GATE-001", "EXP-SHAQ-NET-EV-001"],
+      "minimum_round_trips": ["REF-IMPLEMENTATION-SHORTFALL-001", "DEC-NET-EV-GATE-001", "EXP-SHAQ-NET-EV-001"],
+      "bootstrap_block_days": ["REF-BLOCK-BOOTSTRAP-001", "DEC-NET-EV-GATE-001", "EXP-SHAQ-NET-EV-001"],
+      "bootstrap_repetitions": ["REF-BLOCK-BOOTSTRAP-001", "DEC-NET-EV-GATE-001", "EXP-SHAQ-NET-EV-001"],
+      "bootstrap_seed": ["REF-BLOCK-BOOTSTRAP-001", "DEC-NET-EV-GATE-001", "EXP-SHAQ-NET-EV-001"]
     }
   }
 }

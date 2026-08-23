@@ -10,7 +10,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from daily_oracle_v6.universe import derive_effective_universe  # noqa: E402
+from shaq_daily_oracle.universe import derive_effective_universe  # noqa: E402
 
 
 def main() -> int:
@@ -44,7 +44,7 @@ def main() -> int:
         writer.writeheader()
         writer.writerows(rows)
     manifest["events_path"] = str(args.events.resolve())
-    from daily_oracle_v6.hashing import sha256_file
+    from shaq_daily_oracle.hashing import sha256_file
     manifest["events_sha256"] = sha256_file(args.events)
     manifest["output_path"] = str(args.output.resolve())
     manifest["output_sha256"] = sha256_file(args.output)

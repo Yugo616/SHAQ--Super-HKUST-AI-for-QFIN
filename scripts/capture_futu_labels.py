@@ -12,11 +12,11 @@ from zoneinfo import ZoneInfo
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from daily_oracle_v6.labels import build_label_row, validate_label_capture_time  # noqa: E402
+from shaq_daily_oracle.labels import build_label_row, validate_label_capture_time  # noqa: E402
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Capture immutable unadjusted V6 open-to-close labels")
+    parser = argparse.ArgumentParser(description="Capture immutable unadjusted SHAQ open-to-close labels")
     parser.add_argument("--forecast", type=Path, required=True)
     parser.add_argument("--trade-date", required=True)
     parser.add_argument("--phase", choices=["provisional", "final"], required=True)

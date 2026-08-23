@@ -8,11 +8,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from daily_oracle_v6.audit import audit_runtime  # noqa: E402
+from shaq_daily_oracle.audit import audit_runtime  # noqa: E402
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Audit a Daily Oracle V6 canary directory")
+    parser = argparse.ArgumentParser(description="Audit a SHAQ Daily Oracle canary directory")
     parser.add_argument("--runtime", type=Path, required=True)
     parser.add_argument("--stage", choices=["preflight", "complete"], required=True)
     parser.add_argument("--output", type=Path, required=True)

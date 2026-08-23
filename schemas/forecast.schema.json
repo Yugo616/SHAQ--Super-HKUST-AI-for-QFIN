@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Daily Oracle V6 FrozenRun",
+  "title": "SHAQ Daily Oracle FrozenRun",
   "type": "object",
   "additionalProperties": false,
   "required": [

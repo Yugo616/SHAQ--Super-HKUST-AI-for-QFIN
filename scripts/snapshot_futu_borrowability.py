@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from daily_oracle_v6.execution import select_simulate_us_account  # noqa: E402
+from shaq_daily_oracle.execution import select_simulate_us_account  # noqa: E402
 
 
 def main() -> int:

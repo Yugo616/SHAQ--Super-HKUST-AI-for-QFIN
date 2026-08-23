@@ -14,8 +14,8 @@ from zoneinfo import ZoneInfo
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from daily_oracle_v6 import build_price_history_document  # noqa: E402
-from daily_oracle_v6.hashing import sha256_file  # noqa: E402
+from shaq_daily_oracle import build_price_history_document  # noqa: E402
+from shaq_daily_oracle.hashing import sha256_file  # noqa: E402
 
 
 def _plain(value):
@@ -29,7 +29,7 @@ def _plain(value):
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Freeze T-1 unadjusted price paths for V6 candidates")
+    parser = argparse.ArgumentParser(description="Freeze T-1 unadjusted price paths for SHAQ candidates")
     parser.add_argument("--candidates", type=Path, required=True)
     parser.add_argument("--stock-snapshot", type=Path, required=True)
     parser.add_argument("--benchmark-snapshot", type=Path, required=True)

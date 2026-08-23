@@ -10,7 +10,7 @@ from .workflow import Workflow
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="daily-oracle", description="Daily Oracle V6 single entrypoint")
+    parser = argparse.ArgumentParser(prog="daily-oracle", description="SHAQ Daily Oracle single entrypoint")
     commands = parser.add_subparsers(dest="command", required=True)
     run = commands.add_parser("run", help="run or resume one six-domain session")
     run.add_argument("--mode", choices=("paper", "shadow"), default="shadow")

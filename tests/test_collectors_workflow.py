@@ -11,18 +11,18 @@ from zoneinfo import ZoneInfo
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from daily_oracle_v6.cli import build_parser  # noqa: E402
-from daily_oracle_v6.collectors import (  # noqa: E402
+from shaq_daily_oracle.cli import build_parser  # noqa: E402
+from shaq_daily_oracle.collectors import (  # noqa: E402
     CollectorError,
     build_capital_document,
     build_derivatives_document,
     build_relationship_document,
     collection_status,
 )
-from daily_oracle_v6.reports import write_reports  # noqa: E402
-from daily_oracle_v6.schedule import formal_mode, session_times  # noqa: E402
-from daily_oracle_v6.workflow import Workflow, WorkflowError  # noqa: E402
-from daily_oracle_v6.canary import build_canary_intents  # noqa: E402
+from shaq_daily_oracle.reports import write_reports  # noqa: E402
+from shaq_daily_oracle.schedule import formal_mode, session_times  # noqa: E402
+from shaq_daily_oracle.workflow import Workflow, WorkflowError  # noqa: E402
+from shaq_daily_oracle.canary import build_canary_intents  # noqa: E402
 
 
 class CollectorWorkflowTests(unittest.TestCase):
@@ -123,11 +123,11 @@ class CollectorWorkflowTests(unittest.TestCase):
         self.assertEqual(args.command, "run")
         self.assertEqual(args.mode, "paper")
         project = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
-        self.assertIn('daily-oracle = "daily_oracle_v6.cli:main"', project)
+        self.assertIn('daily-oracle = "shaq_daily_oracle.cli:main"', project)
 
     def test_professor_views_are_hash_bound_to_frozen_run(self):
         frozen = {
-            "run_id": "V6-CANARY-2026-08-21-001", "mode": "shadow",
+            "run_id": "SHAQ-CANARY-2026-08-21-001", "mode": "shadow",
             "run_sha256": "a" * 64, "predictions": [], "reports_by_symbol": {},
             "adversary_by_symbol": {},
         }

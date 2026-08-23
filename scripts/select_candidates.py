@@ -9,12 +9,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from daily_oracle_v6.candidates import select_candidates  # noqa: E402
-from daily_oracle_v6.hashing import sha256_file, sha256_payload  # noqa: E402
+from shaq_daily_oracle.candidates import select_candidates  # noqa: E402
+from shaq_daily_oracle.hashing import sha256_file, sha256_payload  # noqa: E402
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Select direction-blind V6 deep-review candidates")
+    parser = argparse.ArgumentParser(description="Select direction-blind SHAQ deep-review candidates")
     parser.add_argument("--stocks", type=Path, required=True)
     parser.add_argument("--benchmarks", type=Path, required=True)
     parser.add_argument("--universe", type=Path, required=True)

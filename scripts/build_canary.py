@@ -11,8 +11,8 @@ from zoneinfo import ZoneInfo
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from daily_oracle_v6 import build_canary_intents  # noqa: E402
-from daily_oracle_v6.hashing import sha256_file, sha256_payload  # noqa: E402
+from shaq_daily_oracle import build_canary_intents  # noqa: E402
+from shaq_daily_oracle.hashing import sha256_file, sha256_payload  # noqa: E402
 
 
 def read(path: str | Path) -> dict:
@@ -20,7 +20,7 @@ def read(path: str | Path) -> dict:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Build safe V6 paper-canary intents")
+    parser = argparse.ArgumentParser(description="Build safe SHAQ paper-canary intents")
     parser.add_argument("--forecast", type=Path, required=True)
     parser.add_argument("--portfolio", type=Path, required=True)
     parser.add_argument("--borrow", type=Path, required=True)

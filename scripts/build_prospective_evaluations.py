@@ -9,11 +9,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from daily_oracle_v6 import build_prospective_evaluations  # noqa: E402
+from shaq_daily_oracle import build_prospective_evaluations  # noqa: E402
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Join frozen V6 forecasts to scientific labels")
+    parser = argparse.ArgumentParser(description="Join frozen SHAQ forecasts to scientific labels")
     parser.add_argument("--forecast", type=Path, required=True)
     parser.add_argument("--labels", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)

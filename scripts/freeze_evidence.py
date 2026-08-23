@@ -9,11 +9,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from daily_oracle_v6.lineage import build_lineage_graph  # noqa: E402
+from shaq_daily_oracle.lineage import build_lineage_graph  # noqa: E402
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Verify files and freeze a V6 evidence lineage graph")
+    parser = argparse.ArgumentParser(description="Verify files and freeze a SHAQ evidence lineage graph")
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--evidence-root", type=Path, required=True)
     parser.add_argument("--cutoff-et", required=True)

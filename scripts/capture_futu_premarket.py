@@ -15,8 +15,8 @@ from zoneinfo import ZoneInfo
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from daily_oracle_v6.hashing import sha256_file  # noqa: E402
-from daily_oracle_v6.premarket import (  # noqa: E402
+from shaq_daily_oracle.hashing import sha256_file  # noqa: E402
+from shaq_daily_oracle.premarket import (  # noqa: E402
     build_symbol_snapshot_documents,
     resolve_premarket_return,
 )

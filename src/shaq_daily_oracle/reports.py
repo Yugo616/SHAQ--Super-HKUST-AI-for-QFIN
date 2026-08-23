@@ -37,7 +37,7 @@ def professor_report(
     order_count = len((orders or {}).get("orders", (orders or {}).get("intents", [])))
     label_count = len((labels or {}).get("labels", []))
     body = (
-        f"<h1>Daily Oracle V6 — {_cell(frozen.get('run_id'))}</h1>"
+        f"<h1>SHAQ Daily Oracle — {_cell(frozen.get('run_id'))}</h1>"
         f"<p class=muted>Mode: {_cell(frozen.get('mode'))} · Target: official unadjusted US regular-session open → close · Frozen hash: <code>{_cell(frozen.get('run_sha256'))}</code></p>"
         "<h2>Frozen predictions</h2><table><thead><tr><th>Symbol</th><th>Direction</th><th>Track</th><th>Strongest countercase</th></tr></thead>"
         f"<tbody>{prediction_rows}</tbody></table>"
@@ -45,7 +45,7 @@ def professor_report(
         "<h2>Collector status</h2><table><thead><tr><th>Symbol</th><th>Domain</th><th>Status</th><th>Reason</th></tr></thead>"
         f"<tbody>{status_rows or '<tr><td colspan=4>No deep candidates.</td></tr>'}</tbody></table>"
     )
-    return _page("Daily Oracle V6 report", body)
+    return _page("SHAQ Daily Oracle report", body)
 
 
 def agent_trace(*, frozen: dict[str, Any]) -> str:
@@ -60,7 +60,7 @@ def agent_trace(*, frozen: dict[str, Any]) -> str:
             f"<h2>{_cell(symbol)}</h2><table><thead><tr><th>Domain</th><th>Verdict</th><th>Thesis</th><th>Antithesis</th><th>Unknowns</th><th>Lineage</th></tr></thead><tbody>{rows}</tbody></table>"
             f"<p><strong>Non-voting adversary:</strong> {_cell(adversary.get('strongest_countercase'))} · veto={_cell(adversary.get('veto'))}</p>"
         )
-    return _page("Daily Oracle V6 agent trace", f"<h1>Six-domain trace</h1>{''.join(sections) or '<p>No candidates.</p>'}")
+    return _page("SHAQ Daily Oracle agent trace", f"<h1>Six-domain trace</h1>{''.join(sections) or '<p>No candidates.</p>'}")
 
 
 def write_reports(

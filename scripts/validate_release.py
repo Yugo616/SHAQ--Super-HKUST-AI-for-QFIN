@@ -108,7 +108,7 @@ def main() -> int:
     if manifest.get("skills") != "./skills/":
         raise ValueError("plugin manifest does not expose skills")
     project = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    if 'daily-oracle = "daily_oracle_v6.cli:main"' not in project:
+    if 'daily-oracle = "shaq_daily_oracle.cli:main"' not in project:
         raise ValueError("the public package lacks its single executable entrypoint")
     registry = json.loads((ROOT / "governance/registry.json").read_text(encoding="utf-8"))
     known = {

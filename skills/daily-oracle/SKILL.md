@@ -1,9 +1,9 @@
 ---
 name: daily-oracle
-description: Orchestrate a reference-grounded US premarket stock forecast from six blinded evidence domains, freeze zero to three official open-to-close directions, and prepare fail-closed Futu paper-canary artifacts. Use for Daily Oracle, V6 premarket analysis, multi-agent stock direction, forecast audit, or paper-canary requests.
+description: Orchestrate a reference-grounded US premarket stock forecast from six blinded evidence domains, freeze zero to three official open-to-close directions, and prepare fail-closed Futu paper-canary artifacts. Use for SHAQ Daily Oracle, evidence-linked premarket analysis, multi-agent stock direction, forecast audit, or paper-canary requests.
 ---
 
-# Daily Oracle
+# SHAQ Daily Oracle
 
 Produce a small, auditable forecast rather than a theatrical panel of Agents.
 
@@ -23,7 +23,7 @@ Run `daily-oracle run --mode paper`. Treat it as the only operating interface. I
 8. Require two unconflicted roots: one causal/context domain and one independent market-absorption domain. Reject any independent opposing root.
 9. Freeze zero to three predictions. Do not count Agents, words or copied lineage roots.
 10. If created after cutoff, mark the run `shadow`. Never promote it later.
-11. In eligible canary mode, refresh the Futu `SIMULATE` account, classify non-V6 positions as external, and create one-share intents. A bearish intent requires confirmed borrowability.
+11. In eligible canary mode, refresh the Futu `SIMULATE` account, classify non-SHAQ positions as external, and create one-share intents. A bearish intent requires confirmed borrowability.
 12. Keep official open-to-close labels and actual fill-to-fill trading results in separate fields.
 
 ## Mandatory gates

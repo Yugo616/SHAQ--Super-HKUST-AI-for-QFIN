@@ -94,7 +94,7 @@ def attest_sandboxed_codex(*, workspace_root: Path, output: Path) -> dict[str, A
         raise FileExistsError("isolation attestation is immutable")
     sandbox_exec, codex, _ = _discover_backend()
     started = datetime.now(ZoneInfo("America/New_York")).isoformat()
-    with tempfile.TemporaryDirectory(prefix="daily-oracle-v6-attest-") as name:
+    with tempfile.TemporaryDirectory(prefix="shaq-daily-oracle-attest-") as name:
         temp_root = Path(name)
         production_profile = build_seatbelt_profile(
             codex_path=codex, workspace_root=workspace_root, temp_root=temp_root
@@ -102,10 +102,10 @@ def attest_sandboxed_codex(*, workspace_root: Path, output: Path) -> dict[str, A
         profile_path = temp_root / "production.sb"
         profile_path.write_text(production_profile, encoding="utf-8")
 
-        decoy = workspace_root / "daily-oracle-v6" / ".isolation-decoy"
+        decoy = workspace_root / "shaq-daily-oracle" / ".isolation-decoy"
         created_decoy = not decoy.exists()
         if created_decoy:
-            decoy.write_text("V6_LABEL_DECOY_MUST_NOT_BE_READ", encoding="utf-8")
+            decoy.write_text("SHAQ_LABEL_DECOY_MUST_NOT_BE_READ", encoding="utf-8")
         try:
             read_profile = production_profile.replace(
                 f'(allow process-exec (literal "{_seatbelt_quote(codex)}"))',
@@ -322,7 +322,7 @@ def _inline_domain_packet(*, tasks: list[dict[str, Any]], evidence_root: Path, m
 
 def _codex_call(*, prompt: str, schema: dict[str, Any], config: dict[str, Any], workspace_root: Path) -> tuple[dict[str, Any], dict[str, Any]]:
     sandbox_exec, codex, auth = _discover_backend()
-    with tempfile.TemporaryDirectory(prefix="daily-oracle-v6-infer-") as name:
+    with tempfile.TemporaryDirectory(prefix="shaq-daily-oracle-infer-") as name:
         temp_root = Path(name)
         codex_home = temp_root / "codex-home"
         codex_home.mkdir(mode=0o700)
@@ -459,7 +459,7 @@ def run_sandboxed_six_domain(*, run_id: str, created_at: str, cutoff_et: str, ta
         skill = (skill_dir / "SKILL.md").read_text(encoding="utf-8")
         foundations = (skill_dir / "references" / "foundations.md").read_text(encoding="utf-8")
         prompt = (
-            "You are the isolated Daily Oracle V6 domain analyst. Follow the supplied Skill exactly. "
+            "You are the isolated SHAQ Daily Oracle domain analyst. Follow the supplied Skill exactly. "
             "Use only the inlined packet. You have no permission to browse, use remembered company facts, "
             "infer missing measurements, or access files/tools. Analyze each task independently. Preserve the "
             "task as_of_et and horizon exactly. Cite only that task's evidence IDs and matching lineage roots. "
@@ -558,7 +558,7 @@ def run_sandboxed_six_domain(*, run_id: str, created_at: str, cutoff_et: str, ta
         "verified_lineage_roots": sorted(set(evidence_to_root.values())),
     }
     adversary_prompt = (
-        "You are the isolated non-voting Daily Oracle V6 adversary. Follow the supplied Skill. "
+        "You are the isolated non-voting SHAQ Daily Oracle adversary. Follow the supplied Skill. "
         "Use only the completed reports and verified root list below. Do not add facts or evidence. "
         "Return exactly one review per symbol. A veto is only for the Skill's enumerated integrity failures, "
         "not merely weak or conflicting investment evidence.\n\n"

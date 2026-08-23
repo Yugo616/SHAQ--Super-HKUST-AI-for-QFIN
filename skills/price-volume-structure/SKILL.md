@@ -21,7 +21,7 @@ Return `unavailable` for broken session semantics, adjusted/unadjusted mixing or
 
 ## Prohibited shortcuts
 
-Do not use a universal golden/death cross, RSI threshold, fixed stop, fixed profit target, “gap always follows,” or “gap always fills.” These may be separately registered for a specific mechanism but are not V6 rules.
+Do not use a universal golden/death cross, RSI threshold, fixed stop, fixed profit target, “gap always follows,” or “gap always fills.” These may be separately registered for a specific mechanism but are not SHAQ rules.
 
 ## Output
 

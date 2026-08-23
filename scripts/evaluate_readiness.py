@@ -9,11 +9,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from daily_oracle_v6 import cost_model, net_profit_readiness, probability_readiness  # noqa: E402
+from shaq_daily_oracle import cost_model, net_profit_readiness, probability_readiness  # noqa: E402
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Evaluate prospective V6 probability and cost gates")
+    parser = argparse.ArgumentParser(description="Evaluate prospective SHAQ probability and cost gates")
     parser.add_argument("--evaluations", type=Path, required=True)
     parser.add_argument("--round-trips", type=Path, required=True)
     parser.add_argument("--policy", type=Path, default=ROOT / "config/readiness.json")

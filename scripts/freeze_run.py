@@ -11,17 +11,17 @@ from zoneinfo import ZoneInfo
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from daily_oracle_v6 import (  # noqa: E402
+from shaq_daily_oracle import (  # noqa: E402
     formal_ai_status,
     freeze_run,
     validate_isolation_status,
     verify_isolation_attestation,
 )
-from daily_oracle_v6.hashing import sha256_file, sha256_payload  # noqa: E402
+from shaq_daily_oracle.hashing import sha256_file, sha256_payload  # noqa: E402
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Verify and freeze one Daily Oracle V6 run")
+    parser = argparse.ArgumentParser(description="Verify and freeze one SHAQ Daily Oracle run")
     parser.add_argument("--input", type=Path, required=True)
     parser.add_argument("--evidence-root", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
@@ -31,7 +31,7 @@ def main() -> int:
     parser.add_argument("--isolation-status", type=Path, required=True)
     args = parser.parse_args()
     if args.output.exists():
-        raise FileExistsError("a frozen V6 run is never overwritten")
+        raise FileExistsError("a frozen SHAQ run is never overwritten")
     run_input = json.loads(args.input.read_text(encoding="utf-8"))
     run_input["created_at"] = datetime.now(ZoneInfo("America/New_York")).isoformat()
     integration_policy = json.loads(args.integration_policy.read_text(encoding="utf-8"))

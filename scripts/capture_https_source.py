@@ -15,7 +15,7 @@ from zoneinfo import ZoneInfo
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from daily_oracle_v6.capture import (  # noqa: E402
+from shaq_daily_oracle.capture import (  # noqa: E402
     CaptureError,
     build_capture_receipt,
     extract_sec_acceptance_proof,
@@ -65,7 +65,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--user-agent",
-        default=os.environ.get("DAILY_ORACLE_USER_AGENT", "DailyOracleV6/0.1 primary-source capture"),
+        default=os.environ.get("DAILY_ORACLE_USER_AGENT", "SHAQDailyOracle/0.1 primary-source capture"),
     )
     args = parser.parse_args()
     if args.output.exists() or args.receipt.exists():

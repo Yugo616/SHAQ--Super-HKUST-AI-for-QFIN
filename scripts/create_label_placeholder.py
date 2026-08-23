@@ -8,7 +8,7 @@ from pathlib import Path
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Create immutable V6 scientific-label placeholders"
+        description="Create immutable SHAQ scientific-label placeholders"
     )
     parser.add_argument("--forecast", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)

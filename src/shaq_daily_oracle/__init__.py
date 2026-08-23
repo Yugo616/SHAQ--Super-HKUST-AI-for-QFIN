@@ -1,4 +1,4 @@
-"""Deterministic safety core for Daily Oracle V6."""
+"""Deterministic safety core for SHAQ Daily Oracle."""
 
 from .canary import CanaryError, build_canary_intents
 from .candidates import CandidateError, select_candidates

@@ -9,11 +9,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from daily_oracle_v6.tasks import build_blind_domain_tasks  # noqa: E402
+from shaq_daily_oracle.tasks import build_blind_domain_tasks  # noqa: E402
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Build six blind V6 domain tasks per candidate")
+    parser = argparse.ArgumentParser(description="Build six blind SHAQ domain tasks per candidate")
     parser.add_argument("symbols", nargs="+")
     parser.add_argument("--lineage", type=Path, required=True)
     parser.add_argument("--as-of-et", required=True)

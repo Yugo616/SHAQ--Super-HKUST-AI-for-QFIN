@@ -1,6 +1,6 @@
 ---
 name: thesis-adversary
-description: Red-team a completed Daily Oracle six-domain packet for duplicate lineage, omitted counterfactuals, horizon mismatch, unsupported facts and hard vetoes without adding evidence or casting a vote. Use after all domain reports and before freezing V6 forecasts.
+description: Red-team a completed Daily Oracle six-domain packet for duplicate lineage, omitted counterfactuals, horizon mismatch, unsupported facts and hard vetoes without adding evidence or casting a vote. Use after all domain reports and before freezing SHAQ forecasts.
 ---
 
 # Thesis Adversary
