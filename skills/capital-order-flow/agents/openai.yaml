@@ -1,0 +1,6 @@
+interface:
+  display_name: "Capital Order Flow"
+  short_description: "Measure liquidity-adjusted order-flow imbalance"
+  default_prompt: "Use $capital-order-flow to evaluate verified order-flow and liquidity evidence."
+policy:
+  allow_implicit_invocation: false

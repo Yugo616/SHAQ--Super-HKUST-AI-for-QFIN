@@ -1,0 +1,6 @@
+interface:
+  display_name: "Price-Volume Structure"
+  short_description: "Classify nonlinear path and participation states"
+  default_prompt: "Use $price-volume-structure to classify the cutoff-safe price-volume state for the open-to-close horizon."
+policy:
+  allow_implicit_invocation: false

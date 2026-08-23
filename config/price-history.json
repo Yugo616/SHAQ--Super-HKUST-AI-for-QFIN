@@ -1,0 +1,12 @@
+{
+  "lookback_calendar_days": 400,
+  "minimum_bars": 252,
+  "maximum_symbols": 10,
+  "max_count": 1000,
+  "parameter_bindings": {
+    "lookback_calendar_days": ["REF-CHARTING-001", "DEC-PRICE-HISTORY-001", "EXP-CANARY-001"],
+    "minimum_bars": ["REF-CHARTING-001", "DEC-PRICE-HISTORY-001", "EXP-CANARY-001"],
+    "maximum_symbols": ["REF-FUTU-HISTORY-001", "DEC-PRICE-HISTORY-001", "EXP-CANARY-001"],
+    "max_count": ["REF-FUTU-HISTORY-001", "DEC-PRICE-HISTORY-001", "EXP-CANARY-001"]
+  }
+}

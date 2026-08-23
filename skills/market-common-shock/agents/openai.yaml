@@ -1,0 +1,6 @@
+interface:
+  display_name: "Market Common Shock"
+  short_description: "Classify cross-asset shocks and price absorption"
+  default_prompt: "Use $market-common-shock to produce an evidence-linked premarket market-state report."
+policy:
+  allow_implicit_invocation: false

@@ -1,0 +1,49 @@
+{
+  "references": {
+    "REF-PIT-001": {"title": "Assessing Look-Ahead Bias in GPT Sentiment Stock Predictions", "url": "https://arxiv.org/abs/2309.17322"},
+    "REF-FUTU-001": {"title": "Futu OpenAPI Place Order", "url": "https://openapi.futunn.com/futu-api-doc/en/trade/place-order.html"},
+    "REF-FUTU-QUOTE-001": {"title": "Futu OpenAPI Market Snapshot", "url": "https://openapi.futunn.com/futu-api-doc/en/quote/get-market-snapshot.html"},
+    "REF-FINCON-001": {"title": "FinCon", "url": "https://proceedings.neurips.cc/paper_files/paper/2024/hash/f7ae4fe91d96f50abc2211f09b6a7e49-Abstract-Conference.html"},
+    "REF-PROPER-SCORES-001": {"title": "Strictly Proper Scoring Rules, Prediction, and Estimation", "url": "https://doi.org/10.1198/016214506000001437"},
+    "REF-BLOCK-BOOTSTRAP-001": {"title": "Comparing Probabilistic Forecasting Systems with the Brier Score", "url": "https://doi.org/10.1175/WAF1034.1"},
+    "REF-IMPLEMENTATION-SHORTFALL-001": {"title": "Optimal Execution of Portfolio Transactions", "url": "https://doi.org/10.21314/JOR.2001.041"}
+    ,"REF-COMMON-SHOCK-001": {"title": "Common Shocks in Stocks and Bonds", "url": "https://doi.org/10.1016/j.jfineco.2021.06.008"}
+    ,"REF-HP-001": {"title": "Text-Based Network Industries and Endogenous Product Differentiation", "url": "https://doi.org/10.1086/688176"}
+    ,"REF-CHARTING-001": {"title": "Charting by Machines", "url": "https://doi.org/10.1016/j.jfineco.2024.103791"}
+    ,"REF-OPENAI-MODEL-001": {"title": "OpenAI Model Selection and Structured Output Guidance", "url": "https://developers.openai.com/api/docs/guides/latest-model"}
+    ,"REF-APPLE-SANDBOX-001": {"title": "Configuring the macOS App Sandbox", "url": "https://developer.apple.com/documentation/xcode/configuring-the-macos-app-sandbox"}
+    ,"REF-SEC-FILER-001": {"title": "SEC EDGAR Filer Manual and Document Structure", "url": "https://www.sec.gov/submit-filings/edgar-filer-manual"}
+    ,"REF-FUTU-HISTORY-001": {"title": "Futu OpenAPI Historical Candlesticks", "url": "https://openapi.futunn.com/futu-api-doc/en/quote/request-history-kline.html"}
+    ,"REF-OFI-001": {"title": "The Price Impact of Order Book Events", "url": "https://arxiv.org/abs/1011.6402"}
+    ,"REF-PAN-POTESHMAN-001": {"title": "The Information in Option Volume for Future Stock Prices", "url": "https://doi.org/10.1093/rfs/hhj024"}
+  },
+  "decisions": {
+    "DEC-CUTOFF-001": "All formal evidence must exist by the configured premarket cutoff.",
+    "DEC-EXIT-001": "Paper exits use a configured RTH submission window that may change only for measured API latency.",
+    "DEC-ENTRY-WINDOW-001": "Open canary entries only in the configured post-open operational window.",
+    "DEC-CAP-001": "Publish zero to three forecasts without a direction quota.",
+    "DEC-CANARY-001": "Use one share per forecast until probability and cost gates pass.",
+    "DEC-FRESHNESS-001": "Refresh portfolio and short-capacity snapshots within the configured pre-order age.",
+    "DEC-BATCH-001": "Split and retry missing provider snapshot rows without fabricating data.",
+    "DEC-COVERAGE-001": "A formal universe snapshot must satisfy the registered coverage gate.",
+    "DEC-SEMANTICS-001": "Formal premarket evidence must pass provider field-consistency checks.",
+    "DEC-PRICE-SEMANTICS-001": "Resolve previous close from pre-price minus provider change and cross-check the rate.",
+    "DEC-PROBABILITY-GATE-001": "Use prospective prequential probabilities and proper-score comparisons before publication.",
+    "DEC-COST-GATE-001": "Estimate paper execution cost only from reconciled arrival quotes, fills and fees.",
+    "DEC-NET-EV-GATE-001": "Publish net profitability only after prospective paired returns have positive block-bootstrap support and survive leave-one-group-out concentration checks."
+    ,"DEC-MARKET-BENCHMARKS-001": "Represent equity, duration, dollar, credit and tradable-volatility channels separately; no single instrument is a market vote."
+    ,"DEC-SECTOR-BENCHMARKS-001": "Use all eleven broad GICS-sector ETFs as exposure context; relation type, not ETF correlation alone, determines spillover."
+    ,"DEC-INTEGRATION-001": "Publish only when independent causal-context and market-absorption roots align without an independent opposing root; never substitute Agent counts or hand weights."
+    ,"DEC-CANDIDATE-INTAKE-001": "Deep-review cutoff-safe primary-event symbols and the largest absolute stock-minus-sector premarket residuals after an adaptive cross-sectional participation-maturity gate; intake never assigns direction or strength."
+    ,"DEC-AI-BACKEND-001": "Formal domain inference requires a runtime-specific macOS kernel-sandbox attestation, inlined verified evidence, fixed structured output and first-valid immutable results; any failed probe disables AI."
+    ,"DEC-SEC-VIEW-001": "Archive the complete SEC submission and give AI only a deterministic, reproducible visible-text view of configured filing documents; never summarize or truncate to fit."
+    ,"DEC-PRICE-HISTORY-001": "Give price-volume analysis only T-1 unadjusted regular-session paths and lineage-bound stock-sector premarket residual context; unavailable histories do not receive substitutes."
+    ,"DEC-DEEP-EVIDENCE-001": "Collect relationship context, event-level order flow and option distributions with explicit provider status; never infer unavailable semantics."
+  },
+  "experiments": {
+    "EXP-CANARY-001": "First one-share V6 Futu SIMULATE canary.",
+    "EXP-V6-PROBABILITY-001": "Prospective V6 decision-signature calibration.",
+    "EXP-V6-COST-001": "Prospective paper execution-cost collection.",
+    "EXP-V6-NET-EV-001": "Prospective V6 net expected-value and concentration gate."
+  }
+}

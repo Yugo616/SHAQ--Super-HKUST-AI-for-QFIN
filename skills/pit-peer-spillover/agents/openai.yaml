@@ -1,0 +1,6 @@
+interface:
+  display_name: "PIT Peer Spillover"
+  short_description: "Trace point-in-time company relationship spillovers"
+  default_prompt: "Use $pit-peer-spillover to analyze a cutoff-safe company relationship and spillover mechanism."
+policy:
+  allow_implicit_invocation: false

@@ -1,0 +1,29 @@
+{
+  "run_id": "GENERATED_BY_DAILY_ORACLE",
+  "forecast_cutoff": "GENERATED_BY_DAILY_ORACLE",
+  "entry_after": "GENERATED_BY_DAILY_ORACLE",
+  "entry_deadline": "GENERATED_BY_DAILY_ORACLE",
+  "exit_at": "GENERATED_BY_DAILY_ORACLE",
+  "exit_deadline": "GENERATED_BY_DAILY_ORACLE",
+  "trd_env": "SIMULATE",
+  "real_trading_enabled": false,
+  "account_allowlist": ["US_SIMULATE_CANARY"],
+  "max_forecasts": 3,
+  "shares_per_forecast": 1,
+  "max_portfolio_age_seconds": 300,
+  "max_borrow_age_seconds": 300,
+  "parameter_bindings": {
+    "forecast_cutoff": ["REF-PIT-001", "DEC-CUTOFF-001", "EXP-CANARY-001"],
+    "entry_after": ["REF-FUTU-001", "DEC-ENTRY-WINDOW-001", "EXP-CANARY-001"],
+    "entry_deadline": ["REF-FUTU-001", "DEC-ENTRY-WINDOW-001", "EXP-CANARY-001"],
+    "exit_at": ["REF-FUTU-001", "DEC-EXIT-001", "EXP-CANARY-001"],
+    "exit_deadline": ["REF-FUTU-001", "DEC-EXIT-001", "EXP-CANARY-001"],
+    "trd_env": ["REF-FUTU-001", "DEC-CANARY-001", "EXP-CANARY-001"],
+    "real_trading_enabled": ["REF-FUTU-001", "DEC-CANARY-001", "EXP-CANARY-001"],
+    "account_allowlist": ["REF-FUTU-001", "DEC-CANARY-001", "EXP-CANARY-001"],
+    "max_forecasts": ["REF-FINCON-001", "DEC-CAP-001", "EXP-CANARY-001"],
+    "shares_per_forecast": ["REF-FUTU-001", "DEC-CANARY-001", "EXP-CANARY-001"],
+    "max_portfolio_age_seconds": ["REF-FUTU-001", "DEC-FRESHNESS-001", "EXP-CANARY-001"],
+    "max_borrow_age_seconds": ["REF-FUTU-001", "DEC-FRESHNESS-001", "EXP-CANARY-001"]
+  }
+}

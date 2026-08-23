@@ -1,0 +1,6 @@
+interface:
+  display_name: "Thesis Adversary"
+  short_description: "Audit evidence duplication, conflict, and horizon"
+  default_prompt: "Use $thesis-adversary to audit a frozen six-domain packet without adding evidence or votes."
+policy:
+  allow_implicit_invocation: false

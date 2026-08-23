@@ -1,0 +1,6 @@
+interface:
+  display_name: "Derivatives Evidence"
+  short_description: "Interpret option distributions and directional flow"
+  default_prompt: "Use $derivatives-evidence to analyze cutoff-safe option and derivatives evidence."
+policy:
+  allow_implicit_invocation: false

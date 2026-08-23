@@ -1,0 +1,12 @@
+{
+  "maximum_price_residual_candidates": 6,
+  "maximum_captured_event_candidates": 4,
+  "minimum_premarket_volume_quantile": 0.5,
+  "maximum_snapshot_skew_seconds": 120,
+  "parameter_bindings": {
+    "maximum_price_residual_candidates": ["REF-CHARTING-001", "DEC-CANDIDATE-INTAKE-001", "EXP-CANARY-001"],
+    "maximum_captured_event_candidates": ["REF-PIT-001", "DEC-CANDIDATE-INTAKE-001", "EXP-CANARY-001"],
+    "minimum_premarket_volume_quantile": ["REF-CHARTING-001", "DEC-CANDIDATE-INTAKE-001", "EXP-CANARY-001"],
+    "maximum_snapshot_skew_seconds": ["REF-FUTU-QUOTE-001", "DEC-CANDIDATE-INTAKE-001", "EXP-CANARY-001"]
+  }
+}

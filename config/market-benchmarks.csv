@@ -1,0 +1,19 @@
+instrument,role,gics_sector,lineage_channel,reference_id,decision_id,experiment_id
+SPY,broad_equity,,equity,REF-COMMON-SHOCK-001,DEC-MARKET-BENCHMARKS-001,EXP-CANARY-001
+QQQ,growth_equity,,equity,REF-COMMON-SHOCK-001,DEC-MARKET-BENCHMARKS-001,EXP-CANARY-001
+IWM,small_cap_equity,,equity,REF-COMMON-SHOCK-001,DEC-MARKET-BENCHMARKS-001,EXP-CANARY-001
+IEF,rate_duration_proxy,,rates,REF-COMMON-SHOCK-001,DEC-MARKET-BENCHMARKS-001,EXP-CANARY-001
+UUP,us_dollar_proxy,,dollar,REF-COMMON-SHOCK-001,DEC-MARKET-BENCHMARKS-001,EXP-CANARY-001
+HYG,credit_risk_proxy,,credit,REF-COMMON-SHOCK-001,DEC-MARKET-BENCHMARKS-001,EXP-CANARY-001
+VIXY,tradable_volatility_proxy,,volatility,REF-COMMON-SHOCK-001,DEC-MARKET-BENCHMARKS-001,EXP-CANARY-001
+XLB,materials_sector,Materials,sector_breadth,REF-HP-001,DEC-SECTOR-BENCHMARKS-001,EXP-CANARY-001
+XLC,communication_services_sector,Communication Services,sector_breadth,REF-HP-001,DEC-SECTOR-BENCHMARKS-001,EXP-CANARY-001
+XLE,energy_sector,Energy,sector_breadth,REF-HP-001,DEC-SECTOR-BENCHMARKS-001,EXP-CANARY-001
+XLF,financials_sector,Financials,sector_breadth,REF-HP-001,DEC-SECTOR-BENCHMARKS-001,EXP-CANARY-001
+XLI,industrials_sector,Industrials,sector_breadth,REF-HP-001,DEC-SECTOR-BENCHMARKS-001,EXP-CANARY-001
+XLK,information_technology_sector,Information Technology,sector_breadth,REF-HP-001,DEC-SECTOR-BENCHMARKS-001,EXP-CANARY-001
+XLP,consumer_staples_sector,Consumer Staples,sector_breadth,REF-HP-001,DEC-SECTOR-BENCHMARKS-001,EXP-CANARY-001
+XLRE,real_estate_sector,Real Estate,sector_breadth,REF-HP-001,DEC-SECTOR-BENCHMARKS-001,EXP-CANARY-001
+XLU,utilities_sector,Utilities,sector_breadth,REF-HP-001,DEC-SECTOR-BENCHMARKS-001,EXP-CANARY-001
+XLV,health_care_sector,Health Care,sector_breadth,REF-HP-001,DEC-SECTOR-BENCHMARKS-001,EXP-CANARY-001
+XLY,consumer_discretionary_sector,Consumer Discretionary,sector_breadth,REF-HP-001,DEC-SECTOR-BENCHMARKS-001,EXP-CANARY-001

@@ -1,0 +1,20 @@
+{
+  "provider": "Futu OpenD",
+  "batch_size": 200,
+  "minimum_coverage": 0.99,
+  "minimum_semantic_pass_rate": 0.99,
+  "premarket_return_tolerance": 0.0005,
+  "provider_market_prefix": "US.",
+  "class_share_input_separator": "-",
+  "class_share_provider_separator": ".",
+  "parameter_bindings": {
+    "provider": ["REF-FUTU-QUOTE-001", "DEC-BATCH-001", "EXP-CANARY-001"],
+    "batch_size": ["REF-FUTU-QUOTE-001", "DEC-BATCH-001", "EXP-CANARY-001"],
+    "minimum_coverage": ["REF-PIT-001", "DEC-COVERAGE-001", "EXP-CANARY-001"],
+    "minimum_semantic_pass_rate": ["REF-PIT-001", "DEC-SEMANTICS-001", "EXP-CANARY-001"],
+    "premarket_return_tolerance": ["REF-FUTU-QUOTE-001", "DEC-PRICE-SEMANTICS-001", "EXP-CANARY-001"],
+    "provider_market_prefix": ["REF-FUTU-QUOTE-001", "DEC-PRICE-SEMANTICS-001", "EXP-CANARY-001"],
+    "class_share_input_separator": ["REF-FUTU-QUOTE-001", "DEC-PRICE-SEMANTICS-001", "EXP-CANARY-001"],
+    "class_share_provider_separator": ["REF-FUTU-QUOTE-001", "DEC-PRICE-SEMANTICS-001", "EXP-CANARY-001"]
+  }
+}

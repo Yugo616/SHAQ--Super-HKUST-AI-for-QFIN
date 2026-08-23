@@ -1,0 +1,15 @@
+{
+  "minimum_aligned_independent_roots": 2,
+  "maximum_opposed_independent_roots": 0,
+  "maximum_predictions": 3,
+  "required_aligned_domain_groups": [
+    ["market", "relationships", "event"],
+    ["capital", "derivatives", "price_volume"]
+  ],
+  "parameter_bindings": {
+    "minimum_aligned_independent_roots": ["REF-FINCON-001", "DEC-INTEGRATION-001", "EXP-CANARY-001"],
+    "maximum_opposed_independent_roots": ["REF-FINCON-001", "DEC-INTEGRATION-001", "EXP-CANARY-001"],
+    "maximum_predictions": ["REF-FINCON-001", "DEC-CAP-001", "EXP-CANARY-001"],
+    "required_aligned_domain_groups": ["REF-FINCON-001", "DEC-INTEGRATION-001", "EXP-CANARY-001"]
+  }
+}

@@ -1,0 +1,6 @@
+interface:
+  display_name: "Daily Oracle"
+  short_description: "Run the six-domain premarket decision workflow"
+  default_prompt: "Use $daily-oracle to execute the frozen six-domain open-to-close forecast workflow."
+policy:
+  allow_implicit_invocation: true

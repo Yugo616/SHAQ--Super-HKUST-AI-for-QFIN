@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "daily-oracle-v6"
+version = "0.1.0"
+description = "Reference-grounded six-domain premarket forecasting safety core"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+daily-oracle = "daily_oracle_v6.cli:main"
+
+[project.optional-dependencies]
+futu = ["futu-api>=10.10"]
+test = ["jsonschema>=4.21"]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

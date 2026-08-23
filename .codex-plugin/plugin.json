@@ -1,0 +1,18 @@
+{
+  "name": "daily-oracle-v6",
+  "version": "0.1.0",
+  "description": "Reference-grounded six-domain premarket forecasting with fail-closed evidence and paper-canary controls.",
+  "author": {
+      "name": "Daily Oracle contributors"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Daily Oracle V6",
+    "shortDescription": "Six-domain US premarket forecast and paper canary.",
+    "longDescription": "Builds evidence-linked open-to-close forecasts through six professional domain skills, a non-voting adversary, and deterministic paper-trading safety gates.",
+    "developerName": "Daily Oracle contributors",
+    "category": "Finance",
+    "capabilities": ["premarket-research", "evidence-lineage", "paper-trading"],
+    "defaultPrompt": "Run Daily Oracle for today's US premarket session and keep every claim linked to frozen evidence."
+  }
+}

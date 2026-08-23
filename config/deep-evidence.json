@@ -1,0 +1,22 @@
+{
+  "order_book_depth": 10,
+  "order_book_samples": 3,
+  "sample_interval_seconds": 2,
+  "ticker_max_count": 1000,
+  "capital_window_start": "04:00:00",
+  "relationship_exposure_window": 126,
+  "option_expiry_min_days": 7,
+  "option_expiry_max_days": 60,
+  "option_max_contracts": 400,
+  "parameter_bindings": {
+    "order_book_depth": ["REF-OFI-001", "DEC-DEEP-EVIDENCE-001", "EXP-CANARY-001"],
+    "order_book_samples": ["REF-OFI-001", "DEC-DEEP-EVIDENCE-001", "EXP-CANARY-001"],
+    "sample_interval_seconds": ["REF-OFI-001", "DEC-DEEP-EVIDENCE-001", "EXP-CANARY-001"],
+    "ticker_max_count": ["REF-OFI-001", "DEC-DEEP-EVIDENCE-001", "EXP-CANARY-001"],
+    "capital_window_start": ["REF-OFI-001", "DEC-DEEP-EVIDENCE-001", "EXP-CANARY-001"],
+    "relationship_exposure_window": ["REF-HP-001", "DEC-DEEP-EVIDENCE-001", "EXP-CANARY-001"],
+    "option_expiry_min_days": ["REF-PAN-POTESHMAN-001", "DEC-DEEP-EVIDENCE-001", "EXP-CANARY-001"],
+    "option_expiry_max_days": ["REF-PAN-POTESHMAN-001", "DEC-DEEP-EVIDENCE-001", "EXP-CANARY-001"],
+    "option_max_contracts": ["REF-PAN-POTESHMAN-001", "DEC-DEEP-EVIDENCE-001", "EXP-CANARY-001"]
+  }
+}

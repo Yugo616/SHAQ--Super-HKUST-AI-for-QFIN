@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Daily Oracle V6 FrozenRun",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "run_id", "created_at", "cutoff_et",
+    "publication_deadline_et", "formal_eligibility", "mode",
+    "prediction_target", "lineage", "reports_by_symbol", "adversary_by_symbol",
+    "predictions", "p_committee_hit", "p_net_profit",
+    "probability_publication_allowed", "integration_policy_sha256",
+    "candidate_intake_sha256", "formal_ai_enabled", "isolation_status_sha256",
+    "run_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": 6},
+    "run_id": {"type": "string", "minLength": 1},
+    "created_at": {"type": "string", "format": "date-time"},
+    "cutoff_et": {"type": "string", "format": "date-time"},
+    "publication_deadline_et": {"type": "string", "format": "date-time"},
+    "formal_eligibility": {"type": "boolean"},
+    "mode": {"enum": ["canary", "shadow"]},
+    "prediction_target": {"const": "official_unadjusted_US_regular_session_open_to_close"},
+    "lineage": {"type": "object"},
+    "reports_by_symbol": {"type": "object"},
+    "adversary_by_symbol": {"type": "object"},
+    "predictions": {
+      "type": "array",
+      "maxItems": 3,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "forecast_id", "symbol", "direction", "track", "industry_group",
+          "score_eligible", "decision_features", "decision_signature",
+          "strongest_countercase", "p_committee_hit", "p_net_profit"
+        ],
+        "properties": {
+          "forecast_id": {"type": "string", "minLength": 1},
+          "symbol": {"type": "string", "minLength": 1},
+          "direction": {"enum": ["bullish", "bearish"]},
+          "track": {"enum": ["ordinary", "event"]},
+          "industry_group": {"type": "string", "minLength": 1},
+          "score_eligible": {"type": "boolean"},
+          "decision_features": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "domain_states", "aligned_independent_root_count",
+              "opposed_independent_root_count", "conflicted_lineage_root_count",
+              "aligned_domain_group_coverage"
+            ],
+            "properties": {
+              "domain_states": {
+                "type": "object",
+                "additionalProperties": {
+                  "enum": ["aligned", "opposed", "neutral", "unavailable"]
+                }
+              },
+              "aligned_independent_root_count": {"type": "integer", "minimum": 0},
+              "opposed_independent_root_count": {"type": "integer", "minimum": 0},
+              "conflicted_lineage_root_count": {"type": "integer", "minimum": 0},
+              "aligned_domain_group_coverage": {
+                "type": "array",
+                "minItems": 2,
+                "maxItems": 2,
+                "items": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
+              }
+            }
+          },
+          "decision_signature": {"type": "string", "pattern": "^sig_[0-9a-f]{20}$"},
+          "strongest_countercase": {"type": "string", "minLength": 1},
+          "p_committee_hit": {"type": "null"},
+          "p_net_profit": {"type": "null"}
+        }
+      }
+    },
+    "p_committee_hit": {"type": "null"},
+    "p_net_profit": {"type": "null"},
+    "probability_publication_allowed": {"const": false},
+    "integration_policy_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "candidate_intake_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "formal_ai_enabled": {"type": "boolean"},
+    "isolation_status_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "run_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

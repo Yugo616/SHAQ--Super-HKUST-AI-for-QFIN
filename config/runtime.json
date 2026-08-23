@@ -1,0 +1,28 @@
+{
+  "timezone": "America/New_York",
+  "precheck_start": "08:35:00",
+  "evidence_cutoff": "08:50:00",
+  "forecast_deadline": "09:00:00",
+  "entry_after": "09:30:00",
+  "entry_deadline": "09:35:00",
+  "exit_at": "15:55:00",
+  "exit_deadline": "15:58:00",
+  "label_capture_after": "16:00:05",
+  "account_alias": "US_SIMULATE_CANARY",
+  "shares_per_forecast": 1,
+  "maximum_forecasts": 3,
+  "parameter_bindings": {
+    "timezone": ["REF-PIT-001", "DEC-CUTOFF-001", "EXP-CANARY-001"],
+    "precheck_start": ["REF-PIT-001", "DEC-CUTOFF-001", "EXP-CANARY-001"],
+    "evidence_cutoff": ["REF-PIT-001", "DEC-CUTOFF-001", "EXP-CANARY-001"],
+    "forecast_deadline": ["REF-PIT-001", "DEC-CUTOFF-001", "EXP-CANARY-001"],
+    "entry_after": ["REF-FUTU-001", "DEC-ENTRY-WINDOW-001", "EXP-CANARY-001"],
+    "entry_deadline": ["REF-FUTU-001", "DEC-ENTRY-WINDOW-001", "EXP-CANARY-001"],
+    "exit_at": ["REF-FUTU-001", "DEC-EXIT-001", "EXP-CANARY-001"],
+    "exit_deadline": ["REF-FUTU-001", "DEC-EXIT-001", "EXP-CANARY-001"],
+    "label_capture_after": ["REF-FUTU-HISTORY-001", "DEC-CUTOFF-001", "EXP-CANARY-001"],
+    "account_alias": ["REF-FUTU-001", "DEC-CANARY-001", "EXP-CANARY-001"],
+    "shares_per_forecast": ["REF-FUTU-001", "DEC-CANARY-001", "EXP-CANARY-001"],
+    "maximum_forecasts": ["REF-FINCON-001", "DEC-CAP-001", "EXP-CANARY-001"]
+  }
+}
