@@ -19,6 +19,9 @@
     "cutoff_et": {"type": "string", "format": "date-time"},
     "publication_deadline_et": {"type": "string", "format": "date-time"},
     "formal_eligibility": {"type": "boolean"},
+    "system_identity": {"type": "string", "minLength": 1},
+    "system_config_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "integration_audit_by_symbol": {"type": "object"},
     "mode": {"enum": ["canary", "shadow"]},
     "prediction_target": {"const": "official_unadjusted_US_regular_session_open_to_close"},
     "lineage": {"type": "object"},
@@ -66,6 +69,9 @@
                 "maxItems": 2,
                 "items": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
               }
+              ,"aligned_applicable_domains": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
+              ,"market_or_industry_root_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
+              ,"stock_specific_root_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
             }
           },
           "decision_signature": {"type": "string", "pattern": "^sig_[0-9a-f]{20}$"},

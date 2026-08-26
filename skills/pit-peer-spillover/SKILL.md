@@ -16,10 +16,10 @@ description: Analyze point-in-time customer, supplier, competitor, complement an
 
 ## Abstain
 
-Return `unavailable` for present-day relationship tables backfilled into history, missing effective dates or unsupported company-name matching. Return `neutral` when correlation exists without a defensible mechanism.
+Return `unavailable` for present-day relationship tables backfilled into history, missing effective dates or unsupported company-name matching. Industry beta can remain `available + neutral` without a named company relationship; never invent one from correlation.
 
 ## Output
 
-Use the DomainReport contract. Name the relationship, sign mechanism, effective date and supporting evidence IDs. Do not call two reports independent when they descend from the same event.
+Use the DomainReport contract with `component_type=industry_spillover`. The verdict is the industry/relationship contribution to absolute return. Do not call two reports independent when they descend from the same event.
 
 Read [foundations](references/foundations.md).

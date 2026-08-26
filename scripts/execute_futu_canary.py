@@ -5,6 +5,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -21,6 +22,7 @@ from shaq_daily_oracle.execution import (  # noqa: E402
     find_broker_order,
     register_intent,
     reconciled_journal_status,
+    phase_is_terminal,
     select_simulate_us_account,
     verify_execution_bundle,
 )
@@ -53,9 +55,18 @@ def main() -> int:
     frozen = _read(args.frozen_run)
     policy = _read(args.policy_snapshot)
     verify_execution_bundle(bundle, frozen, policy)
+    journal = _read(args.journal, {"schema_version": 6, "orders": {}})
+    identity_keys = [intent["idempotency_key"] for intent in bundle["intents"]]
+    if args.phase in {"entry", "exit"} and phase_is_terminal(
+        journal["orders"], identity_keys, args.phase
+    ):
+        journal["run_status"] = "NO_TRADE" if not identity_keys else "RECONCILED"
+        journal["last_error"] = None
+        _write(args.journal, journal)
+        print(f"paper {args.phase} already terminal; journal={args.journal}")
+        return 0
     now = datetime.now(ZoneInfo("America/New_York"))
     enforce_execution_window(now, policy, args.phase)
-    journal = _read(args.journal, {"schema_version": 6, "orders": {}})
 
     from futu import (  # type: ignore
         MarketState,
@@ -304,6 +315,56 @@ def main() -> int:
             record["status"] = "SUBMITTED"
             record["broker_order_id"] = str(row["order_id"])
             record["arrival_price"] = quote_record.get("mid") or quote_record.get("last")
+        if args.submit and args.phase in {"entry", "exit"}:
+            interval = int(policy.get("order_poll_interval_seconds", 15))
+            if not 5 <= interval <= 30:
+                raise RuntimeError("invalid order polling interval")
+            deadline = datetime.fromisoformat(
+                str(policy[f"{args.phase}_deadline"]).replace("Z", "+00:00")
+            )
+            while datetime.now(ZoneInfo("America/New_York")) < deadline:
+                if phase_is_terminal(journal["orders"], identity_keys, args.phase):
+                    break
+                time.sleep(interval)
+                ret, refreshed_orders = trade.order_list_query(
+                    trd_env=TrdEnv.SIMULATE, acc_id=account_id, refresh_cache=True
+                )
+                if ret != RET_OK:
+                    raise RuntimeError(f"order polling failed: {refreshed_orders}")
+                broker_rows = [row.to_dict() for _, row in refreshed_orders.iterrows()]
+                for intent in bundle["intents"]:
+                    key = f"{intent['idempotency_key']}:{args.phase}"
+                    record = journal["orders"].get(key)
+                    if not record or record.get("status") in {"FILLED", "CANCELLED", "REJECTED"}:
+                        continue
+                    if record.get("broker_order_id") or record.get("remark"):
+                        reconcile_record(key)
+                _write(args.journal, journal)
+            for intent in bundle["intents"]:
+                key = f"{intent['idempotency_key']}:{args.phase}"
+                record = journal["orders"].get(key)
+                if not record or record.get("status") in {"FILLED", "CANCELLED", "REJECTED"}:
+                    continue
+                if not record.get("broker_order_id"):
+                    continue
+                ret, cancel_result = trade.modify_order(
+                    ModifyOrderOp.CANCEL,
+                    order_id=record["broker_order_id"], qty=0, price=0,
+                    trd_env=TrdEnv.SIMULATE, acc_id=account_id,
+                )
+                if ret != RET_OK:
+                    raise RuntimeError(f"deadline cancellation failed: {cancel_result}")
+            if not phase_is_terminal(journal["orders"], identity_keys, args.phase):
+                ret, refreshed_orders = trade.order_list_query(
+                    trd_env=TrdEnv.SIMULATE, acc_id=account_id, refresh_cache=True
+                )
+                if ret != RET_OK:
+                    raise RuntimeError(f"final order refresh failed: {refreshed_orders}")
+                broker_rows = [row.to_dict() for _, row in refreshed_orders.iterrows()]
+                for intent in bundle["intents"]:
+                    key = f"{intent['idempotency_key']}:{args.phase}"
+                    if key in journal["orders"] and journal["orders"][key].get("broker_order_id"):
+                        reconcile_record(key)
         journal["run_status"] = "PROCESSED"
         journal["last_error"] = None
         _write(args.journal, journal)

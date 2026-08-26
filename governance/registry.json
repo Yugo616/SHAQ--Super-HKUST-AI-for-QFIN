@@ -16,6 +16,12 @@
     ,"REF-FUTU-HISTORY-001": {"title": "Futu OpenAPI Historical Candlesticks", "url": "https://openapi.futunn.com/futu-api-doc/en/quote/request-history-kline.html"}
     ,"REF-OFI-001": {"title": "The Price Impact of Order Book Events", "url": "https://arxiv.org/abs/1011.6402"}
     ,"REF-PAN-POTESHMAN-001": {"title": "The Information in Option Volume for Future Stock Prices", "url": "https://doi.org/10.1093/rfs/hhj024"}
+    ,"REF-FUTU-ORDER-LIST-001": {"title": "Futu OpenAPI Get Order List", "url": "https://openapi.futunn.com/futu-api-doc/en/trade/get-order-list.html"}
+    ,"REF-FUTU-TICKER-001": {"title": "Futu OpenAPI Real-time Ticker and Session.ALL", "url": "https://openapi.futunn.com/futu-api-doc/quote/get-ticker.html"}
+    ,"REF-FUTU-OPTION-EVENT-001": {"title": "Futu OpenAPI Option Event", "url": "https://openapi.futunn.com/futu-api-doc/quote/get-option-event.html"}
+    ,"REF-SEC-LATEST-001": {"title": "SEC EDGAR Latest Filings and APIs", "url": "https://www.sec.gov/search-filings/edgar-application-programming-interfaces"}
+    ,"REF-PROV-001": {"title": "W3C PROV Data Model", "url": "https://www.w3.org/TR/prov-dm/"}
+    ,"REF-SELECTIVE-001": {"title": "Selective Classification via One-Sided Prediction", "url": "https://proceedings.mlr.press/v130/gangrade21a.html"}
   },
   "decisions": {
     "DEC-CUTOFF-001": "All formal evidence must exist by the configured premarket cutoff.",
@@ -39,9 +45,14 @@
     ,"DEC-SEC-VIEW-001": "Archive the complete SEC submission and give AI only a deterministic, reproducible visible-text view of configured filing documents; never summarize or truncate to fit."
     ,"DEC-PRICE-HISTORY-001": "Give price-volume analysis only T-1 unadjusted regular-session paths and lineage-bound stock-sector premarket residual context; unavailable histories do not receive substitutes."
     ,"DEC-DEEP-EVIDENCE-001": "Collect relationship context, event-level order flow and option distributions with explicit provider status; never infer unavailable semantics."
+    ,"DEC-ORDER-POLL-001": "Reconcile submitted paper orders every configured interval within the immutable execution window and remain below the provider refresh limit."
+    ,"DEC-DEEP-EVIDENCE-002": "Use Session.ALL for same-day premarket ticks, preserve OFI liquidity semantics, and treat complete option distributions as available even when directional flow is unconfirmed."
+    ,"DEC-INTEGRATION-002": "Use PROV ancestor root sets, two applicable aligned domain reviews, a context root and a stock-specific root; neutral and not-applicable reviews never vote."
+    ,"DEC-EVENT-DISCOVERY-001": "Discover qualifying PIT-universe filings before candidate selection from SEC latest-filings pages, then fetch only primary submissions; Futu earnings fields supplement timing and expectations."
   },
   "experiments": {
     "EXP-CANARY-001": "First one-share SHAQ Futu SIMULATE canary.",
+    "EXP-CANARY-002": "Prospective one-share canary under the repaired evidence routing and PROV integration identity beginning 2026-08-26.",
     "EXP-SHAQ-PROBABILITY-001": "Prospective SHAQ decision-signature calibration.",
     "EXP-SHAQ-COST-001": "Prospective paper execution-cost collection.",
     "EXP-SHAQ-NET-EV-001": "Prospective SHAQ net expected-value and concentration gate."

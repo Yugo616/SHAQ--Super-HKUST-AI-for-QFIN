@@ -8,6 +8,7 @@
   "exit_at": "15:55:00",
   "exit_deadline": "15:58:00",
   "label_capture_after": "16:00:05",
+  "order_poll_interval_seconds": 15,
   "account_alias": "US_SIMULATE_CANARY",
   "shares_per_forecast": 1,
   "maximum_forecasts": 3,
@@ -21,6 +22,7 @@
     "exit_at": ["REF-FUTU-001", "DEC-EXIT-001", "EXP-CANARY-001"],
     "exit_deadline": ["REF-FUTU-001", "DEC-EXIT-001", "EXP-CANARY-001"],
     "label_capture_after": ["REF-FUTU-HISTORY-001", "DEC-CUTOFF-001", "EXP-CANARY-001"],
+    "order_poll_interval_seconds": ["REF-FUTU-ORDER-LIST-001", "DEC-ORDER-POLL-001", "EXP-CANARY-001"],
     "account_alias": ["REF-FUTU-001", "DEC-CANARY-001", "EXP-CANARY-001"],
     "shares_per_forecast": ["REF-FUTU-001", "DEC-CANARY-001", "EXP-CANARY-001"],
     "maximum_forecasts": ["REF-FINCON-001", "DEC-CAP-001", "EXP-CANARY-001"]

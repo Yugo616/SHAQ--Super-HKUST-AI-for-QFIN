@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 
 from .collectors import (
     CollectorError,
+    build_capital_analysis,
     build_capital_document,
     build_derivatives_document,
     build_relationship_document,
@@ -32,6 +33,14 @@ def _plain(value: Any) -> Any:
     return value if isinstance(value, (str, int, float, bool)) else str(value)
 
 
+def _number(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
 def _write_immutable(path: Path, value: dict[str, Any]) -> None:
     if path.exists():
         raise FileExistsError(f"immutable deep-evidence artifact exists: {path.name}")
@@ -42,6 +51,7 @@ def _write_immutable(path: Path, value: dict[str, Any]) -> None:
 def _record(
     *, domain: str, symbol: str, path: Path, evidence_root: Path,
     captured_at: str, source_uri: str, parent_evidence_ids: list[str] | None = None,
+    analysis_path: Path | None = None, analysis_transform: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     record = {
         "evidence_id": f"futu-{domain}-{symbol.lower()}",
@@ -52,9 +62,22 @@ def _record(
         "raw_sha256": sha256_file(path),
         "captured_at": captured_at,
         "scope_symbols": [symbol],
+        "consumer_domains": {
+            "relationships": ["relationships", "market", "price_volume"],
+            "capital": ["capital"],
+            "derivatives": ["derivatives"],
+        }[domain],
     }
     if parent_evidence_ids:
         record["parent_evidence_ids"] = parent_evidence_ids
+    if analysis_path is not None:
+        if analysis_transform is None:
+            raise CollectorError("analysis view requires a reproducible transform")
+        record.update({
+            "analysis_file_path": str(analysis_path.resolve().relative_to(evidence_root.resolve())),
+            "analysis_sha256": sha256_file(analysis_path),
+            "analysis_transform": analysis_transform,
+        })
     return record
 
 
@@ -104,6 +127,29 @@ def _option_rows(chain: Any, snapshots: Any) -> list[dict[str, Any]]:
     return output
 
 
+def _option_event_rows(frame: Any, expected_date: date) -> list[dict[str, Any]]:
+    fields = (
+        "option_code", "owner_code", "fill_time", "ticker_type", "turnover",
+        "option_type", "strike_price", "strike_time", "dte", "underlying_price",
+        "otm", "iv", "total_volume", "total_open_interest", "vo_ratio",
+        "sentiment", "order_type_list", "strategy_type",
+    )
+    output = []
+    for _, row in frame.iterrows():
+        fill_time = str(row.get("fill_time", ""))
+        if fill_time[:10] != expected_date.isoformat():
+            continue
+        output.append({field: _plain(row.get(field)) for field in fields})
+    return output
+
+
+def _subscribe_us_all_sessions(quote: Any, code: str, subtype: Any, session: Any) -> tuple[Any, Any]:
+    return quote.subscribe(
+        [code], [subtype.TICKER, subtype.ORDER_BOOK],
+        is_first_push=False, session=session.ALL,
+    )
+
+
 def capture_futu_deep_evidence(
     *, candidates: list[dict[str, Any]], universe_csv: Path,
     price_history_dir: Path, evidence_root: Path, output_manifest: Path,
@@ -120,13 +166,17 @@ def capture_futu_deep_evidence(
         "order_book_depth", "order_book_samples", "sample_interval_seconds",
         "ticker_max_count", "capital_window_start", "relationship_exposure_window", "option_expiry_min_days",
         "option_expiry_max_days", "option_max_contracts",
+        "option_event_page_count",
     ):
         if len(config.get("parameter_bindings", {}).get(name, [])) != 3:
             raise CollectorError(f"deep-evidence config lacks bindings for {name}")
     with universe_csv.open(newline="", encoding="utf-8-sig") as handle:
         universe_rows = list(csv.DictReader(handle))
 
-    from futu import OpenQuoteContext, RET_OK, SubType  # type: ignore
+    from futu import (  # type: ignore
+        EventIndicatorType, OpenQuoteContext, OptionEventFilter, OptionMarket,
+        RET_OK, Session, SubType,
+    )
 
     quote = OpenQuoteContext(host=host, port=port)
     records: list[dict[str, Any]] = []
@@ -166,7 +216,7 @@ def capture_futu_deep_evidence(
                 ))
 
             try:
-                ret, error = quote.subscribe([code], [SubType.TICKER, SubType.ORDER_BOOK], is_first_push=False)
+                ret, error = _subscribe_us_all_sessions(quote, code, SubType, Session)
                 if ret != RET_OK:
                     message = str(error)
                     status = "not_entitled" if "right" in message.lower() or "authority" in message.lower() else "provider_error"
@@ -199,10 +249,18 @@ def capture_futu_deep_evidence(
                     )
                     path = evidence_root / "capital_by_symbol" / f"{symbol}.json"
                     _write_immutable(path, capital)
+                    analysis_path = evidence_root / "capital_by_symbol" / f"{symbol}.analysis.json"
+                    analysis_path.write_bytes(build_capital_analysis(path.read_bytes()))
+                    raw_sha256 = sha256_file(path)
                     records.append(_record(
                         domain="capital", symbol=symbol, path=path,
                         evidence_root=evidence_root, captured_at=capital_captured.isoformat(),
                         source_uri=f"futu-opend://ticker-orderbook/{code}",
+                        analysis_path=analysis_path,
+                        analysis_transform={
+                            "name": "capital_ofi_analysis_view_v1",
+                            "source_sha256": raw_sha256,
+                        },
                     ))
                     statuses.append(collection_status(
                         domain="capital", symbol=symbol, status="collected",
@@ -255,9 +313,39 @@ def capture_futu_deep_evidence(
                         frames.append(frame)
                     snapshots = pd.concat(frames, ignore_index=True)
                     derivatives_captured = datetime.now(ZoneInfo("America/New_York")).isoformat()
+                    event_rows = []
+                    ret, option_event_result = quote.get_option_event(
+                        OptionMarket.US_SECURITY,
+                        count=int(config.get("option_event_page_count", 300)),
+                        filter_list=[OptionEventFilter(
+                            EventIndicatorType.OWNER_LIST, security_list=[code]
+                        )],
+                    )
+                    if ret == RET_OK:
+                        previous_session = datetime.now(ZoneInfo("America/New_York")).date() - timedelta(days=1)
+                        while previous_session.weekday() >= 5:
+                            previous_session -= timedelta(days=1)
+                        event_rows = _option_event_rows(
+                            option_event_result["event_list"], previous_session
+                        )
+                    current_oi = {
+                        str(row["code"]): _number(row.get("option_open_interest"))
+                        for _, row in snapshots.iterrows()
+                    }
+                    confirmations = {
+                        str(row.get("option_code")): (
+                            current_oi.get(str(row.get("option_code"))) is not None
+                            and _number(row.get("total_open_interest")) is not None
+                            and current_oi[str(row.get("option_code"))]
+                            > _number(row.get("total_open_interest"))
+                        )
+                        for row in event_rows
+                    }
                     derivatives = build_derivatives_document(
                         symbol=symbol, underlying_price=spot,
-                        option_rows=_option_rows(chain, snapshots), captured_at_et=derivatives_captured,
+                        option_rows=_option_rows(chain, snapshots), option_events=event_rows,
+                        oi_increase_confirmations=confirmations,
+                        captured_at_et=derivatives_captured,
                     )
                     path = evidence_root / "derivatives_by_symbol" / f"{symbol}.json"
                     _write_immutable(path, derivatives)

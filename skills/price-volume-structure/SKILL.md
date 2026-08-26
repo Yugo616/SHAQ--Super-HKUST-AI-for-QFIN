@@ -25,6 +25,6 @@ Do not use a universal golden/death cross, RSI threshold, fixed stop, fixed prof
 
 ## Output
 
-Use the DomainReport contract. Describe state and mechanism in plain language; do not emit indicator votes or confidence scores.
+Use the DomainReport contract with `component_type=price_volume_state`. The verdict is the residual price-volume contribution to absolute return. Describe state and mechanism in plain language; do not emit indicator votes or confidence scores.
 
 Read [foundations](references/foundations.md).

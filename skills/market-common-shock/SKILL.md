@@ -16,10 +16,10 @@ description: Diagnose premarket common shocks across equities, rates, dollar, cr
 
 ## Abstain
 
-Return `unavailable` when timestamps, previous-close semantics or cross-asset snapshots cannot be verified. Return `neutral` when evidence describes volatility but not direction.
+Return `availability=provider_error|not_entitled|no_data` with `verdict=unavailable` when required inputs truly fail. Return `availability=available, verdict=neutral` when evidence describes volatility but not direction.
 
 ## Output
 
-Use the common DomainReport contract. The thesis must name the mechanism and distinguish beta background from stock-specific direction. Do not emit probabilities, scores or other-domain conclusions.
+Use the DomainReport contract with `component_type=market_beta`. The verdict is this component's contribution to absolute return, not a standalone whole-stock vote. Do not emit probabilities, scores or other-domain conclusions.
 
 Read [foundations](references/foundations.md).

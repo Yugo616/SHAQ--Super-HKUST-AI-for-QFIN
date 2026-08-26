@@ -21,7 +21,7 @@ evidence-lineage integrator --> non-voting adversary --> 0-3 forecasts
                                               Futu SIMULATE canary
 ```
 
-The system does not count Agents or reports as votes. Evidence descending from the same raw file or upstream event is one lineage root, regardless of how many domains discuss it.
+The system does not count Agents or reports as votes. Every raw observation keeps its own provenance root. A derived item carries the set of all ancestor roots without merging them; copies of the same raw file or event still count once.
 
 ## Skills
 
@@ -81,10 +81,10 @@ The command invokes the six skills internally. Reviewers consume `professor_repo
 
 1. Freeze evidence available by the configured premarket cutoff.
 2. Verify source URI, first-publication time, capture time and actual SHA-256.
-3. Build a lineage graph across raw files, upstream events and transformations.
-4. Create direction-blind tasks that exclude ranks, labels and other Agent reports.
-5. Run all six domains and preserve `neutral` and `unavailable` results.
-6. Require aligned independent mechanism/context and market-absorption roots with no independent opposing root.
+3. Build a W3C PROV-style ancestry graph across raw files, upstream events and transformations.
+4. Route the raw inputs required by each domain while excluding ranks, labels and other Agent reports.
+5. Run all six domains and distinguish usable-neutral, not-applicable, no-data, entitlement and provider failures.
+6. Require two applicable aligned domains, two independent roots, one market/industry root and one stock-specific root, with no independent opposing root.
 7. Run the adversary once; it may veto an integrity failure but cannot add a vote or new evidence.
 8. Freeze zero to three predictions. A run created after cutoff is permanently marked `shadow`.
 
@@ -94,7 +94,9 @@ The common domain output is:
 domain
 as_of_et
 horizon
-verdict: bullish | bearish | neutral | unavailable
+availability: available | no_data | not_entitled | provider_error
+verdict: bullish | bearish | neutral | not_applicable | unavailable
+component_type
 thesis
 antithesis
 unknowns

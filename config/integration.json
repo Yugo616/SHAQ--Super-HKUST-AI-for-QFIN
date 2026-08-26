@@ -1,15 +1,16 @@
 {
   "minimum_aligned_independent_roots": 2,
+  "minimum_aligned_applicable_domains": 2,
   "maximum_opposed_independent_roots": 0,
   "maximum_predictions": 3,
-  "required_aligned_domain_groups": [
-    ["market", "relationships", "event"],
-    ["capital", "derivatives", "price_volume"]
-  ],
+  "market_or_industry_root_component_types": ["market_context", "industry_context"],
+  "stock_specific_root_component_types": ["stock_event", "stock_capital", "stock_derivatives", "stock_price_volume"],
   "parameter_bindings": {
-    "minimum_aligned_independent_roots": ["REF-FINCON-001", "DEC-INTEGRATION-001", "EXP-CANARY-001"],
-    "maximum_opposed_independent_roots": ["REF-FINCON-001", "DEC-INTEGRATION-001", "EXP-CANARY-001"],
-    "maximum_predictions": ["REF-FINCON-001", "DEC-CAP-001", "EXP-CANARY-001"],
-    "required_aligned_domain_groups": ["REF-FINCON-001", "DEC-INTEGRATION-001", "EXP-CANARY-001"]
+    "minimum_aligned_independent_roots": ["REF-PROV-001", "DEC-INTEGRATION-002", "EXP-CANARY-002"],
+    "minimum_aligned_applicable_domains": ["REF-SELECTIVE-001", "DEC-INTEGRATION-002", "EXP-CANARY-002"],
+    "maximum_opposed_independent_roots": ["REF-SELECTIVE-001", "DEC-INTEGRATION-002", "EXP-CANARY-002"],
+    "maximum_predictions": ["REF-FINCON-001", "DEC-CAP-001", "EXP-CANARY-002"],
+    "market_or_industry_root_component_types": ["REF-PROV-001", "DEC-INTEGRATION-002", "EXP-CANARY-002"],
+    "stock_specific_root_component_types": ["REF-PROV-001", "DEC-INTEGRATION-002", "EXP-CANARY-002"]
   }
 }

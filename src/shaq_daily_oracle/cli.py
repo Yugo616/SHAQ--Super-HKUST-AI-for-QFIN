@@ -7,6 +7,7 @@ from datetime import date
 from pathlib import Path
 
 from .workflow import Workflow
+from .campaign import CampaignConfig, run_campaign
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -17,12 +18,28 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--session-date", type=date.fromisoformat)
     run.add_argument("--runtime-root", type=Path)
     run.add_argument("--no-wait", action="store_true", help=argparse.SUPPRESS)
+    campaign = commands.add_parser("campaign", help=argparse.SUPPRESS)
+    campaign.add_argument("--config", type=Path, required=True)
+    campaign.add_argument("--preflight-only", action="store_true")
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     package_root = Path(__file__).resolve().parents[2]
+    if args.command == "campaign":
+        try:
+            return run_campaign(
+                package_root=package_root,
+                config=CampaignConfig.load(args.config),
+                preflight_only=args.preflight_only,
+            )
+        except Exception as exc:
+            print(json.dumps({
+                "status": "fail_closed", "error_type": type(exc).__name__,
+                "message": str(exc),
+            }, sort_keys=True))
+            return 2
     workflow = Workflow(
         package_root=package_root,
         runtime_root=args.runtime_root,

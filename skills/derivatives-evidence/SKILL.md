@@ -17,10 +17,10 @@ description: Interpret options through implied move, distribution, skew, term st
 
 ## Abstain
 
-Return `neutral` when options only imply volatility. Return `unavailable` for incomplete chains, crossed/stale quotes or missing directional semantics. Max pain never enters direction.
+Return `available + neutral` when a complete chain only implies volatility. Missing directional flow does not make a valid chain unavailable. Return `unavailable` for incomplete chains, crossed/stale quotes or a real provider/entitlement failure. Max pain never enters direction.
 
 ## Output
 
-Use the DomainReport contract. Separate expected range from direction and name every semantic assumption.
+Use the DomainReport contract with `component_type=derivatives_distribution`. Direction requires reliable active side, a non-crossed single-leg structure and later same-contract OI increase; separate expected range from direction.
 
 Read [foundations](references/foundations.md).

@@ -45,33 +45,32 @@ def freeze_run(
     isolation = validate_isolation_status(isolation_status)
     graph = build_lineage_graph(run_input["evidence"], evidence_root, cutoff_et)
     bindings = integration_policy.get("parameter_bindings", {})
-    for name in (
+    required_bindings = [
         "minimum_aligned_independent_roots",
         "maximum_opposed_independent_roots",
         "maximum_predictions",
-        "required_aligned_domain_groups",
-    ):
+    ]
+    modern_policy = "minimum_aligned_applicable_domains" in integration_policy
+    if modern_policy:
+        required_bindings += [
+            "minimum_aligned_applicable_domains", "market_or_industry_root_component_types",
+            "stock_specific_root_component_types",
+        ]
+    else:
+        required_bindings.append("required_aligned_domain_groups")
+    for name in required_bindings:
         if len(bindings.get(name, [])) != 3:
             raise RunError(f"integration policy lacks bindings for {name}")
     minimum_aligned = int(integration_policy["minimum_aligned_independent_roots"])
+    minimum_domains = int(integration_policy.get("minimum_aligned_applicable_domains", 2))
     maximum_opposed = int(integration_policy["maximum_opposed_independent_roots"])
     maximum_predictions = int(integration_policy["maximum_predictions"])
-    required_groups = integration_policy["required_aligned_domain_groups"]
-    if minimum_aligned < 1 or maximum_opposed < 0 or maximum_predictions < 0:
+    context_types = set(integration_policy.get("market_or_industry_root_component_types", ["market_context", "industry_context"]))
+    stock_types = set(integration_policy.get("stock_specific_root_component_types", ["stock_event", "stock_capital", "stock_derivatives", "stock_price_volume"]))
+    if minimum_aligned < 1 or minimum_domains < 2 or maximum_opposed < 0 or maximum_predictions < 0:
         raise RunError("integration root gates are invalid")
-    if (
-        not isinstance(required_groups, list)
-        or len(required_groups) != 2
-        or any(not isinstance(group, list) or not group for group in required_groups)
-    ):
-        raise RunError("integration domain groups are invalid")
-    normalized_groups = [{str(domain) for domain in group} for group in required_groups]
-    if (
-        any(not group.issubset(DOMAINS) for group in normalized_groups)
-        or normalized_groups[0].intersection(normalized_groups[1])
-        or set().union(*normalized_groups) != DOMAINS
-    ):
-        raise RunError("integration domain groups must be disjoint and cover all domains")
+    if not context_types or not stock_types or context_types & stock_types:
+        raise RunError("integration root component roles are invalid")
     captured_times = [_time(record["captured_at"]) for record in graph["records"]]
     if captured_times and _time(created_at) < max(captured_times):
         raise RunError("run creation time cannot precede frozen evidence capture")
@@ -79,8 +78,10 @@ def freeze_run(
     adversary_by_symbol = run_input["adversary_by_symbol"]
     normalized_reports = {}
     normalized_adversary = {}
+    from .tasks import DOMAIN_EVIDENCE_ROUTES
     evidence_domains = {
-        record["evidence_id"]: record["domain"] for record in graph["records"]
+        record["evidence_id"]: set(record.get("consumer_domains", [record["domain"]]))
+        for record in graph["records"]
     }
     for symbol in sorted(reports_by_symbol):
         reports = reports_by_symbol[symbol]
@@ -89,7 +90,7 @@ def freeze_run(
             raise RunError(f"{symbol} requires exactly six distinct domain reports")
         normalized_reports[symbol] = sorted(
             (
-                validate_domain_report(report, graph["evidence_to_root"], evidence_domains)
+                validate_domain_report(report, graph["evidence_to_roots"], evidence_domains)
                 for report in reports
             ),
             key=lambda report: report["domain"],
@@ -147,23 +148,39 @@ def freeze_run(
             for domain, roots in aligned_roots_by_domain.items()
             if roots.intersection(clean_aligned)
         }
-        group_coverage = [
-            sorted(aligned_domains.intersection({str(domain) for domain in group}))
-            for group in required_groups
-        ]
+        root_components = {key: set(value) for key, value in graph["root_component_types"].items()}
+        context_roots = sorted(root for root in clean_aligned if root_components.get(root, set()) & context_types)
+        stock_roots = sorted(root for root in clean_aligned if root_components.get(root, set()) & stock_types)
+        legacy_groups = [set(group) for group in integration_policy.get("required_aligned_domain_groups", [])]
+        group_coverage = (
+            [sorted(aligned_domains.intersection(group)) for group in legacy_groups]
+            if legacy_groups else [
+                sorted(domain for domain in aligned_domains if domain in {"market", "relationships", "event"}),
+                sorted(domain for domain in aligned_domains if domain in {"capital", "derivatives", "price_volume"}),
+            ]
+        )
         decision_features = {
             "domain_states": {key: relative_states[key] for key in sorted(relative_states)},
             "aligned_independent_root_count": len(clean_aligned),
             "opposed_independent_root_count": len(clean_opposed),
             "conflicted_lineage_root_count": len(conflicted),
+            "aligned_applicable_domains": sorted(aligned_domains),
+            "market_or_industry_root_ids": context_roots,
+            "stock_specific_root_ids": stock_roots,
             "aligned_domain_group_coverage": group_coverage,
         }
         if decision_features["aligned_independent_root_count"] < minimum_aligned:
             raise RunError("published direction lacks the required independent evidence roots")
+        if len(aligned_domains) < minimum_domains:
+            raise RunError("published direction lacks two applicable domain reviews")
         if decision_features["opposed_independent_root_count"] > maximum_opposed:
             raise RunError("published direction has an unresolved independent opposing root")
-        if any(not coverage for coverage in group_coverage):
-            raise RunError("published direction lacks causal-context or market-absorption coverage")
+        if modern_policy:
+            if not context_roots or not stock_roots:
+                raise RunError("published direction lacks both context and stock-specific evidence roots")
+        else:
+            if any(not aligned_domains.intersection(group) for group in legacy_groups):
+                raise RunError("published direction lacks legacy domain-group coverage")
         normalized_predictions.append({
             "forecast_id": f"{run_input['run_id']}:{symbol}",
             "symbol": symbol,
@@ -202,5 +219,17 @@ def freeze_run(
         "formal_ai_enabled": isolation["formal_ai_enabled"],
         "isolation_status_sha256": sha256_payload(isolation),
     }
+    if "system_identity" in run_input or "system_config_sha256" in run_input:
+        identity = str(run_input.get("system_identity", ""))
+        config_sha = str(run_input.get("system_config_sha256", ""))
+        if not identity or len(config_sha) != 64 or config_sha.lower() != config_sha:
+            raise RunError("system identity or config hash is invalid")
+        output["system_identity"] = identity
+        output["system_config_sha256"] = config_sha
+    if "integration_audit_by_symbol" in run_input:
+        audit = run_input["integration_audit_by_symbol"]
+        if not isinstance(audit, dict) or set(audit) != set(normalized_reports):
+            raise RunError("integration audit does not match analyzed symbols")
+        output["integration_audit_by_symbol"] = audit
     output["run_sha256"] = sha256_payload(output)
     return output

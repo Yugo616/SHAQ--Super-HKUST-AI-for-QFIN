@@ -1,12 +1,12 @@
 {
   "model": "gpt-5.6-sol",
   "reasoning_effort": "high",
-  "timeout_seconds": 240,
-  "maximum_input_bytes": 2000000,
+  "timeout_seconds": 360,
+  "maximum_input_bytes": 600000,
   "parameter_bindings": {
     "model": ["REF-OPENAI-MODEL-001", "DEC-AI-BACKEND-001", "EXP-CANARY-001"],
     "reasoning_effort": ["REF-OPENAI-MODEL-001", "DEC-AI-BACKEND-001", "EXP-CANARY-001"],
-    "timeout_seconds": ["REF-APPLE-SANDBOX-001", "DEC-AI-BACKEND-001", "EXP-CANARY-001"],
-    "maximum_input_bytes": ["REF-APPLE-SANDBOX-001", "DEC-AI-BACKEND-001", "EXP-CANARY-001"]
+    "timeout_seconds": ["REF-APPLE-SANDBOX-001", "DEC-AI-BACKEND-001", "EXP-CANARY-002"],
+    "maximum_input_bytes": ["REF-OPENAI-MODEL-001", "DEC-AI-BACKEND-001", "EXP-CANARY-002"]
   }
 }

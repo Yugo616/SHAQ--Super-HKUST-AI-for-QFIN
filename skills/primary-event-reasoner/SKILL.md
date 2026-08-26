@@ -17,10 +17,10 @@ description: Evaluate a company event from point-in-time SEC, issuer IR and offi
 
 ## Abstain
 
-Reject second-hand summaries when primary material exists. Return `unavailable` when first-publication time is not verifiable or when content was overwritten. Return `neutral` when facts are real but direction depends on an unknown expectation.
+Reject second-hand summaries when primary material exists. Return `available + not_applicable` when no company event exists today; use `unavailable` only for a true missing, entitlement or provider failure. Return `neutral` when facts are real but direction depends on an unknown expectation.
 
 ## Output
 
-Use the DomainReport contract and cite only supplied evidence IDs. Do not add remembered facts, later commentary or post-open prices.
+Use the DomainReport contract with `component_type=company_event` and cite only supplied evidence IDs. The verdict is the event contribution to absolute return. Do not add remembered facts, later commentary or post-open prices.
 
 Read [foundations](references/foundations.md).

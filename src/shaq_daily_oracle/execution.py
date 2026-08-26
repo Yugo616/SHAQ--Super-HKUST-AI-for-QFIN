@@ -300,3 +300,29 @@ def reconciled_journal_status(orders: dict[str, dict[str, Any]]) -> str:
     if any(record.get("status") not in TERMINAL for record in broker_records):
         return "RECONCILED_ACTIVE"
     return "RECONCILED"
+
+
+def phase_is_terminal(
+    orders: dict[str, dict[str, Any]], idempotency_keys: list[str], phase: str
+) -> bool:
+    """Return true only when every recorded order for a phase is broker-terminal."""
+    if phase not in {"entry", "exit"}:
+        raise ExecutionError("phase must be entry or exit")
+    if not idempotency_keys:
+        return True
+    for key in idempotency_keys:
+        record = orders.get(f"{key}:{phase}")
+        if record is None and phase == "exit":
+            entry = orders.get(f"{key}:entry")
+            if (
+                entry is not None
+                and entry.get("status") in TERMINAL
+                and float(entry.get("dealt_qty", 0)) == 0
+            ):
+                continue
+        if not record or not (
+            record.get("status") in TERMINAL
+            and record.get("reconciliation_status") in {"reconciled", "local_terminal"}
+        ):
+            return False
+    return True

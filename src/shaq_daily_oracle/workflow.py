@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo
 
 from .deep_capture import capture_futu_deep_evidence
 from .evidence_manifest import merge_evidence_manifests
-from .events import capture_sec_candidate_events
+from .events import capture_futu_earnings_calendar, capture_sec_universe_events
 from .hashing import sha256_file, sha256_payload
 from .lineage import build_lineage_graph
 from .reports import write_reports
@@ -87,6 +87,7 @@ class Workflow:
         self.host = host or os.environ.get("FUTU_OPEND_HOST", "127.0.0.1")
         self.port = port or int(os.environ.get("FUTU_OPEND_PORT", "11111"))
         self.runtime_config = _read(self.package_root / "config/runtime.json")
+        self.system_identity = _read(self.package_root / "config/system-identity.json")
         self.zone = ZoneInfo(self.runtime_config["timezone"])
         self.now = now or (lambda: datetime.now(self.zone))
         self.sleep = sleep
@@ -136,6 +137,99 @@ class Workflow:
             raise WorkflowError(f"stage did not create its declared artifacts: {name}")
         self._state(runtime, name, "complete")
 
+    def _complete_no_trade(
+        self,
+        *,
+        runtime: Path,
+        trade_date: date,
+        schedule: dict[str, datetime],
+        frozen_path: Path,
+        portfolio: Path,
+        intents: Path,
+        journal: Path,
+        ledger_view: Path,
+        provisional_view: Path,
+        availability_path: Path,
+    ) -> None:
+        frozen = _read(frozen_path)
+        if frozen.get("predictions") or _read(intents).get("intents"):
+            raise WorkflowError("no-trade completion requires zero forecasts and zero intents")
+        run_id = frozen["run_id"]
+        self._stage(runtime, "no_trade_journal", [journal], lambda: _write(journal, {
+            "schema_version": 6,
+            "run_id": run_id,
+            "trd_env": "SIMULATE",
+            "run_status": "NO_TRADE",
+            "orders": {},
+            "last_error": None,
+        }))
+        for stage_name, marker_name in (
+            ("no_trade_entry", "entry_complete.json"),
+            ("no_trade_exit", "exit_complete.json"),
+            ("no_trade_reconcile", "reconcile_complete.json"),
+        ):
+            marker = runtime / marker_name
+            self._stage(runtime, stage_name, [marker], lambda marker=marker: _write(marker, {
+                "completed_at_et": self.now().isoformat(),
+                "reason": "no_order_intents",
+                "journal_sha256": sha256_file(journal),
+            }))
+        post_exit = runtime / "portfolio_post_exit.json"
+        self._stage(
+            runtime,
+            "post_exit_portfolio",
+            [post_exit],
+            lambda: _write(post_exit, _read(portfolio)),
+        )
+        ledger_observed = runtime / "execution_ledger_observed.json"
+        self._stage(runtime, "execution_ledger", [ledger_observed], lambda: self._script(
+            "build_execution_ledger.py", "--intents", str(intents),
+            "--journal", str(journal), "--output", str(ledger_observed),
+        ))
+        _write(ledger_view, _read(ledger_observed), immutable=False)
+        no_forecast_labels = {
+            "schema_version": 6,
+            "run_id": run_id,
+            "provider": "not_applicable",
+            "captured_at_et": self.now().isoformat(),
+            "adjustment": "NONE",
+            "session_scope": "US_regular_session",
+            "official_label_status": "not_applicable_no_forecasts",
+            "trade_date": trade_date.isoformat(),
+            "session_close_et": datetime.combine(
+                trade_date, datetime.min.time().replace(hour=16), self.zone
+            ).isoformat(),
+            "labels": [],
+        }
+        _write(provisional_view, no_forecast_labels, immutable=False)
+        evaluations = runtime / "evaluations_provisional.json"
+        self._stage(runtime, "prospective_evaluations", [evaluations], lambda: _write(
+            evaluations,
+            {
+                "schema_version": 6,
+                "run_id": run_id,
+                "official_label_status": "not_applicable_no_forecasts",
+                "evaluations": [],
+            },
+        ))
+        readiness = runtime / "readiness_status.json"
+        self._stage(runtime, "readiness", [readiness], lambda: self._script(
+            "evaluate_readiness.py", "--evaluations", str(evaluations),
+            "--round-trips", str(ledger_view), "--output", str(readiness),
+        ))
+        complete = runtime / "audit_complete.json"
+        self._stage(runtime, "complete_audit", [complete], lambda: self._script(
+            "audit_canary.py", "--runtime", str(runtime), "--stage", "complete",
+            "--output", str(complete),
+        ))
+        write_reports(
+            runtime=runtime,
+            frozen=frozen,
+            collection_statuses=_read(availability_path),
+            orders=_read(journal),
+            labels=no_forecast_labels,
+        )
+
     def run(self, *, requested_mode: str, session_date: date | None = None, wait: bool = True) -> Path:
         if requested_mode not in {"paper", "shadow"}:
             raise WorkflowError("mode must be paper or shadow")
@@ -150,6 +244,21 @@ class Workflow:
         universe = _resolve_universe(self.runtime_root)
         initial = runtime / "workflow_identity.json"
         if not initial.exists():
+            governed_files = [
+                self.package_root / "config" / name
+                for name in (
+                    "system-identity.json", "integration.json", "deep-evidence.json",
+                    "event-discovery.json", "candidate-intake.json", "price-history.json",
+                )
+            ]
+            governed_files += sorted((self.package_root / "skills").glob("*/SKILL.md"))
+            governed_files += sorted((self.package_root / "src/shaq_daily_oracle").glob("*.py"))
+            governed_files += sorted((self.package_root / "schemas").glob("*.json"))
+            governed_files += sorted((self.package_root / "scripts").glob("*.py"))
+            system_config_sha256 = sha256_payload({
+                str(path.relative_to(self.package_root)): sha256_file(path)
+                for path in governed_files
+            })
             _write(initial, {
                 "schema_version": 6,
                 "run_id": run_id,
@@ -159,6 +268,8 @@ class Workflow:
                 "started_at_et": current.isoformat(),
                 "universe_sha256": sha256_file(universe),
                 "schedule": {key: value.isoformat() for key, value in schedule.items()},
+                "system_identity": self.system_identity["identity"],
+                "system_config_sha256": system_config_sha256,
             })
         elif _read(initial).get("universe_sha256") != sha256_file(universe):
             raise WorkflowError("resumed run resolved a different universe")
@@ -202,12 +313,50 @@ class Workflow:
             ),
         ))
 
+        sec_event_manifest = runtime / "sec_event_evidence_manifest.json"
+        sec_event_status = runtime / "sec_event_collection_status.json"
+        earnings_manifest = runtime / "earnings_calendar_evidence_manifest.json"
+        earnings_status = runtime / "earnings_calendar_collection_status.json"
+        event_manifest = runtime / "event_evidence_manifest.json"
+        event_status = runtime / "event_collection_status.json"
+        previous_close = datetime.combine(
+            _previous_weekday(trade_date), datetime.min.time().replace(hour=16), self.zone
+        )
+        event_discovery_config = _read(self.package_root / "config/event-discovery.json")
+        event_analysis_config = _read(self.package_root / "config/event-analysis.json")
+        self._stage(runtime, "sec_event_discovery", [sec_event_manifest, sec_event_status], lambda: capture_sec_universe_events(
+            universe_csv=universe, evidence_root=evidence_root,
+            output_manifest=sec_event_manifest, status_output=sec_event_status, cutoff_et=cutoff_text,
+            previous_close_et=previous_close.isoformat(),
+            config=event_discovery_config,
+            analysis_config=event_analysis_config,
+        ))
+        self._stage(runtime, "earnings_calendar", [earnings_manifest, earnings_status], lambda: capture_futu_earnings_calendar(
+            universe_csv=universe, evidence_root=evidence_root,
+            output_manifest=earnings_manifest, status_output=earnings_status,
+            trade_date=trade_date.isoformat(), cutoff_et=cutoff_text, host=self.host, port=self.port,
+        ))
+        def merge_event_discovery() -> None:
+            _write(event_manifest, merge_evidence_manifests(
+                _read(sec_event_manifest), _read(earnings_manifest).get("evidence", [])
+            ))
+            _write(event_status, {
+                "schema_version": 7,
+                "statuses": _read(sec_event_status).get("statuses", []) + _read(earnings_status).get("statuses", []),
+            })
+        self._stage(runtime, "event_discovery_merge", [event_manifest, event_status], merge_event_discovery)
+
         seed_intake = runtime / "candidate_seed_intake.json"
         candidate_policy = runtime / "candidate_policy.json"
+        event_symbols = sorted({
+            scope for record in _read(event_manifest).get("evidence", [])
+            for scope in record.get("scope_symbols", [])
+        })
+        event_arguments = [argument for symbol in event_symbols for argument in ("--event-symbol", symbol)]
         self._stage(runtime, "candidate_intake", [seed_intake, candidate_policy], lambda: self._script(
             "select_candidates.py", "--stocks", str(stocks), "--benchmarks", str(benchmarks),
             "--universe", str(universe), "--policy-snapshot", str(candidate_policy),
-            "--output", str(seed_intake),
+            *event_arguments, "--output", str(seed_intake),
         ))
         seed_candidates = _read(seed_intake).get("candidates", [])
 
@@ -221,29 +370,18 @@ class Workflow:
             "--output", str(history_manifest), "--host", self.host, "--port", str(self.port),
         ))
 
-        event_manifest = runtime / "event_evidence_manifest.json"
-        event_status = runtime / "event_collection_status.json"
-        previous_close = datetime.combine(
-            _previous_weekday(trade_date), datetime.min.time().replace(hour=16), self.zone
-        )
-        self._stage(runtime, "primary_events", [event_manifest, event_status], lambda: capture_sec_candidate_events(
-            candidates=seed_candidates, universe_csv=universe, evidence_root=evidence_root,
-            output_manifest=event_manifest, status_output=event_status, cutoff_et=cutoff_text,
-            previous_close_et=previous_close.isoformat(),
-        ))
-
         intake = runtime / "candidate_intake.json"
         def finalize_intake() -> None:
             document = _read(seed_intake)
-            event_symbols = {
+            captured_event_symbols = {
                 scope
                 for record in _read(event_manifest).get("evidence", [])
                 for scope in record.get("scope_symbols", [])
             }
             for row in document.get("candidates", []):
-                if row["symbol"] in event_symbols:
+                if row["symbol"] in captured_event_symbols:
                     row["captured_primary_event"] = True
-            document["event_candidate_count"] = len(event_symbols)
+            document["event_candidate_count"] = len(captured_event_symbols)
             _write(intake, document)
         self._stage(runtime, "candidate_event_binding", [intake], finalize_intake)
         candidates = _read(intake).get("candidates", [])
@@ -289,8 +427,25 @@ class Workflow:
                 lineage=_read(lineage_path), symbols=[row["symbol"] for row in candidates],
                 as_of_et=analysis_cutoff,
                 horizon="official_US_regular_session_open_to_close",
+                collection_statuses=(
+                    _read(collection_status).get("statuses", [])
+                    + _read(event_status).get("statuses", [])
+                ),
             ),
         ))
+        availability_path = runtime / "domain_availability_status.json"
+        def write_availability() -> None:
+            statuses = []
+            for task in _read(tasks_path).get("tasks", []):
+                status = task.get("collection_status", {})
+                details = status.get("details", [])
+                statuses.append({
+                    "symbol": task["symbol"], "domain": task["domain"],
+                    "status": status.get("status", "no_data"),
+                    "reason": "; ".join(str(row.get("reason")) for row in details if row.get("reason")) or None,
+                })
+            _write(availability_path, {"schema_version": 7, "statuses": statuses})
+        self._stage(runtime, "domain_availability", [availability_path], write_availability)
 
         isolation_status = runtime / "isolation_status.json"
         attestation = runtime / "isolation_attestation.json"
@@ -356,6 +511,8 @@ class Workflow:
             value = _read(run_input)
             value["publication_deadline_et"] = schedule["forecast_deadline"].isoformat()
             value["formal_eligibility"] = mode == "paper"
+            value["system_identity"] = _read(initial)["system_identity"]
+            value["system_config_sha256"] = _read(initial)["system_config_sha256"]
             _write(run_input, value, immutable=False)
         self._state(runtime, "six_domain_and_adversary", "complete" if isolation.get("formal_ai_enabled") else "no_ai")
 
@@ -400,6 +557,9 @@ class Workflow:
                 "entry_deadline": schedule["entry_deadline"].isoformat(),
                 "exit_at": schedule["exit_at"].isoformat(),
                 "exit_deadline": schedule["exit_deadline"].isoformat(),
+                "order_poll_interval_seconds": int(
+                    self.runtime_config["order_poll_interval_seconds"]
+                ),
                 "shares_per_forecast": int(self.runtime_config["shares_per_forecast"]),
                 "max_forecasts": int(self.runtime_config["maximum_forecasts"]),
                 "account_allowlist": [self.runtime_config["account_alias"]],
@@ -430,15 +590,27 @@ class Workflow:
                 "round_trips": [],
             })
         write_reports(
-            runtime=runtime, frozen=_read(frozen_path), collection_statuses={
-                "statuses": _read(collection_status).get("statuses", []) + _read(event_status).get("statuses", [])
-            },
+            runtime=runtime, frozen=_read(frozen_path), collection_statuses=_read(availability_path),
             orders=_read(intents), labels=_read(label_placeholder),
         )
 
-        if requested_mode == "paper" and _read(intents).get("mode") == "canary":
+        intent_bundle = _read(intents)
+        if requested_mode == "paper" and intent_bundle.get("mode") == "canary":
             journal = runtime / "broker_journal.json"
-            if wait:
+            if wait and not intent_bundle.get("intents"):
+                self._complete_no_trade(
+                    runtime=runtime,
+                    trade_date=trade_date,
+                    schedule=schedule,
+                    frozen_path=frozen_path,
+                    portfolio=portfolio,
+                    intents=intents,
+                    journal=journal,
+                    ledger_view=ledger_view,
+                    provisional_view=provisional_view,
+                    availability_path=availability_path,
+                )
+            elif wait:
                 entry_marker = runtime / "entry_complete.json"
                 if not entry_marker.exists():
                     self._wait(schedule["entry_after"])
@@ -504,9 +676,8 @@ class Workflow:
                     "--output", str(complete),
                 ))
                 write_reports(
-                    runtime=runtime, frozen=_read(frozen_path), collection_statuses={
-                        "statuses": _read(collection_status).get("statuses", []) + _read(event_status).get("statuses", [])
-                    }, orders=_read(journal), labels=_read(provisional_view),
+                    runtime=runtime, frozen=_read(frozen_path), collection_statuses=_read(availability_path),
+                    orders=_read(journal), labels=_read(provisional_view),
                 )
             elif not journal.exists():
                 _write(journal, {"schema_version": 6, "run_status": "NOT_SUBMITTED_NO_WAIT", "orders": {}})
@@ -529,19 +700,28 @@ class Workflow:
         candidates = sorted(self.runtime_root.glob("SHAQ-CANARY-*"), key=lambda path: path.stat().st_mtime)
         runtime = candidates[-1] if candidates else self.runtime_root / f"SHAQ-CANARY-{current.date().isoformat()}-FAILED"
         runtime.mkdir(parents=True, exist_ok=True)
+        journal_path = runtime / "broker_journal.json"
+        journal = _read(journal_path) if journal_path.exists() else {"orders": {}}
+        orders_submitted = any(
+            record.get("broker_order_id") for record in journal.get("orders", {}).values()
+        )
         payload = {
             "schema_version": 6,
             "status": "fail_closed",
             "recorded_at_et": current.isoformat(),
             "error_type": type(error).__name__,
             "message": str(error),
-            "orders_submitted": False,
+            "orders_submitted": orders_submitted,
         }
         _write(runtime / "workflow_failure.json", payload, immutable=not (runtime / "workflow_failure.json").exists())
         body = (
-            "<!doctype html><html><head><meta charset=\"utf-8\"><title>SHAQ Daily Oracle fail-closed report</title></head>"
-            f"<body><h1>SHAQ Daily Oracle — fail closed</h1><p>{type(error).__name__}</p>"
-            "<p>No forecast was promoted and no order was submitted.</p></body></html>"
+            "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><title>SHAQ Daily Oracle 安全停止记录</title></head>"
+            f"<body><h1>SHAQ Daily Oracle 当日安全停止</h1><p>异常类型：{type(error).__name__}</p>"
+            + (
+                "<p>异常发生前已有模拟订单记录；系统保留原记录并继续禁止重复下单。</p></body></html>"
+                if orders_submitted else
+                "<p>系统没有提交订单。</p></body></html>"
+            )
         )
         (runtime / "professor_report.html").write_text(body, encoding="utf-8")
         return runtime

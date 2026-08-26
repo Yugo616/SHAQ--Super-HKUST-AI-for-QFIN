@@ -15,12 +15,12 @@ Run `daily-oracle run --mode paper`. Treat it as the only operating interface. I
 
 1. Set `as_of_et`, cutoff and target: official unadjusted US regular-session open to close.
 2. Freeze source files. Require first-publication time, capture time, URI and actual SHA-256.
-3. Build the lineage graph. Shared raw files, upstream events and transforms form one root.
-4. Give each domain only its own evidence. Hide ranks, core direction, labels and other reports.
+3. Build a PROV lineage graph. Every raw observation keeps its own root; a derived item carries all ancestor roots without merging them. Copies of the same event still share one root.
+4. Give each domain the raw evidence required for its stated job, but hide ranks, core direction, labels and other Agent reports.
 5. Invoke all six domain skills. Preserve `neutral` and `unavailable`; never force coverage.
 6. Validate every report against `schemas/domain-report.schema.json` and verified lineage roots.
 7. Invoke `thesis-adversary` once. It may veto but cannot vote, add facts or multiply evidence.
-8. Require two unconflicted roots: one causal/context domain and one independent market-absorption domain. Reject any independent opposing root.
+8. Require two applicable domains aligned on absolute-return components, at least two unconflicted roots, one market/industry root and one stock-specific root. Reject any independent opposing root.
 9. Freeze zero to three predictions. Do not count Agents, words or copied lineage roots.
 10. If created after cutoff, mark the run `shadow`. Never promote it later.
 11. In eligible canary mode, refresh the Futu `SIMULATE` account, classify non-SHAQ positions as external, and create one-share intents. A bearish intent requires confirmed borrowability.
@@ -30,6 +30,7 @@ Run `daily-oracle run --mode paper`. Treat it as the only operating interface. I
 
 - Reject missing files, SHA mismatch, lineage cycles, orphan transforms and post-cutoff material.
 - Reject reports containing self-declared probability, confidence, score or unseen facts.
+- Treat `available + neutral`, `available + not_applicable`, and true provider failure as different states; none is a confirming vote.
 - Keep `p_committee_hit` and `p_net_profit` null until prospective statistical gates pass.
 - Never enable real trading. Never alter or attribute any external position.
 - On stale data, broker ambiguity, duplicate intent or failed reconciliation, add no risk.

@@ -31,6 +31,15 @@ FORBIDDEN_TASK_KEYS = {
     "domain_reports",
 }
 
+DOMAIN_EVIDENCE_ROUTES = {
+    "market": {"market", "relationships"},
+    "relationships": {"relationships", "event", "price_volume", "market"},
+    "event": {"event", "price_volume"},
+    "capital": {"capital", "price_volume"},
+    "derivatives": {"derivatives", "price_volume"},
+    "price_volume": {"price_volume", "market", "relationships", "event"},
+}
+
 
 def _scan_keys(value: Any, location: str) -> None:
     if isinstance(value, dict):
@@ -62,6 +71,7 @@ def build_blind_domain_tasks(
     symbols: Iterable[str],
     as_of_et: str,
     horizon: str,
+    collection_statuses: Iterable[dict[str, Any]] = (),
 ) -> dict[str, Any]:
     records = list(lineage.get("records", []))
     by_domain: dict[str, list[dict[str, Any]]] = {domain: [] for domain in DOMAINS}
@@ -78,7 +88,8 @@ def build_blind_domain_tasks(
             "raw_file_path": str(source_path),
             "raw_sha256": record["raw_sha256"],
             "captured_at": record["captured_at"],
-            "lineage_root_id": record["lineage_root_id"],
+            "lineage_root_ids": record["lineage_root_ids"],
+            "source_domain": domain,
         }
         if record.get("analysis_file_path"):
             analysis_path = Path(record["analysis_file_path"])
@@ -91,8 +102,13 @@ def build_blind_domain_tasks(
         scopes = record.get("scope_symbols")
         if scopes is not None:
             public_record["scope_symbols"] = sorted(str(value).upper() for value in scopes)
-        by_domain[domain].append(public_record)
+        consumers = set(record.get("consumer_domains", [domain]))
+        if not consumers or not consumers.issubset(DOMAINS):
+            raise TaskError("evidence consumer domains are invalid")
+        for consumer in sorted(consumers):
+            by_domain[consumer].append(public_record)
 
+    status_rows = [dict(row) for row in collection_statuses]
     tasks = []
     for symbol in sorted({str(value).upper() for value in symbols}):
         for domain in sorted(DOMAINS):
@@ -109,6 +125,29 @@ def build_blind_domain_tasks(
                 "as_of_et": as_of_et,
                 "horizon": horizon,
                 "evidence": sorted(evidence, key=lambda item: item["evidence_id"]),
+            }
+            relevant = [
+                row for row in status_rows
+                if str(row.get("domain")) == domain
+                and str(row.get("symbol", "")).upper() in {symbol, "*"}
+            ]
+            own_evidence = [row for row in evidence if row.get("source_domain") == domain]
+            if own_evidence:
+                status = "collected"
+            elif relevant:
+                priority = {"not_entitled": 4, "provider_error": 3, "no_data": 2, "not_applicable": 1}
+                status = max(
+                    (str(row.get("status")) for row in relevant),
+                    key=lambda value: priority.get(value, 0),
+                )
+            else:
+                status = "not_applicable" if domain == "event" else "no_data"
+            seed["collection_status"] = {
+                "status": status,
+                "details": sorted(
+                    [{"status": row.get("status"), "reason": row.get("reason")} for row in relevant],
+                    key=lambda row: (str(row["status"]), str(row["reason"])),
+                ),
             }
             tasks.append({"task_id": "task_" + sha256_payload(seed)[:20], **seed})
     return {

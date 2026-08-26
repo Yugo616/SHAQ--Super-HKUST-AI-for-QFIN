@@ -9,5 +9,7 @@
 - Bradley et al.: Brier-score comparison under dependent observations: <https://doi.org/10.1175/WAF1034.1>
 - Almgren and Chriss: execution cost, timing and implementation shortfall: <https://doi.org/10.21314/JOR.2001.041>
 - Futu OpenAPI: simulation, US-session and order semantics: <https://openapi.futunn.com/futu-api-doc/en/trade/place-order.html>
+- W3C PROV-DM: entities, activities and multi-parent derivation without collapsing distinct origins: <https://www.w3.org/TR/prov-dm/>
+- Gangrade, Kag and Saligrama, AISTATS 2021: selective prediction should be evaluated jointly by coverage and risk: <https://proceedings.mlr.press/v130/gangrade21a.html>
 
 System rule: domain reasoning remains readable and evidence-linked. Deterministic code controls provenance, time, integration and broker safety; Agent language never becomes a probability or an independent vote.

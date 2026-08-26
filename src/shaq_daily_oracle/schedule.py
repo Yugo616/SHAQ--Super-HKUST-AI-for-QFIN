@@ -15,13 +15,16 @@ def session_times(session_date: date, config: dict[str, Any]) -> dict[str, datet
     parameters = [
         "timezone", "precheck_start", "evidence_cutoff", "forecast_deadline",
         "entry_after", "entry_deadline", "exit_at", "exit_deadline",
-        "label_capture_after",
+        "label_capture_after", "order_poll_interval_seconds",
         "account_alias", "shares_per_forecast", "maximum_forecasts",
     ]
     if any(len(bindings.get(name, [])) != 3 for name in parameters):
         raise ScheduleError("runtime parameters require reference, decision and experiment bindings")
     if session_date.weekday() >= 5:
         raise ScheduleError("session date must be a weekday")
+    poll_seconds = config.get("order_poll_interval_seconds")
+    if not isinstance(poll_seconds, int) or not 5 <= poll_seconds <= 30:
+        raise ScheduleError("order polling interval must be an integer from 5 to 30 seconds")
     output = {}
     for name in (
         "precheck_start", "evidence_cutoff", "forecast_deadline", "entry_after",

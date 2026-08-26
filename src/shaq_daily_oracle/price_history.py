@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 from datetime import date, datetime
 from typing import Any
@@ -7,6 +8,67 @@ from typing import Any
 
 class PriceHistoryError(ValueError):
     """A historical price path is incomplete or semantically unsafe."""
+
+
+def build_price_history_analysis(raw: bytes, *, maximum_bars: int) -> bytes:
+    """Build a compact, lossless-enough path view for bounded model input.
+
+    The original unadjusted OHLCV document remains the audit source.  This view
+    merely changes its representation: recent stock and sector bars are encoded
+    as ordered arrays and every reported exposure remains copied verbatim.
+    """
+
+    if maximum_bars <= 0:
+        raise PriceHistoryError("analysis maximum_bars must be positive")
+    try:
+        source = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise PriceHistoryError("price-history source is not valid UTF-8 JSON") from exc
+
+    columns = ["time_key", "open", "high", "low", "close", "volume"]
+
+    def compact(rows: Any) -> list[list[Any]]:
+        if not isinstance(rows, list) or not rows:
+            raise PriceHistoryError("analysis path is absent")
+        selected = rows[-maximum_bars:]
+        output = []
+        for row in selected:
+            if not isinstance(row, dict):
+                raise PriceHistoryError("analysis path row is invalid")
+            try:
+                output.append([row[column] for column in columns])
+            except KeyError as exc:
+                raise PriceHistoryError("analysis path row is incomplete") from exc
+        return output
+
+    required = {
+        "symbol", "sector_benchmark", "session_scope", "adjustment",
+        "bar_end_date", "captured_at_et", "cutoff_et", "premarket_context",
+        "benchmark_exposure_summary",
+    }
+    if not required.issubset(source):
+        raise PriceHistoryError("analysis source metadata is incomplete")
+    view = {
+        "schema_version": 1,
+        "transform": "price_path_analysis_view_v1",
+        "symbol": source["symbol"],
+        "sector_benchmark": source["sector_benchmark"],
+        "session_scope": source["session_scope"],
+        "adjustment": source["adjustment"],
+        "bar_end_date": source["bar_end_date"],
+        "captured_at_et": source["captured_at_et"],
+        "cutoff_et": source["cutoff_et"],
+        "premarket_context": source["premarket_context"],
+        "benchmark_exposure_summary": source["benchmark_exposure_summary"],
+        "path_columns": columns,
+        "stock_path": compact(source.get("stock_bars")),
+        "sector_path": compact(source.get("sector_bars")),
+        "representation_note": (
+            "Rows preserve source OHLCV values and order; no direction, score, "
+            "label, or model-derived feature is added."
+        ),
+    }
+    return (json.dumps(view, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
 
 
 def _time(value: Any) -> datetime:
@@ -61,6 +123,8 @@ def build_price_history_document(
     *, symbol: str, sector_benchmark: str, premarket_context: dict[str, Any],
     stock_bars: list[dict[str, Any]], sector_bars: list[dict[str, Any]],
     end_date: str, minimum_bars: int, captured_at_et: str, cutoff_et: str,
+    benchmark_bars_by_symbol: dict[str, list[dict[str, Any]]] | None = None,
+    benchmark_exposure_summary: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     canonical = symbol.strip().upper()
     benchmark = sector_benchmark.strip().upper()
@@ -78,6 +142,10 @@ def build_price_history_document(
     context = {key: float(premarket_context[key]) for key in sorted(required_context)}
     if any(not math.isfinite(value) for value in context.values()):
         raise PriceHistoryError("premarket context contains a non-finite value")
+    benchmarks = {
+        str(name).upper(): _validate_bars(rows, end_date=end, minimum_bars=minimum_bars)
+        for name, rows in sorted((benchmark_bars_by_symbol or {}).items())
+    }
     return {
         "schema_version": 6,
         "symbol": canonical,
@@ -90,5 +158,7 @@ def build_price_history_document(
         "premarket_context": context,
         "stock_bars": _validate_bars(stock_bars, end_date=end, minimum_bars=minimum_bars),
         "sector_bars": _validate_bars(sector_bars, end_date=end, minimum_bars=minimum_bars),
+        "benchmark_bars_by_symbol": benchmarks,
+        "benchmark_exposure_summary": benchmark_exposure_summary or {},
         "corporate_action_status": "not_separately_observed",
     }

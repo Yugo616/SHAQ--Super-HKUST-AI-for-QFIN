@@ -8,6 +8,7 @@
   "option_expiry_min_days": 7,
   "option_expiry_max_days": 60,
   "option_max_contracts": 400,
+  "option_event_page_count": 300,
   "parameter_bindings": {
     "order_book_depth": ["REF-OFI-001", "DEC-DEEP-EVIDENCE-001", "EXP-CANARY-001"],
     "order_book_samples": ["REF-OFI-001", "DEC-DEEP-EVIDENCE-001", "EXP-CANARY-001"],
@@ -17,6 +18,7 @@
     "relationship_exposure_window": ["REF-HP-001", "DEC-DEEP-EVIDENCE-001", "EXP-CANARY-001"],
     "option_expiry_min_days": ["REF-PAN-POTESHMAN-001", "DEC-DEEP-EVIDENCE-001", "EXP-CANARY-001"],
     "option_expiry_max_days": ["REF-PAN-POTESHMAN-001", "DEC-DEEP-EVIDENCE-001", "EXP-CANARY-001"],
-    "option_max_contracts": ["REF-PAN-POTESHMAN-001", "DEC-DEEP-EVIDENCE-001", "EXP-CANARY-001"]
+    "option_max_contracts": ["REF-PAN-POTESHMAN-001", "DEC-DEEP-EVIDENCE-002", "EXP-CANARY-002"],
+    "option_event_page_count": ["REF-FUTU-OPTION-EVENT-001", "DEC-DEEP-EVIDENCE-002", "EXP-CANARY-002"]
   }
 }

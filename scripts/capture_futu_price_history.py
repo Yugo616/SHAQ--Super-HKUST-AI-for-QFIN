@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import math
 import os
+import statistics
 import sys
 import tempfile
 from datetime import date, datetime, timedelta
@@ -14,7 +16,7 @@ from zoneinfo import ZoneInfo
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from shaq_daily_oracle import build_price_history_document  # noqa: E402
+from shaq_daily_oracle import build_price_history_analysis, build_price_history_document  # noqa: E402
 from shaq_daily_oracle.hashing import sha256_file  # noqa: E402
 
 
@@ -28,11 +30,34 @@ def _plain(value):
     return value if isinstance(value, (str, int, float, bool)) else str(value)
 
 
+def _returns(rows, window):
+    closes = [float(row["close"]) for row in rows[-(window + 1):]]
+    return [closes[index] / closes[index - 1] - 1.0 for index in range(1, len(closes))]
+
+
+def _exposure_summary(stock_bars, benchmark_histories):
+    output = {}
+    for benchmark, rows in sorted(benchmark_histories.items()):
+        windows = {}
+        for window in (63, 126, 252):
+            stock_returns = _returns(stock_bars, window)
+            benchmark_returns = _returns(rows, window)
+            if len(stock_returns) != window or len(benchmark_returns) != window:
+                continue
+            variance = statistics.variance(benchmark_returns)
+            if variance > 0:
+                windows[str(window)] = statistics.covariance(stock_returns, benchmark_returns) / variance
+        if "126" in windows:
+            output[benchmark] = windows
+    return output
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Freeze T-1 unadjusted price paths for SHAQ candidates")
     parser.add_argument("--candidates", type=Path, required=True)
     parser.add_argument("--stock-snapshot", type=Path, required=True)
     parser.add_argument("--benchmark-snapshot", type=Path, required=True)
+    parser.add_argument("--benchmark-config", type=Path, default=ROOT / "config/market-benchmarks.csv")
     parser.add_argument("--evidence-root", type=Path, required=True)
     parser.add_argument("--end-date", required=True)
     parser.add_argument("--cutoff-et", required=True)
@@ -63,6 +88,14 @@ def main() -> int:
     benchmarks = json.loads(args.benchmark_snapshot.read_text(encoding="utf-8"))
     stock_rows = {row["symbol"]: row for row in stocks.get("rows", [])}
     benchmark_rows = {row["symbol"]: row for row in benchmarks.get("rows", [])}
+    with args.benchmark_config.open(newline="", encoding="utf-8-sig") as handle:
+        benchmark_definitions = list(csv.DictReader(handle))
+    relationship_benchmarks = sorted({
+        str(row["instrument"]).upper() for row in benchmark_definitions
+        if str(row.get("gics_sector", "")).strip() or str(row.get("role", "")) == "broad_equity"
+    })
+    if not relationship_benchmarks or any(symbol not in benchmark_rows for symbol in relationship_benchmarks):
+        raise ValueError("market and eleven-sector relationship benchmark set is incomplete")
 
     from futu import AuType, KLType, OpenQuoteContext, RET_OK, Session  # type: ignore
 
@@ -118,12 +151,15 @@ def main() -> int:
                             stock_rows[symbol].get("raw_snapshot", {}).get("pre_volume") or 0
                         ),
                     })
+                stock_history = history(symbol)
+                benchmark_histories = {name: history(name) for name in relationship_benchmarks}
                 documents[symbol] = build_price_history_document(
                     symbol=symbol, sector_benchmark=sector, premarket_context=context,
-                    stock_bars=history(symbol), sector_bars=history(sector),
+                    stock_bars=stock_history, sector_bars=history(sector),
                     end_date=end.isoformat(), minimum_bars=int(config["minimum_bars"]),
                     captured_at_et=datetime.now(ZoneInfo("America/New_York")).isoformat(),
                     cutoff_et=cutoff.isoformat(),
+                    benchmark_exposure_summary=_exposure_summary(stock_history, benchmark_histories),
                 )
             except Exception as exc:
                 errors[symbol] = f"{type(exc).__name__}: {exc}"
@@ -137,14 +173,21 @@ def main() -> int:
     with tempfile.TemporaryDirectory(prefix=f".{args.split_dir.name}.", dir=args.split_dir.parent) as name:
         temporary = Path(name)
         for symbol, document in sorted(documents.items()):
-            (temporary / f"{symbol}.json").write_text(
+            raw_path = temporary / f"{symbol}.json"
+            raw_path.write_text(
                 json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+            )
+            (temporary / f"{symbol}.analysis.json").write_bytes(
+                build_price_history_analysis(
+                    raw_path.read_bytes(), maximum_bars=int(config["minimum_bars"])
+                )
             )
         temporary.replace(args.split_dir)
     root = args.evidence_root.resolve()
     evidence = []
     for symbol, document in sorted(documents.items()):
         path = (args.split_dir / f"{symbol}.json").resolve()
+        analysis_path = (args.split_dir / f"{symbol}.analysis.json").resolve()
         if root not in path.parents:
             raise ValueError("price-history evidence escapes the evidence root")
         sector = document["sector_benchmark"]
@@ -155,10 +198,19 @@ def main() -> int:
             "source_uri": f"futu-opend://historical-kline/US.{symbol}",
             "raw_file_path": str(path.relative_to(root)),
             "raw_sha256": sha256_file(path),
+            "analysis_file_path": str(analysis_path.relative_to(root)),
+            "analysis_sha256": sha256_file(analysis_path),
+            "analysis_transform": {
+                "name": "price_path_analysis_view_v1",
+                "source_sha256": sha256_file(path),
+                "maximum_bars": int(config["minimum_bars"]),
+            },
             "captured_at": document["captured_at_et"],
             "scope_symbols": [symbol],
+            "consumer_domains": ["price_volume"],
             "parent_evidence_ids": [
-                f"futu-price_volume-{symbol.lower()}", f"futu-market-{sector.lower()}"
+                f"futu-price_volume-{symbol.lower()}",
+                *[f"futu-market-{name.lower()}" for name in sorted(document["benchmark_exposure_summary"])],
             ],
         })
     payload = {
@@ -172,6 +224,7 @@ def main() -> int:
         "candidate_input_sha256": sha256_file(args.candidates),
         "stock_snapshot_sha256": sha256_file(args.stock_snapshot),
         "benchmark_snapshot_sha256": sha256_file(args.benchmark_snapshot),
+        "benchmark_config_sha256": sha256_file(args.benchmark_config),
         "evidence": evidence,
         "errors": errors,
     }

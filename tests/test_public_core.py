@@ -35,6 +35,7 @@ from shaq_daily_oracle import (  # noqa: E402
     build_snapshot_evidence_manifest,
     build_primary_event_record,
     build_price_history_document,
+    build_price_history_analysis,
     build_label_row,
     build_no_ai_run_input,
     evaluation_record,
@@ -338,6 +339,38 @@ class PublicCoreTests(unittest.TestCase):
             captured_at_et=captured, cutoff_et=self.cutoff,
         )
         self.assertEqual(path_document["adjustment"], "NONE")
+        raw_path = evidence_root / "price-history.json"
+        raw_path.write_text(json.dumps(path_document, sort_keys=True), encoding="utf-8")
+        analysis_bytes = build_price_history_analysis(raw_path.read_bytes(), maximum_bars=2)
+        analysis_path = evidence_root / "price-history.analysis.json"
+        analysis_path.write_bytes(analysis_bytes)
+        history_record = {
+            "evidence_id": "price-history-aapl",
+            "domain": "price_volume",
+            "provider": "Futu OpenD",
+            "source_uri": "futu-opend://historical-kline/US.AAPL",
+            "raw_file_path": str(raw_path),
+            "raw_sha256": hashlib.sha256(raw_path.read_bytes()).hexdigest(),
+            "captured_at": captured,
+            "scope_symbols": ["AAPL"],
+            "analysis_file_path": str(analysis_path),
+            "analysis_sha256": hashlib.sha256(analysis_bytes).hexdigest(),
+            "analysis_transform": {
+                "name": "price_path_analysis_view_v1",
+                "source_sha256": hashlib.sha256(raw_path.read_bytes()).hexdigest(),
+                "maximum_bars": 2,
+            },
+        }
+        self.assertEqual(
+            build_lineage_graph([history_record], evidence_root, self.cutoff)["independent_root_count"], 1
+        )
+        analysis_path.write_bytes(analysis_bytes.replace(b"AAPL", b"MSFT"))
+        forged_history = dict(
+            history_record,
+            analysis_sha256=hashlib.sha256(analysis_path.read_bytes()).hexdigest(),
+        )
+        with self.assertRaises(EvidenceError):
+            build_lineage_graph([forged_history], evidence_root, self.cutoff)
         with self.assertRaises(Exception):
             build_price_history_document(
                 symbol="AAPL", sector_benchmark="XLK",
@@ -1010,6 +1043,20 @@ class PublicCoreTests(unittest.TestCase):
         )
         with self.assertRaises(Exception):
             audit_runtime(runtime, "complete")
+        evaluations_path.write_text(json.dumps(valid_evaluations), encoding="utf-8")
+
+        labels_path.write_text(json.dumps({
+            **valid_labels,
+            "provider": "not_applicable",
+            "captured_at_et": "2026-08-20T08:55:00-04:00",
+            "official_label_status": "not_applicable_no_forecasts",
+        }), encoding="utf-8")
+        evaluations_path.write_text(json.dumps({
+            **valid_evaluations,
+            "official_label_status": "not_applicable_no_forecasts",
+        }), encoding="utf-8")
+        self.assertEqual(audit_runtime(runtime, "complete")["status"], "passed")
+        labels_path.write_text(json.dumps(valid_labels), encoding="utf-8")
         evaluations_path.write_text(json.dumps(valid_evaluations), encoding="utf-8")
 
         tampered_intake = dict(candidate_intake)

@@ -14,6 +14,7 @@ from .contracts import ContractError, validate_adversary_report, validate_domain
 from .collectors import (
     COLLECTION_STATUSES,
     CollectorError,
+    build_capital_analysis,
     build_capital_document,
     build_derivatives_document,
     build_relationship_document,
@@ -29,6 +30,7 @@ from .execution import (
     find_broker_order,
     normalize_futu_order_status,
     reconciled_journal_status,
+    phase_is_terminal,
     verify_execution_bundle,
     register_intent,
     select_simulate_us_account,
@@ -62,7 +64,11 @@ from .premarket import (
     build_symbol_snapshot_documents,
     resolve_premarket_return,
 )
-from .price_history import PriceHistoryError, build_price_history_document
+from .price_history import (
+    PriceHistoryError,
+    build_price_history_analysis,
+    build_price_history_document,
+)
 from .readiness import (
     ReadinessError,
     build_prospective_evaluations,
@@ -109,6 +115,7 @@ __all__ = [
     "enforce_execution_window",
     "build_canary_intents",
     "build_capital_document",
+    "build_capital_analysis",
     "build_derivatives_document",
     "build_relationship_document",
     "collection_status",
@@ -122,6 +129,7 @@ __all__ = [
     "build_snapshot_evidence_manifest",
     "build_primary_event_record",
     "build_price_history_document",
+    "build_price_history_analysis",
     "build_prospective_evaluations",
     "build_label_row",
     "cost_model",
@@ -140,6 +148,7 @@ __all__ = [
     "verify_isolation_attestation",
     "freeze_run",
     "normalize_futu_order_status",
+    "phase_is_terminal",
     "merge_evidence_manifests",
     "reconciled_journal_status",
     "verify_execution_bundle",

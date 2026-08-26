@@ -196,14 +196,16 @@ def _report_schema() -> dict[str, Any]:
         "type": "object",
         "additionalProperties": False,
         "required": [
-            "domain", "as_of_et", "horizon", "verdict", "thesis", "antithesis",
+            "domain", "as_of_et", "horizon", "availability", "verdict", "component_type", "thesis", "antithesis",
             "unknowns", "invalidation", "evidence_ids", "lineage_root_ids",
         ],
         "properties": {
             "domain": {"type": "string", "enum": sorted(DOMAINS)},
             "as_of_et": {"type": "string"},
             "horizon": {"type": "string", "const": "official_US_regular_session_open_to_close"},
-            "verdict": {"type": "string", "enum": ["bullish", "bearish", "neutral", "unavailable"]},
+            "availability": {"type": "string", "enum": ["available", "no_data", "not_entitled", "provider_error"]},
+            "verdict": {"type": "string", "enum": ["bullish", "bearish", "neutral", "not_applicable", "unavailable"]},
+            "component_type": {"type": "string", "enum": ["market_beta", "industry_spillover", "company_event", "capital_flow", "derivatives_distribution", "price_volume_state"]},
             "thesis": {"type": "string"},
             "antithesis": {"type": "string"},
             "unknowns": {"type": "array", "items": {"type": "string"}},
@@ -316,6 +318,7 @@ def _inline_domain_packet(*, tasks: list[dict[str, Any]], evidence_root: Path, m
         sanitized_tasks.append({
             "task_id": task["task_id"], "symbol": task["symbol"], "domain": task["domain"],
             "as_of_et": task["as_of_et"], "horizon": task["horizon"], "evidence": task_evidence,
+            "collection_status": task.get("collection_status", {"status": "no_data", "details": []}),
         })
     return {"tasks": sanitized_tasks, "evidence": {key: evidence[key] for key in sorted(evidence)}}
 
@@ -388,9 +391,15 @@ def _load_config(config: dict[str, Any]) -> dict[str, Any]:
 
 def derive_predictions(*, reports_by_symbol: dict[str, list[dict[str, Any]]], adversary_by_symbol: dict[str, dict[str, Any]], candidate_intake: dict[str, Any], integration_policy: dict[str, Any]) -> list[dict[str, Any]]:
     minimum = int(integration_policy["minimum_aligned_independent_roots"])
+    minimum_domains = int(integration_policy.get("minimum_aligned_applicable_domains", 2))
     maximum_opposed = int(integration_policy["maximum_opposed_independent_roots"])
     cap = int(integration_policy["maximum_predictions"])
-    groups = [set(group) for group in integration_policy["required_aligned_domain_groups"]]
+    modern_policy = bool(integration_policy.get("root_component_types"))
+    context_types = set(integration_policy.get("market_or_industry_root_component_types", ["market_context", "industry_context"]))
+    stock_types = set(integration_policy.get("stock_specific_root_component_types", ["stock_event", "stock_capital", "stock_derivatives", "stock_price_volume"]))
+    root_components = {
+        key: set(value) for key, value in integration_policy.get("root_component_types", {}).items()
+    }
     candidates = {row["symbol"]: row for row in candidate_intake.get("candidates", [])}
     eligible: list[tuple[int, str, str]] = []
     for symbol in sorted(reports_by_symbol):
@@ -413,10 +422,14 @@ def derive_predictions(*, reports_by_symbol: dict[str, list[dict[str, Any]]], ad
             aligned_domains = {
                 domain for domain, roots in aligned_by_domain.items() if roots & clean_aligned
             }
+            context_roots = {root for root in clean_aligned if root_components.get(root, set()) & context_types}
+            stock_roots = {root for root in clean_aligned if root_components.get(root, set()) & stock_types}
+            legacy_groups = [set(group) for group in integration_policy.get("required_aligned_domain_groups", [])]
             if (
                 len(clean_aligned) >= minimum
+                and len(aligned_domains) >= minimum_domains
                 and len(clean_opposed) <= maximum_opposed
-                and all(aligned_domains & group for group in groups)
+                and ((context_roots and stock_roots) if modern_policy else all(aligned_domains & group for group in legacy_groups))
             ):
                 direction_results.append((len(clean_aligned), direction))
         if len(direction_results) == 1:
@@ -435,13 +448,67 @@ def derive_predictions(*, reports_by_symbol: dict[str, list[dict[str, Any]]], ad
     return predictions
 
 
+def integration_audit(
+    *, reports_by_symbol: dict[str, list[dict[str, Any]]],
+    adversary_by_symbol: dict[str, dict[str, Any]], predictions: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    published = {row["symbol"] for row in predictions}
+    output = {}
+    for symbol, reports in sorted(reports_by_symbol.items()):
+        applicable = [
+            row for row in reports
+            if row.get("availability") == "available" and row.get("verdict") != "not_applicable"
+        ]
+        directional = [row for row in applicable if row.get("verdict") in {"bullish", "bearish"}]
+        directions = {row["verdict"] for row in directional}
+        reasons = []
+        if adversary_by_symbol[symbol].get("veto"):
+            reasons.append("adversary_integrity_veto")
+        if len(directional) < 2:
+            reasons.append("fewer_than_two_directional_domains")
+        if len(directions) > 1:
+            reasons.append("independent_direction_conflict")
+        if symbol not in published and not reasons:
+            reasons.append("lineage_root_role_gate_not_met")
+        output[symbol] = {
+            "applicable_domain_count": len(applicable),
+            "directional_domain_count": len(directional),
+            "directional_domains": sorted(row["domain"] for row in directional),
+            "published": symbol in published,
+            "rejection_reasons": [] if symbol in published else reasons,
+        }
+    return output
+
+
+def _bind_verified_lineage(
+    report: dict[str, Any], evidence_to_roots: dict[str, Any]
+) -> dict[str, Any]:
+    """Derive roots from cited evidence; the model never authors DAG identity."""
+
+    normalized = dict(report)
+    roots: set[str] = set()
+    for evidence_id in normalized.get("evidence_ids", []):
+        if evidence_id not in evidence_to_roots:
+            raise SandboxedCodexError(f"domain inference cited unknown evidence: {evidence_id}")
+        values = evidence_to_roots[evidence_id]
+        roots.update([values] if isinstance(values, str) else values)
+    normalized["lineage_root_ids"] = sorted(roots)
+    return normalized
+
+
 def run_sandboxed_six_domain(*, run_id: str, created_at: str, cutoff_et: str, tasks_document: dict[str, Any], lineage: dict[str, Any], candidate_intake: dict[str, Any], evidence_manifest: dict[str, Any], evidence_root: Path, package_root: Path, workspace_root: Path, isolation_status: dict[str, Any], attestation_path: Path, config: dict[str, Any], integration_policy: dict[str, Any], calls_dir: Path) -> dict[str, Any]:
     verify_isolation_attestation(
         status=isolation_status, attestation_path=attestation_path, workspace_root=workspace_root
     )
     config = _load_config(config)
-    evidence_to_root = lineage["evidence_to_root"]
-    evidence_domains = {row["evidence_id"]: row["domain"] for row in lineage["records"]}
+    evidence_to_roots = lineage["evidence_to_roots"]
+    evidence_domains = {
+        row["evidence_id"]: set(row.get("consumer_domains", []))
+        or {task["domain"] for task in tasks_document.get("tasks", []) if any(
+            evidence.get("evidence_id") == row["evidence_id"] for evidence in task.get("evidence", [])
+        )}
+        for row in lineage["records"]
+    }
     tasks = tasks_document.get("tasks", [])
     reports_by_symbol: dict[str, list[dict[str, Any]]] = {
         row["symbol"]: [] for row in candidate_intake.get("candidates", [])
@@ -462,8 +529,12 @@ def run_sandboxed_six_domain(*, run_id: str, created_at: str, cutoff_et: str, ta
             "You are the isolated SHAQ Daily Oracle domain analyst. Follow the supplied Skill exactly. "
             "Use only the inlined packet. You have no permission to browse, use remembered company facts, "
             "infer missing measurements, or access files/tools. Analyze each task independently. Preserve the "
-            "task as_of_et and horizon exactly. Cite only that task's evidence IDs and matching lineage roots. "
-            "A directional verdict requires evidence satisfying the Skill; otherwise use neutral or unavailable. "
+            "task as_of_et and horizon exactly. Cite only that task's evidence IDs; the deterministic program "
+            "will derive lineage roots from those IDs and ignore model-authored root identity. "
+            "Map collector status exactly: not_applicable means availability=available and verdict=not_applicable; "
+            "a usable but nondirectional input means availability=available and verdict=neutral; no_data, "
+            "not_entitled or provider_error require the matching availability and verdict=unavailable. "
+            "A directional verdict requires evidence satisfying the Skill. "
             "Do not report probability, confidence, strength, score, ranking, labels, outcomes, or another domain.\n\n"
             f"SKILL:\n{skill}\n\nSELECTED FOUNDATIONS:\n{foundations}\n\n"
             f"FROZEN PACKET JSON:\n{json.dumps(packet, sort_keys=True, ensure_ascii=False)}"
@@ -517,7 +588,8 @@ def run_sandboxed_six_domain(*, run_id: str, created_at: str, cutoff_et: str, ta
             allowed_ids = {row["evidence_id"] for row in task["evidence"]}
             if not set(report.get("evidence_ids", [])).issubset(allowed_ids):
                 raise SandboxedCodexError("domain inference cited evidence outside its blind task")
-            normalized = validate_domain_report(report, evidence_to_root, evidence_domains)
+            report = _bind_verified_lineage(report, evidence_to_roots)
+            normalized = validate_domain_report(report, evidence_to_roots, evidence_domains)
             normalized_results.append({"task_id": item["task_id"], "report": normalized})
         reports = [
             (expected[item["task_id"]]["symbol"], item["report"])
@@ -555,7 +627,7 @@ def run_sandboxed_six_domain(*, run_id: str, created_at: str, cutoff_et: str, ta
     adversary_foundations = (package_root / "skills" / "thesis-adversary" / "references" / "foundations.md").read_text(encoding="utf-8")
     adversary_packet = {
         "reports_by_symbol": {key: sorted(value, key=lambda row: row["domain"]) for key, value in sorted(reports_by_symbol.items())},
-        "verified_lineage_roots": sorted(set(evidence_to_root.values())),
+        "verified_lineage_roots": sorted(lineage["root_component_types"]),
     }
     adversary_prompt = (
         "You are the isolated non-voting SHAQ Daily Oracle adversary. Follow the supplied Skill. "
@@ -603,7 +675,7 @@ def run_sandboxed_six_domain(*, run_id: str, created_at: str, cutoff_et: str, ta
     if len(results) != len(reports_by_symbol) or {row.get("symbol") for row in results} != set(reports_by_symbol):
         raise SandboxedCodexError("adversary did not return each candidate exactly once")
     adversary_by_symbol = {}
-    known_roots = set(evidence_to_root.values())
+    known_roots = set(lineage["root_component_types"])
     for item in results:
         report = validate_adversary_report(item["report"])
         if not set(report["duplicate_lineage_roots"]).issubset(known_roots):
@@ -628,9 +700,26 @@ def run_sandboxed_six_domain(*, run_id: str, created_at: str, cutoff_et: str, ta
         adversary_artifact["packet_file"] = adversary_packet_path.name
         adversary_artifact["packet_file_sha256"] = sha256_file(adversary_packet_path)
         adversary_path.write_text(json.dumps(adversary_artifact, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    governed_policy = {
+        **integration_policy,
+        "root_component_types": lineage["root_component_types"],
+    }
     predictions = derive_predictions(
         reports_by_symbol=reports_by_symbol, adversary_by_symbol=adversary_by_symbol,
-        candidate_intake=candidate_intake, integration_policy=integration_policy,
+        candidate_intake=candidate_intake, integration_policy=governed_policy,
+    )
+    legacy_shadow_predictions = derive_predictions(
+        reports_by_symbol=reports_by_symbol, adversary_by_symbol=adversary_by_symbol,
+        candidate_intake=candidate_intake,
+        integration_policy={
+            "minimum_aligned_independent_roots": int(integration_policy["minimum_aligned_independent_roots"]),
+            "maximum_opposed_independent_roots": int(integration_policy["maximum_opposed_independent_roots"]),
+            "maximum_predictions": int(integration_policy["maximum_predictions"]),
+            "required_aligned_domain_groups": [
+                ["market", "relationships", "event"],
+                ["capital", "derivatives", "price_volume"],
+            ],
+        },
     )
     return {
         "run_id": run_id,
@@ -640,4 +729,9 @@ def run_sandboxed_six_domain(*, run_id: str, created_at: str, cutoff_et: str, ta
         "reports_by_symbol": {key: sorted(value, key=lambda row: row["domain"]) for key, value in sorted(reports_by_symbol.items())},
         "adversary_by_symbol": {key: adversary_by_symbol[key] for key in sorted(adversary_by_symbol)},
         "predictions": predictions,
+        "legacy_gate_shadow_predictions": legacy_shadow_predictions,
+        "integration_audit_by_symbol": integration_audit(
+            reports_by_symbol=reports_by_symbol, adversary_by_symbol=adversary_by_symbol,
+            predictions=predictions,
+        ),
     }

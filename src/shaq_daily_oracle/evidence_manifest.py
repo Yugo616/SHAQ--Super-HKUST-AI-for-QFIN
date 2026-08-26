@@ -63,12 +63,18 @@ def _records(
             "raw_sha256": actual,
             "captured_at": capture_time,
             "scope_symbols": ["*"] if scope_all else [symbol],
+            "root_component_type": "market_context" if scope_all else "stock_price_volume",
+            "consumer_domains": (
+                ["market", "price_volume", "relationships"] if scope_all
+                else ["price_volume", "event", "capital", "derivatives", "relationships"]
+            ),
         }
         if upstream_channels is not None:
             channel = str(upstream_channels.get(symbol, "")).strip()
             if not channel:
                 raise ManifestError(f"{symbol} lacks a governed lineage channel")
-            record["upstream_event_id"] = f"market-channel:{channel}:{capture_time}"
+            if channel == "sector_breadth":
+                record["root_component_type"] = "industry_context"
         output.append(record)
     return output
 
@@ -150,6 +156,7 @@ def build_primary_event_record(
         "captured_at": str(receipt["captured_at_end_et"]),
         "scope_symbols": [canonical],
         "upstream_event_id": f"issuer:{canonical}:{receipt['published_at']}:{raw_sha[:12]}",
+        "consumer_domains": ["event", "relationships", "price_volume"],
     }
     if (analysis_file is None) != (analysis_receipt_file is None):
         raise ManifestError("analysis view and receipt must be supplied together")

@@ -18,6 +18,7 @@ REQUIRED_CONFIG_BINDINGS = {
     "ai-backend.json": {"model", "reasoning_effort", "timeout_seconds", "maximum_input_bytes"},
     "canary.example.json": {
         "forecast_cutoff", "entry_after", "entry_deadline", "exit_at", "exit_deadline",
+        "order_poll_interval_seconds",
         "trd_env", "real_trading_enabled", "account_allowlist", "max_forecasts",
         "shares_per_forecast", "max_portfolio_age_seconds", "max_borrow_age_seconds",
     },
@@ -26,9 +27,15 @@ REQUIRED_CONFIG_BINDINGS = {
         "minimum_premarket_volume_quantile", "maximum_snapshot_skew_seconds",
     },
     "event-analysis.json": {"document_types", "maximum_output_bytes"},
+    "event-discovery.json": {
+        "sec_forms", "sec_feed_page_size", "sec_feed_max_pages_per_form",
+        "sec_feed_maximum_bytes", "sec_document_maximum_bytes",
+        "sec_retry_attempts", "sec_retry_backoff_seconds",
+    },
     "integration.json": {
         "minimum_aligned_independent_roots", "maximum_opposed_independent_roots",
-        "maximum_predictions", "required_aligned_domain_groups",
+        "maximum_predictions", "minimum_aligned_applicable_domains",
+        "market_or_industry_root_component_types", "stock_specific_root_component_types",
     },
     "market-data.json": {
         "provider", "batch_size", "minimum_coverage", "minimum_semantic_pass_rate",
@@ -39,12 +46,13 @@ REQUIRED_CONFIG_BINDINGS = {
     "deep-evidence.json": {
         "order_book_depth", "order_book_samples", "sample_interval_seconds",
         "ticker_max_count", "capital_window_start", "relationship_exposure_window", "option_expiry_min_days",
-        "option_expiry_max_days", "option_max_contracts",
+        "option_expiry_max_days", "option_max_contracts", "option_event_page_count",
     },
     "runtime.json": {
         "timezone", "precheck_start", "evidence_cutoff", "forecast_deadline",
         "entry_after", "entry_deadline", "exit_at", "exit_deadline",
-        "label_capture_after", "account_alias", "shares_per_forecast", "maximum_forecasts",
+        "label_capture_after", "order_poll_interval_seconds", "account_alias",
+        "shares_per_forecast", "maximum_forecasts",
     },
 }
 

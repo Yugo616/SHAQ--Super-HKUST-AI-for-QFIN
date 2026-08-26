@@ -97,6 +97,15 @@ def main() -> int:
             if evaluation["actual_fill_return"] is not None and costs["fee_return"] is not None
             else None
         )
+        gross_pnl = None
+        net_pnl = None
+        if reconciled:
+            gross_pnl = (
+                float(exit_order["dealt_avg_price"]) - float(entry["dealt_avg_price"])
+            ) * entry_qty
+            if intent["side"] == "SELL_SHORT":
+                gross_pnl = -gross_pnl
+            net_pnl = gross_pnl - fees if fees is not None else None
         rows.append({
             "symbol": intent["symbol"],
             "trade_date": str(intent["submit_after"])[:10],
@@ -112,6 +121,11 @@ def main() -> int:
                 if fees is not None
                 else ("unavailable" if reconciled else "not_applicable")
             ),
+            "entry_fill": entry.get("dealt_avg_price") if reconciled else None,
+            "exit_fill": exit_order.get("dealt_avg_price") if reconciled else None,
+            "fees": fees,
+            "gross_pnl": gross_pnl,
+            "net_pnl": net_pnl,
             "net_fill_return": net_fill_return,
             **costs,
             **evaluation,

@@ -1,0 +1,18 @@
+{
+  "sec_forms": ["8-K", "10-Q", "10-K", "6-K", "20-F"],
+  "sec_feed_page_size": 100,
+  "sec_feed_max_pages_per_form": 5,
+  "sec_feed_maximum_bytes": 5242880,
+  "sec_document_maximum_bytes": 20971520,
+  "sec_retry_attempts": 3,
+  "sec_retry_backoff_seconds": 1,
+  "parameter_bindings": {
+    "sec_forms": ["REF-SEC-LATEST-001", "DEC-EVENT-DISCOVERY-001", "EXP-CANARY-002"],
+    "sec_feed_page_size": ["REF-SEC-LATEST-001", "DEC-EVENT-DISCOVERY-001", "EXP-CANARY-002"],
+    "sec_feed_max_pages_per_form": ["REF-SEC-LATEST-001", "DEC-EVENT-DISCOVERY-001", "EXP-CANARY-002"],
+    "sec_feed_maximum_bytes": ["REF-SEC-LATEST-001", "DEC-EVENT-DISCOVERY-001", "EXP-CANARY-002"],
+    "sec_document_maximum_bytes": ["REF-SEC-LATEST-001", "DEC-EVENT-DISCOVERY-001", "EXP-CANARY-002"],
+    "sec_retry_attempts": ["REF-SEC-LATEST-001", "DEC-EVENT-DISCOVERY-001", "EXP-CANARY-002"],
+    "sec_retry_backoff_seconds": ["REF-SEC-LATEST-001", "DEC-EVENT-DISCOVERY-001", "EXP-CANARY-002"]
+  }
+}

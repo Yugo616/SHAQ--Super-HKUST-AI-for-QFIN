@@ -14,6 +14,7 @@ sys.path.insert(0, str(ROOT / "src"))
 from shaq_daily_oracle.cli import build_parser  # noqa: E402
 from shaq_daily_oracle.collectors import (  # noqa: E402
     CollectorError,
+    build_capital_analysis,
     build_capital_document,
     build_derivatives_document,
     build_relationship_document,
@@ -50,6 +51,12 @@ class CollectorWorkflowTests(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertAlmostEqual(first["metrics"]["signed_volume_imbalance"], 1 / 3)
         self.assertFalse(first["aggregate_vendor_money_flow_used"])
+        raw = (json.dumps(first, sort_keys=True) + "\n").encode()
+        view = json.loads(build_capital_analysis(raw))
+        self.assertEqual(view["metrics"], first["metrics"])
+        self.assertEqual(view["source_observation_counts"]["ticker_rows"], 2)
+        self.assertNotIn("ticker_rows", view)
+        self.assertLess(len(build_capital_analysis(raw)), len(raw))
         with self.assertRaises(CollectorError):
             build_capital_document(
                 symbol="AAPL", ticker_rows=[], order_book_samples=books,
@@ -167,6 +174,89 @@ class CollectorWorkflowTests(unittest.TestCase):
             self.assertFalse(failure["orders_submitted"])
             self.assertEqual(failure["status"], "fail_closed")
             self.assertTrue((runtime / "professor_report.html").is_file())
+
+    def test_zero_forecast_paper_run_completes_without_waiting_for_close(self):
+        zone = ZoneInfo("America/New_York")
+        observed = datetime(2026, 8, 26, 8, 52, tzinfo=zone)
+        trade_date = observed.date()
+        with tempfile.TemporaryDirectory() as name:
+            runtime = Path(name)
+            sleeps = []
+            workflow = Workflow(
+                package_root=ROOT,
+                runtime_root=runtime,
+                now=lambda: observed,
+                sleep=lambda seconds: sleeps.append(seconds),
+            )
+            frozen_path = runtime / "frozen_run.json"
+            portfolio = runtime / "portfolio_snapshot.json"
+            intents = runtime / "order_intents.json"
+            availability = runtime / "collection_availability.json"
+            frozen_path.write_text(json.dumps({
+                "run_id": "SHAQ-CANARY-2026-08-26-001",
+                "mode": "canary",
+                "run_sha256": "a" * 64,
+                "predictions": [],
+                "reports_by_symbol": {},
+                "adversary_by_symbol": {},
+            }), encoding="utf-8")
+            portfolio.write_text(json.dumps({
+                "trd_env": "SIMULATE", "positions": [],
+            }), encoding="utf-8")
+            intents.write_text(json.dumps({
+                "run_id": "SHAQ-CANARY-2026-08-26-001", "intents": [],
+            }), encoding="utf-8")
+            availability.write_text("{}", encoding="utf-8")
+
+            def fake_script(name: str, *arguments: str) -> None:
+                output = Path(arguments[arguments.index("--output") + 1])
+                if name == "build_execution_ledger.py":
+                    payload = {
+                        "schema_version": 6,
+                        "run_id": "SHAQ-CANARY-2026-08-26-001",
+                        "trd_env": "SIMULATE",
+                        "scientific_labels_are_separate": True,
+                        "round_trips": [],
+                    }
+                elif name == "evaluate_readiness.py":
+                    payload = {
+                        "probability": {
+                            "probability_publication_allowed": False,
+                            "p_committee_hit": None,
+                        },
+                        "cost": {},
+                        "net_profit": {
+                            "net_profit_publication_allowed": False,
+                            "p_net_profit": None,
+                        },
+                    }
+                elif name == "audit_canary.py":
+                    payload = {"status": "passed", "stage": "complete"}
+                else:
+                    raise AssertionError(name)
+                output.write_text(json.dumps(payload), encoding="utf-8")
+
+            workflow._script = fake_script  # type: ignore[method-assign]
+            workflow._complete_no_trade(
+                runtime=runtime,
+                trade_date=trade_date,
+                schedule=session_times(trade_date, workflow.runtime_config),
+                frozen_path=frozen_path,
+                portfolio=portfolio,
+                intents=intents,
+                journal=runtime / "broker_journal.json",
+                ledger_view=runtime / "execution_ledger.json",
+                provisional_view=runtime / "labels_provisional.json",
+                availability_path=availability,
+            )
+            self.assertEqual(sleeps, [])
+            self.assertTrue((runtime / "audit_complete.json").is_file())
+            self.assertEqual(
+                json.loads((runtime / "broker_journal.json").read_text(encoding="utf-8"))["run_status"],
+                "NO_TRADE",
+            )
+            labels = json.loads((runtime / "labels_provisional.json").read_text(encoding="utf-8"))
+            self.assertEqual(labels["official_label_status"], "not_applicable_no_forecasts")
 
     def test_shadow_forecast_never_becomes_ready_order(self):
         policy = {

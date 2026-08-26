@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .contracts import DOMAINS
+from .contracts import DEFAULT_COMPONENT, DOMAINS
 from .isolation import IsolationError, validate_isolation_status
 
 
@@ -35,7 +35,9 @@ def build_no_ai_run_input(
                 "domain": domain,
                 "as_of_et": created_at,
                 "horizon": "official_US_regular_session_open_to_close",
+                "availability": "provider_error",
                 "verdict": "unavailable",
+                "component_type": DEFAULT_COMPONENT[domain],
                 "thesis": "Formal AI is disabled; no domain judgment was generated.",
                 "antithesis": "No cutoff-safe inference result exists for this domain.",
                 "unknowns": ["domain judgment unavailable under the isolation policy"],
@@ -63,4 +65,3 @@ def build_no_ai_run_input(
         "adversary_by_symbol": adversary_by_symbol,
         "predictions": [],
     }
-

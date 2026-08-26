@@ -11,7 +11,7 @@ from .execution import verify_execution_bundle
 from .isolation import IsolationError, validate_isolation_status
 from .sandboxed_codex import derive_predictions, verify_isolation_attestation
 from .candidates import CandidateError, select_candidates
-from .labels import LabelError, validate_label_document
+from .labels import LABEL_DOCUMENT_KEYS, LabelError, validate_label_document
 from .readiness import ReadinessError, build_prospective_evaluations
 from .sec_view import SecViewError, build_sec_analysis_text
 
@@ -327,6 +327,8 @@ def audit_runtime(runtime: str | Path, stage: str) -> dict[str, Any]:
             raise AuditError("execution ledger contains an incomplete trade outcome")
         if intents.get("intents") and journal.get("run_status") != "RECONCILED":
             raise AuditError("broker journal is not reconciled")
+        if not intents.get("intents") and journal.get("run_status") != "NO_TRADE":
+            raise AuditError("empty intent bundle is not recorded as NO_TRADE")
         readiness = _read(root, "readiness_status.json")
         probability = readiness.get("probability", {})
         if (
@@ -341,14 +343,32 @@ def audit_runtime(runtime: str | Path, stage: str) -> dict[str, Any]:
         ):
             raise AuditError("first-day readiness improperly enables net-profit publication")
         if frozen.get("mode") == "canary":
-            try:
-                labels = validate_label_document(
-                    _read(root, "labels_provisional.json"),
-                    frozen,
-                    expected_phase="provisional",
-                )
-            except LabelError as exc:
-                raise AuditError(f"invalid provisional labels: {exc}") from exc
+            label_document = _read(root, "labels_provisional.json")
+            if predictions or label_document.get("official_label_status") == "provisional":
+                try:
+                    labels = validate_label_document(
+                        label_document,
+                        frozen,
+                        expected_phase="provisional",
+                    )
+                except LabelError as exc:
+                    raise AuditError(f"invalid provisional labels: {exc}") from exc
+                expected_label_status = "provisional"
+            else:
+                if (
+                    set(label_document) != LABEL_DOCUMENT_KEYS
+                    or label_document.get("schema_version") != 6
+                    or label_document.get("run_id") != frozen.get("run_id")
+                    or label_document.get("provider") != "not_applicable"
+                    or label_document.get("adjustment") != "NONE"
+                    or label_document.get("session_scope") != "US_regular_session"
+                    or label_document.get("official_label_status")
+                    != "not_applicable_no_forecasts"
+                    or label_document.get("labels") != []
+                ):
+                    raise AuditError("zero-forecast label record differs from contract")
+                labels = label_document
+                expected_label_status = "not_applicable_no_forecasts"
             evaluations = _read(root, "evaluations_provisional.json")
             if (
                 set(evaluations) != {
@@ -356,11 +376,13 @@ def audit_runtime(runtime: str | Path, stage: str) -> dict[str, Any]:
                 }
                 or evaluations.get("schema_version") != 6
                 or evaluations.get("run_id") != frozen.get("run_id")
-                or evaluations.get("official_label_status") != "provisional"
+                or evaluations.get("official_label_status") != expected_label_status
             ):
                 raise AuditError("prospective evaluation metadata differs from contract")
             try:
-                rebuilt_evaluations = build_prospective_evaluations(frozen, labels)
+                rebuilt_evaluations = (
+                    build_prospective_evaluations(frozen, labels) if predictions else []
+                )
             except ReadinessError as exc:
                 raise AuditError(f"prospective evaluation cannot be rebuilt: {exc}") from exc
             if evaluations.get("evaluations") != rebuilt_evaluations:

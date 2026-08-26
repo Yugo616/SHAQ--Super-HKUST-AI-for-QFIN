@@ -15,7 +15,17 @@ DOMAINS = {
     "derivatives",
     "price_volume",
 }
-VERDICTS = {"bullish", "bearish", "neutral", "unavailable"}
+VERDICTS = {"bullish", "bearish", "neutral", "not_applicable", "unavailable"}
+AVAILABILITIES = {"available", "no_data", "not_entitled", "provider_error"}
+COMPONENT_TYPES = {
+    "market_beta", "industry_spillover", "company_event", "capital_flow",
+    "derivatives_distribution", "price_volume_state",
+}
+DEFAULT_COMPONENT = {
+    "market": "market_beta", "relationships": "industry_spillover",
+    "event": "company_event", "capital": "capital_flow",
+    "derivatives": "derivatives_distribution", "price_volume": "price_volume_state",
+}
 REQUIRED = {
     "domain",
     "as_of_et",
@@ -27,6 +37,8 @@ REQUIRED = {
     "invalidation",
     "evidence_ids",
     "lineage_root_ids",
+    "availability",
+    "component_type",
 }
 FORBIDDEN = {
     "probability",
@@ -54,8 +66,11 @@ def _walk_forbidden(value: Any, location: str = "report") -> None:
 
 
 def validate_domain_report(
-    report: dict[str, Any], evidence_to_root: dict[str, str], evidence_domains: dict[str, str]
+    report: dict[str, Any], evidence_to_roots: dict[str, Any], evidence_domains: dict[str, Any]
 ) -> dict[str, Any]:
+    report = dict(report)
+    report.setdefault("availability", "available" if report.get("verdict") != "unavailable" else "no_data")
+    report.setdefault("component_type", DEFAULT_COMPONENT.get(str(report.get("domain")), ""))
     _walk_forbidden(report)
     missing = REQUIRED.difference(report)
     extra = set(report).difference(REQUIRED)
@@ -63,20 +78,27 @@ def validate_domain_report(
         raise ContractError(f"report keys differ: missing={sorted(missing)}, extra={sorted(extra)}")
     if report["domain"] not in DOMAINS or report["verdict"] not in VERDICTS:
         raise ContractError("invalid domain or verdict")
+    if report["availability"] not in AVAILABILITIES or report["component_type"] not in COMPONENT_TYPES:
+        raise ContractError("invalid availability or component_type")
+    if (report["verdict"] == "unavailable") != (report["availability"] != "available"):
+        raise ContractError("availability and verdict disagree")
     for key in ("as_of_et", "horizon", "thesis", "antithesis"):
         if not isinstance(report[key], str) or not report[key].strip():
             raise ContractError(f"{key} must be non-empty text")
     for key in ("unknowns", "invalidation", "evidence_ids", "lineage_root_ids"):
         if not isinstance(report[key], list) or len(report[key]) != len(set(report[key])):
             raise ContractError(f"{key} must be a unique list")
-    roots = []
+    roots: set[str] = set()
     for evidence_id in report["evidence_ids"]:
-        if evidence_id not in evidence_to_root:
+        if evidence_id not in evidence_to_roots:
             raise ContractError(f"unknown evidence_id: {evidence_id}")
-        if evidence_domains.get(evidence_id) != report["domain"]:
-            raise ContractError("domain report cites evidence from a different domain")
-        roots.append(evidence_to_root[evidence_id])
-    if sorted(set(roots)) != sorted(report["lineage_root_ids"]):
+        allowed = evidence_domains.get(evidence_id, set())
+        allowed = {allowed} if isinstance(allowed, str) else set(allowed)
+        if report["domain"] not in allowed:
+            raise ContractError("domain report cites evidence outside its routed task")
+        values = evidence_to_roots[evidence_id]
+        roots.update([values] if isinstance(values, str) else values)
+    if sorted(roots) != sorted(report["lineage_root_ids"]):
         raise ContractError("lineage_root_ids do not match verified evidence")
     if report["verdict"] in {"bullish", "bearish"} and not report["evidence_ids"]:
         raise ContractError("directional report requires verified evidence")

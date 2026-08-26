@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
 
 from .hashing import sha256_file, sha256_payload
+from .collectors import CollectorError, build_capital_analysis
+from .price_history import PriceHistoryError, build_price_history_analysis
 from .sec_view import SecViewError, build_sec_analysis_text
 
 
@@ -113,15 +114,22 @@ def build_lineage_graph(
             transform = record.get("analysis_transform")
             if not isinstance(transform, dict) or transform.get("source_sha256") != actual:
                 raise EvidenceError(f"{key} analysis transform is not bound to raw evidence")
-            if transform.get("name") != "sec_document_text_view_v1":
-                raise EvidenceError(f"{key} analysis transform is unsupported")
             try:
-                rebuilt_analysis = build_sec_analysis_text(
-                    path.read_bytes(),
-                    document_types=transform.get("document_types", []),
-                    maximum_output_bytes=int(transform.get("maximum_output_bytes", 0)),
-                )
-            except (SecViewError, TypeError, ValueError) as exc:
+                if transform.get("name") == "sec_document_text_view_v1":
+                    rebuilt_analysis = build_sec_analysis_text(
+                        path.read_bytes(),
+                        document_types=transform.get("document_types", []),
+                        maximum_output_bytes=int(transform.get("maximum_output_bytes", 0)),
+                    )
+                elif transform.get("name") == "price_path_analysis_view_v1":
+                    rebuilt_analysis = build_price_history_analysis(
+                        path.read_bytes(), maximum_bars=int(transform.get("maximum_bars", 0))
+                    )
+                elif transform.get("name") == "capital_ofi_analysis_view_v1":
+                    rebuilt_analysis = build_capital_analysis(path.read_bytes())
+                else:
+                    raise EvidenceError(f"{key} analysis transform is unsupported")
+            except (CollectorError, PriceHistoryError, SecViewError, TypeError, ValueError) as exc:
                 raise EvidenceError(f"{key} analysis transform cannot be reproduced") from exc
             if analysis_path.read_bytes() != rebuilt_analysis:
                 raise EvidenceError(f"{key} analysis view differs from deterministic reconstruction")
@@ -135,44 +143,103 @@ def build_lineage_graph(
             verified[key]["analysis_file_path"] = str(analysis_path)
             verified[key]["analysis_sha256_verified"] = True
 
-    adjacency = {key: set(parent_map[key]) for key in ids}
-    owners: dict[str, str] = {}
-    for key in sorted(ids):
-        for token in sorted(tokens[key]):
-            if token in owners:
-                adjacency[key].add(owners[token])
-                adjacency[owners[token]].add(key)
-            else:
-                owners[token] = key
-        for parent in parent_map[key]:
-            adjacency[parent].add(key)
+    # PROV semantics: a derived entity inherits every origin; it never merges its
+    # parents into a new mega-root. Only identical source entities (same bytes or
+    # upstream event id) share a root.
+    token_parent: dict[str, str] = {}
 
-    seen: set[str] = set()
-    clusters: list[dict[str, Any]] = []
-    mapping: dict[str, str] = {}
-    for start in sorted(ids):
-        if start in seen:
-            continue
-        stack, members = [start], []
-        while stack:
-            node = stack.pop()
-            if node in seen:
-                continue
-            seen.add(node)
-            members.append(node)
-            stack.extend(sorted(adjacency[node] - seen, reverse=True))
-        root_tokens = sorted({token for member in members for token in tokens[member]})
-        cluster_id = "lin_" + sha256_payload(root_tokens)[:20]
-        for member in members:
-            mapping[member] = cluster_id
-            verified[member]["lineage_root_id"] = cluster_id
-        clusters.append({"lineage_root_id": cluster_id, "evidence_ids": sorted(members)})
+    def token_find(token: str) -> str:
+        token_parent.setdefault(token, token)
+        if token_parent[token] != token:
+            token_parent[token] = token_find(token_parent[token])
+        return token_parent[token]
+
+    def token_union(left: str, right: str) -> None:
+        first, second = token_find(left), token_find(right)
+        if first != second:
+            token_parent[max(first, second)] = min(first, second)
+
+    for key in sorted(ids):
+        values = sorted(tokens[key])
+        for token in values:
+            token_find(token)
+        for token in values[1:]:
+            token_union(values[0], token)
+    token_groups: dict[str, set[str]] = {}
+    for token in sorted(token_parent):
+        token_groups.setdefault(token_find(token), set()).add(token)
+    token_to_root = {
+        token: "lin_" + sha256_payload(sorted(token_groups[token_find(token)]))[:20]
+        for token in token_parent
+    }
+    direct_roots: dict[str, set[str]] = {}
+    for key in sorted(ids):
+        direct_roots[key] = {token_to_root[token] for token in tokens[key]}
+
+    ancestry: dict[str, set[str]] = {}
+
+    def roots_for(key: str) -> set[str]:
+        if key in ancestry:
+            return ancestry[key]
+        parents = parent_map[key]
+        # A transform with declared parents is evidence derived from those inputs;
+        # its serialized output is reproducibility material, not a fresh source.
+        roots = (
+            set().union(*(roots_for(parent) for parent in parents))
+            if parents else set(direct_roots[key])
+        )
+        ancestry[key] = roots
+        return roots
+
+    mapping_many: dict[str, list[str]] = {}
+    root_members: dict[str, set[str]] = {}
+    root_components: dict[str, set[str]] = {}
+    default_component = {
+        "market": "market_context", "relationships": "industry_context",
+        "event": "stock_event", "capital": "stock_capital",
+        "derivatives": "stock_derivatives", "price_volume": "stock_price_volume",
+    }
+    for key in sorted(ids):
+        roots = sorted(roots_for(key))
+        if not roots:
+            raise EvidenceError(f"{key} has no source lineage root")
+        mapping_many[key] = roots
+        verified[key]["lineage_root_ids"] = roots
+        if len(roots) == 1:
+            verified[key]["lineage_root_id"] = roots[0]
+        component = str(
+            verified[key].get("root_component_type")
+            or default_component.get(str(verified[key].get("domain")), "unknown")
+        )
+        for root_id in roots:
+            root_members.setdefault(root_id, set()).add(key)
+            # Only origin entities define the economic role of a root. A derived
+            # cross-domain view cannot relabel its ancestors.
+            if not parent_map[key]:
+                root_components.setdefault(root_id, set()).add(component)
+
+    clusters = [
+        {
+            "lineage_root_id": root_id,
+            "evidence_ids": sorted(root_members[root_id]),
+            "component_types": sorted(root_components.get(root_id, {"unknown"})),
+        }
+        for root_id in sorted(root_members)
+    ]
+    compatibility_mapping = {
+        key: roots[0] for key, roots in mapping_many.items() if len(roots) == 1
+    }
 
     return {
-        "schema_version": 6,
+        "schema_version": 7,
         "cutoff_et": cutoff_et,
         "records": [verified[key] for key in sorted(verified)],
         "clusters": sorted(clusters, key=lambda item: item["lineage_root_id"]),
-        "evidence_to_root": mapping,
+        "evidence_to_roots": mapping_many,
+        "evidence_to_root": compatibility_mapping,
+        "root_component_types": {
+            root_id: sorted(root_components.get(root_id, {"unknown"}))
+            for root_id in sorted(root_members)
+        },
         "independent_root_count": len(clusters),
     }

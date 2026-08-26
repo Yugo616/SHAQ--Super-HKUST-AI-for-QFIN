@@ -1,5 +1,5 @@
 {
-  "document_types": ["8-K", "EX-99.1"],
+  "document_types": ["8-K", "10-Q", "10-K", "6-K", "20-F", "EX-99.1"],
   "maximum_output_bytes": 500000,
   "parameter_bindings": {
     "document_types": ["REF-SEC-FILER-001", "DEC-SEC-VIEW-001", "EXP-CANARY-001"],
