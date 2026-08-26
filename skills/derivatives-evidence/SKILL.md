@@ -17,7 +17,7 @@ description: Interpret options through implied move, distribution, skew, term st
 
 ## Abstain
 
-Return `available + neutral` when a complete chain only implies volatility. Missing directional flow does not make a valid chain unavailable. Return `unavailable` for incomplete chains, crossed/stale quotes or a real provider/entitlement failure. Max pain never enters direction.
+Return `available + neutral` when a complete chain only implies volatility. Missing directional flow does not make a valid chain unavailable. Use `no_data + unavailable` for an incomplete chain, `provider_error + unavailable` for crossed or stale quotes, and `not_entitled + unavailable` for a permission failure. Max pain never enters direction.
 
 ## Output
 

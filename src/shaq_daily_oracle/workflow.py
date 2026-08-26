@@ -75,6 +75,27 @@ def _resolve_universe(runtime_root: Path) -> Path:
     return candidates[0]
 
 
+def _system_config_sha256(package_root: Path) -> str:
+    governed_files = [package_root / "pyproject.toml"]
+    for directory, suffixes in (
+        ("config", {".json", ".csv"}),
+        ("governance", {".json"}),
+        ("schemas", {".json"}),
+        ("scripts", {".py", ".mjs"}),
+        ("skills", {".md", ".yaml"}),
+        ("src/shaq_daily_oracle", {".py"}),
+    ):
+        governed_files.extend(
+            path
+            for path in (package_root / directory).rglob("*")
+            if path.is_file() and path.suffix in suffixes
+        )
+    return sha256_payload({
+        str(path.relative_to(package_root)): sha256_file(path)
+        for path in sorted(set(governed_files))
+    })
+
+
 class Workflow:
     def __init__(
         self, *, package_root: Path, runtime_root: Path | None = None,
@@ -242,23 +263,9 @@ class Workflow:
         runtime.mkdir(parents=True, exist_ok=True)
         evidence_root = runtime / "evidence"
         universe = _resolve_universe(self.runtime_root)
+        system_config_sha256 = _system_config_sha256(self.package_root)
         initial = runtime / "workflow_identity.json"
         if not initial.exists():
-            governed_files = [
-                self.package_root / "config" / name
-                for name in (
-                    "system-identity.json", "integration.json", "deep-evidence.json",
-                    "event-discovery.json", "candidate-intake.json", "price-history.json",
-                )
-            ]
-            governed_files += sorted((self.package_root / "skills").glob("*/SKILL.md"))
-            governed_files += sorted((self.package_root / "src/shaq_daily_oracle").glob("*.py"))
-            governed_files += sorted((self.package_root / "schemas").glob("*.json"))
-            governed_files += sorted((self.package_root / "scripts").glob("*.py"))
-            system_config_sha256 = sha256_payload({
-                str(path.relative_to(self.package_root)): sha256_file(path)
-                for path in governed_files
-            })
             _write(initial, {
                 "schema_version": 6,
                 "run_id": run_id,
@@ -271,8 +278,12 @@ class Workflow:
                 "system_identity": self.system_identity["identity"],
                 "system_config_sha256": system_config_sha256,
             })
-        elif _read(initial).get("universe_sha256") != sha256_file(universe):
-            raise WorkflowError("resumed run resolved a different universe")
+        else:
+            identity = _read(initial)
+            if identity.get("universe_sha256") != sha256_file(universe):
+                raise WorkflowError("resumed run resolved a different universe")
+            if identity.get("system_config_sha256") != system_config_sha256:
+                raise WorkflowError("resumed run resolved a different system version")
         if (runtime / "audit_complete.json").exists():
             return runtime
         universe_manifest = universe.parent / "active_manifest.json"
@@ -372,17 +383,7 @@ class Workflow:
 
         intake = runtime / "candidate_intake.json"
         def finalize_intake() -> None:
-            document = _read(seed_intake)
-            captured_event_symbols = {
-                scope
-                for record in _read(event_manifest).get("evidence", [])
-                for scope in record.get("scope_symbols", [])
-            }
-            for row in document.get("candidates", []):
-                if row["symbol"] in captured_event_symbols:
-                    row["captured_primary_event"] = True
-            document["event_candidate_count"] = len(captured_event_symbols)
-            _write(intake, document)
+            _write(intake, _read(seed_intake))
         self._stage(runtime, "candidate_event_binding", [intake], finalize_intake)
         candidates = _read(intake).get("candidates", [])
 
@@ -693,6 +694,22 @@ class Workflow:
                 "status": "workflow_validated_without_clock_wait_or_order_submission",
                 "frozen_run_sha256": _read(frozen_path)["run_sha256"],
             }, immutable=not (runtime / "workflow_validation.json").exists())
+
+        if intent_bundle.get("mode") == "shadow":
+            journal = runtime / "broker_journal.json"
+            complete = runtime / "audit_complete.json"
+            self._stage(runtime, "shadow_complete_audit", [complete], lambda: self._script(
+                "audit_canary.py", "--runtime", str(runtime),
+                "--stage", "shadow_complete", "--output", str(complete),
+            ))
+            write_reports(
+                runtime=runtime,
+                frozen=_read(frozen_path),
+                collection_statuses=_read(availability_path),
+                orders=_read(journal),
+                labels=_read(provisional_view),
+            )
+
         return runtime
 
     def failure_record(self, error: Exception) -> Path:

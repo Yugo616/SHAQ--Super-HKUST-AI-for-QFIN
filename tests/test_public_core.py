@@ -66,6 +66,7 @@ from shaq_daily_oracle import (  # noqa: E402
     reconciled_journal_status,
 )
 from shaq_daily_oracle.hashing import sha256_payload  # noqa: E402
+from shaq_daily_oracle.sandboxed_codex import _report_schema  # noqa: E402
 
 
 class PublicCoreTests(unittest.TestCase):
@@ -603,6 +604,28 @@ class PublicCoreTests(unittest.TestCase):
             )["verdict"],
             "unavailable",
         )
+
+    def test_structured_output_schema_forbids_availability_verdict_conflicts(self):
+        report = {
+            **self.report(),
+            "availability": "available",
+            "component_type": "company_event",
+        }
+        generated = _report_schema()["properties"]["results"]["items"]["properties"]["report"]
+        public = json.loads(
+            (ROOT / "schemas/domain-report.schema.json").read_text(encoding="utf-8")
+        )
+        jsonschema.validate(report, generated)
+        jsonschema.validate(report, public)
+        for availability, verdict in (
+            ("available", "unavailable"),
+            ("no_data", "neutral"),
+        ):
+            invalid = {**report, "availability": availability, "verdict": verdict}
+            with self.assertRaises(jsonschema.ValidationError):
+                jsonschema.validate(invalid, generated)
+            with self.assertRaises(jsonschema.ValidationError):
+                jsonschema.validate(invalid, public)
 
     def test_sandbox_profile_and_deterministic_integrator_fail_closed(self):
         profile = build_seatbelt_profile(
@@ -1240,7 +1263,7 @@ class PublicCoreTests(unittest.TestCase):
         capital = (ROOT / "skills/capital-order-flow/SKILL.md").read_text(encoding="utf-8")
         derivatives = (ROOT / "skills/derivatives-evidence/SKILL.md").read_text(encoding="utf-8")
         price_volume = (ROOT / "skills/price-volume-structure/SKILL.md").read_text(encoding="utf-8")
-        self.assertIn("Return `unavailable` without reliable order book", capital)
+        self.assertIn("Return `no_data + unavailable` without a reliable order book", capital)
         self.assertIn("Do not substitute aggregate money flow", capital)
         self.assertIn("does not identify holder intent by itself", derivatives)
         self.assertIn("Max pain never enters direction", derivatives)

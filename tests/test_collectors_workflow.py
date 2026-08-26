@@ -22,7 +22,11 @@ from shaq_daily_oracle.collectors import (  # noqa: E402
 )
 from shaq_daily_oracle.reports import write_reports  # noqa: E402
 from shaq_daily_oracle.schedule import formal_mode, session_times  # noqa: E402
-from shaq_daily_oracle.workflow import Workflow, WorkflowError  # noqa: E402
+from shaq_daily_oracle.workflow import (  # noqa: E402
+    Workflow,
+    WorkflowError,
+    _system_config_sha256,
+)
 from shaq_daily_oracle.canary import build_canary_intents  # noqa: E402
 
 
@@ -165,6 +169,20 @@ class CollectorWorkflowTests(unittest.TestCase):
             partial.write_text("{}", encoding="utf-8")
             with self.assertRaises(WorkflowError):
                 workflow._stage(runtime, "partial", [partial, runtime / "missing.json"], lambda: None)
+
+    def test_system_identity_detects_code_drift_but_ignores_runtime_records(self):
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            (root / "config").mkdir()
+            (root / "runtime").mkdir()
+            (root / "pyproject.toml").write_text("[project]\nname='demo'\n", encoding="utf-8")
+            governed = root / "config" / "policy.json"
+            governed.write_text('{"value":1}', encoding="utf-8")
+            first = _system_config_sha256(root)
+            (root / "runtime" / "record.json").write_text('{"result":1}', encoding="utf-8")
+            self.assertEqual(first, _system_config_sha256(root))
+            governed.write_text('{"value":2}', encoding="utf-8")
+            self.assertNotEqual(first, _system_config_sha256(root))
 
     def test_provider_failure_creates_fail_closed_professor_record(self):
         with tempfile.TemporaryDirectory() as name:

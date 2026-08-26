@@ -17,7 +17,7 @@ description: Classify nonlinear price-path and participation states for the open
 
 ## Abstain
 
-Return `unavailable` for broken session semantics, adjusted/unadjusted mixing or missing volume maturity. Return `neutral` when a chart pattern lacks event or participation context.
+Return `provider_error + unavailable` for broken session semantics or adjusted/unadjusted mixing, and `no_data + unavailable` for missing volume maturity. Return `available + neutral` when valid observations exist but a chart pattern lacks event or participation context.
 
 ## Prohibited shortcuts
 

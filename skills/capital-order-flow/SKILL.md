@@ -17,10 +17,10 @@ description: Analyze liquidity-adjusted order-flow imbalance, depth, spread and 
 
 ## Abstain
 
-Return `unavailable` without reliable order book, aggressor or event-level semantics. No same-day premarket trades is `no_data`, not a provider failure. Do not substitute aggregate money flow, volume, short volume or broker rankings for OFI.
+Return `no_data + unavailable` without a reliable order book, aggressor or event-level semantics. No same-day premarket trades is also `no_data + unavailable`, not a provider failure. Do not substitute aggregate money flow, volume, short volume or broker rankings for OFI.
 
 ## Output
 
-Use the DomainReport contract with `component_type=capital_flow`. A directional verdict must identify measured imbalance, liquidity normalization, persistence and corresponding price reaction. Otherwise report `unavailable` or `neutral`.
+Use the DomainReport contract with `component_type=capital_flow`. A directional verdict must identify measured imbalance, liquidity normalization, persistence and corresponding price reaction. Otherwise use the exact availability-verdict pair defined above or `available + neutral`.
 
 Read [foundations](references/foundations.md).

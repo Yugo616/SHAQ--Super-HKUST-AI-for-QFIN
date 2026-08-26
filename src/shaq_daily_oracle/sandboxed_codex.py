@@ -192,27 +192,56 @@ def verify_isolation_attestation(*, status: dict[str, Any], attestation_path: Pa
 
 
 def _report_schema() -> dict[str, Any]:
-    report = {
-        "type": "object",
-        "additionalProperties": False,
-        "required": [
-            "domain", "as_of_et", "horizon", "availability", "verdict", "component_type", "thesis", "antithesis",
-            "unknowns", "invalidation", "evidence_ids", "lineage_root_ids",
-        ],
-        "properties": {
-            "domain": {"type": "string", "enum": sorted(DOMAINS)},
-            "as_of_et": {"type": "string"},
-            "horizon": {"type": "string", "const": "official_US_regular_session_open_to_close"},
-            "availability": {"type": "string", "enum": ["available", "no_data", "not_entitled", "provider_error"]},
-            "verdict": {"type": "string", "enum": ["bullish", "bearish", "neutral", "not_applicable", "unavailable"]},
-            "component_type": {"type": "string", "enum": ["market_beta", "industry_spillover", "company_event", "capital_flow", "derivatives_distribution", "price_volume_state"]},
-            "thesis": {"type": "string"},
-            "antithesis": {"type": "string"},
-            "unknowns": {"type": "array", "items": {"type": "string"}},
-            "invalidation": {"type": "array", "items": {"type": "string"}},
-            "evidence_ids": {"type": "array", "items": {"type": "string"}},
-            "lineage_root_ids": {"type": "array", "items": {"type": "string"}},
+    required = [
+        "domain", "as_of_et", "horizon", "availability", "verdict",
+        "component_type", "thesis", "antithesis", "unknowns",
+        "invalidation", "evidence_ids", "lineage_root_ids",
+    ]
+    common_properties = {
+        "domain": {"type": "string", "enum": sorted(DOMAINS)},
+        "as_of_et": {"type": "string"},
+        "horizon": {
+            "type": "string",
+            "const": "official_US_regular_session_open_to_close",
         },
+        "component_type": {
+            "type": "string",
+            "enum": [
+                "market_beta", "industry_spillover", "company_event",
+                "capital_flow", "derivatives_distribution", "price_volume_state",
+            ],
+        },
+        "thesis": {"type": "string"},
+        "antithesis": {"type": "string"},
+        "unknowns": {"type": "array", "items": {"type": "string"}},
+        "invalidation": {"type": "array", "items": {"type": "string"}},
+        "evidence_ids": {"type": "array", "items": {"type": "string"}},
+        "lineage_root_ids": {"type": "array", "items": {"type": "string"}},
+    }
+
+    def report_variant(*, availabilities: list[str], verdicts: list[str]) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "additionalProperties": False,
+            "required": required,
+            "properties": {
+                **common_properties,
+                "availability": {"type": "string", "enum": availabilities},
+                "verdict": {"type": "string", "enum": verdicts},
+            },
+        }
+
+    report = {
+        "anyOf": [
+            report_variant(
+                availabilities=["available"],
+                verdicts=["bullish", "bearish", "neutral", "not_applicable"],
+            ),
+            report_variant(
+                availabilities=["no_data", "not_entitled", "provider_error"],
+                verdicts=["unavailable"],
+            ),
+        ]
     }
     return {
         "type": "object",

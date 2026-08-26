@@ -14,7 +14,9 @@ from shaq_daily_oracle.audit import audit_runtime  # noqa: E402
 def main() -> int:
     parser = argparse.ArgumentParser(description="Audit a SHAQ Daily Oracle canary directory")
     parser.add_argument("--runtime", type=Path, required=True)
-    parser.add_argument("--stage", choices=["preflight", "complete"], required=True)
+    parser.add_argument(
+        "--stage", choices=["preflight", "complete", "shadow_complete"], required=True
+    )
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
 

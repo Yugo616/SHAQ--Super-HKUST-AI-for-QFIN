@@ -17,5 +17,19 @@
     "invalidation": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
     "evidence_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
     "lineage_root_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
-  }
+  },
+  "anyOf": [
+    {
+      "properties": {
+        "availability": {"const": "available"},
+        "verdict": {"enum": ["bullish", "bearish", "neutral", "not_applicable"]}
+      }
+    },
+    {
+      "properties": {
+        "availability": {"enum": ["no_data", "not_entitled", "provider_error"]},
+        "verdict": {"const": "unavailable"}
+      }
+    }
+  ]
 }

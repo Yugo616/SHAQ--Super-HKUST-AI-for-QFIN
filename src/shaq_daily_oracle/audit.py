@@ -8,16 +8,69 @@ from typing import Any
 
 from .hashing import sha256_file, sha256_payload
 from .execution import verify_execution_bundle
+from .canary import CanaryError, build_canary_intents
 from .isolation import IsolationError, validate_isolation_status
 from .sandboxed_codex import derive_predictions, verify_isolation_attestation
 from .candidates import CandidateError, select_candidates
+from .collectors import CollectorError, build_capital_analysis
 from .labels import LABEL_DOCUMENT_KEYS, LabelError, validate_label_document
+from .price_history import PriceHistoryError, build_price_history_analysis
 from .readiness import ReadinessError, build_prospective_evaluations
 from .sec_view import SecViewError, build_sec_analysis_text
 
 
 class AuditError(ValueError):
     """A canary artifact set is incomplete or inconsistent."""
+
+
+def _verify_shadow_execution_bundle(
+    *,
+    bundle: dict[str, Any],
+    frozen: dict[str, Any],
+    policy: dict[str, Any],
+    portfolio: dict[str, Any],
+    borrowability: dict[str, Any],
+) -> None:
+    unsigned_bundle = dict(bundle)
+    declared_bundle_hash = unsigned_bundle.pop("intent_bundle_sha256", None)
+    if declared_bundle_hash != sha256_payload(unsigned_bundle):
+        raise AuditError("shadow intent bundle hash mismatch")
+    if (
+        frozen.get("mode") != "shadow"
+        or bundle.get("mode") != "shadow"
+        or bundle.get("run_id") != frozen.get("run_id")
+        or bundle.get("frozen_run_sha256") != frozen.get("run_sha256")
+        or bundle.get("trd_env") != "SIMULATE"
+        or policy.get("forecast_mode") != "shadow"
+        or policy.get("trd_env") != "SIMULATE"
+        or policy.get("real_trading_enabled") is not False
+        or bundle.get("execution_policy_sha256") != sha256_payload(policy)
+    ):
+        raise AuditError("shadow intent bundle is not bound to the frozen shadow run")
+    borrowable = borrowability.get("borrowable", borrowability)
+    if not isinstance(borrowable, dict):
+        raise AuditError("shadow borrowability document lacks a symbol map")
+    try:
+        rebuilt = build_canary_intents(
+            forecasts=frozen.get("predictions", []),
+            portfolio=portfolio,
+            borrowable=borrowable,
+            policy=policy,
+        )
+    except CanaryError as exc:
+        raise AuditError(f"shadow intent bundle cannot be rebuilt: {exc}") from exc
+    observed_core = {
+        key: value
+        for key, value in bundle.items()
+        if key not in {
+            "intent_bundle_sha256", "frozen_run_sha256", "execution_policy_sha256",
+            "portfolio_snapshot_sha256", "borrowability_snapshot_sha256",
+        }
+    }
+    if observed_core != rebuilt:
+        raise AuditError("shadow intent bundle differs from deterministic recomputation")
+    if any(intent.get("status") != "SHADOW_ONLY" for intent in bundle.get("intents", [])):
+        raise AuditError("a shadow intent is executable")
 
 
 def _read(runtime: Path, name: str) -> dict[str, Any]:
@@ -179,8 +232,8 @@ def _verify_ai_calls(runtime: Path, frozen: dict[str, Any]) -> dict[str, Any]:
 
 
 def audit_runtime(runtime: str | Path, stage: str) -> dict[str, Any]:
-    if stage not in {"preflight", "complete"}:
-        raise AuditError("stage must be preflight or complete")
+    if stage not in {"preflight", "complete", "shadow_complete"}:
+        raise AuditError("stage must be preflight, complete or shadow_complete")
     root = Path(runtime)
     frozen = _read(root, "frozen_run.json")
     declared_hash = frozen.get("run_sha256")
@@ -236,13 +289,25 @@ def audit_runtime(runtime: str | Path, stage: str) -> dict[str, Any]:
             if not analysis_path.is_file() or sha256_file(analysis_path) != record.get("analysis_sha256"):
                 raise AuditError("frozen analysis view is missing or its SHA-256 changed")
             transform = record.get("analysis_transform", {})
+            if transform.get("source_sha256") != record.get("raw_sha256"):
+                raise AuditError("frozen analysis transform is not bound to its raw evidence")
             try:
-                rebuilt = build_sec_analysis_text(
-                    raw_path.read_bytes(),
-                    document_types=transform.get("document_types", []),
-                    maximum_output_bytes=int(transform.get("maximum_output_bytes", 0)),
-                )
-            except (SecViewError, TypeError, ValueError) as exc:
+                if transform.get("name") == "sec_document_text_view_v1":
+                    rebuilt = build_sec_analysis_text(
+                        raw_path.read_bytes(),
+                        document_types=transform.get("document_types", []),
+                        maximum_output_bytes=int(transform.get("maximum_output_bytes", 0)),
+                    )
+                elif transform.get("name") == "price_path_analysis_view_v1":
+                    rebuilt = build_price_history_analysis(
+                        raw_path.read_bytes(),
+                        maximum_bars=int(transform.get("maximum_bars", 0)),
+                    )
+                elif transform.get("name") == "capital_ofi_analysis_view_v1":
+                    rebuilt = build_capital_analysis(raw_path.read_bytes())
+                else:
+                    raise AuditError("frozen analysis transform is unsupported")
+            except (CollectorError, PriceHistoryError, SecViewError, TypeError, ValueError) as exc:
                 raise AuditError("frozen analysis view cannot be reconstructed") from exc
             if analysis_path.read_bytes() != rebuilt:
                 raise AuditError("frozen analysis view differs from its raw source")
@@ -265,7 +330,20 @@ def audit_runtime(runtime: str | Path, stage: str) -> dict[str, Any]:
     borrowability = _read(root, "borrowability.json")
     intents = _read(root, "order_intents.json")
     execution_policy = _read(root, "execution_policy.json")
-    verify_execution_bundle(intents, frozen, execution_policy)
+    if frozen.get("mode") == "shadow":
+        if stage == "complete":
+            raise AuditError("shadow runs cannot enter broker-complete audit")
+        _verify_shadow_execution_bundle(
+            bundle=intents,
+            frozen=frozen,
+            policy=execution_policy,
+            portfolio=portfolio,
+            borrowability=borrowability,
+        )
+    else:
+        if stage == "shadow_complete":
+            raise AuditError("canary runs cannot enter shadow-complete audit")
+        verify_execution_bundle(intents, frozen, execution_policy)
     if (
         intents.get("portfolio_snapshot_sha256")
         != sha256_file(root / "portfolio_snapshot.json")
@@ -393,6 +471,11 @@ def audit_runtime(runtime: str | Path, stage: str) -> dict[str, Any]:
             "broker_reconciliation", "execution_ledger", "post_exit_portfolio",
             "provisional_labels", "prospective_probability_and_cost_ledger",
         ])
+    elif stage == "shadow_complete":
+        journal = _read(root, "broker_journal.json")
+        if journal.get("run_status") != "SHADOW_OR_EMPTY" or journal.get("orders") != {}:
+            raise AuditError("shadow run contains broker activity")
+        checked.extend(["shadow_intent_recomputation", "shadow_zero_broker_activity"])
     result = {
         "schema_version": 6,
         "run_id": frozen["run_id"],
@@ -417,6 +500,15 @@ def audit_runtime(runtime: str | Path, stage: str) -> dict[str, Any]:
                 "labels_provisional.json",
                 "evaluations_provisional.json",
                 "readiness_status.json",
+            )
+        }
+    elif stage == "shadow_complete":
+        result["complete_artifact_sha256"] = {
+            name: sha256_file(root / name)
+            for name in (
+                "broker_journal.json",
+                "order_intents.json",
+                "label_placeholder.json",
             )
         }
     return result

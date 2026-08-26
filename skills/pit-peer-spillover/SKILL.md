@@ -16,7 +16,7 @@ description: Analyze point-in-time customer, supplier, competitor, complement an
 
 ## Abstain
 
-Return `unavailable` for present-day relationship tables backfilled into history, missing effective dates or unsupported company-name matching. Industry beta can remain `available + neutral` without a named company relationship; never invent one from correlation.
+Return `no_data + unavailable` when the only relationship evidence is a present-day table backfilled into history, lacks effective dates or relies on unsupported company-name matching. Industry beta can remain `available + neutral` without a named company relationship; never invent one from correlation.
 
 ## Output
 
