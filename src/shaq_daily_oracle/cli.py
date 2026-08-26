@@ -3,11 +3,14 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from datetime import date
+from datetime import date, datetime, time as clock_time
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from .workflow import Workflow
-from .campaign import CampaignConfig, run_campaign
+from .campaign import CampaignConfig, run_campaign, write_campaign_views
+from .postmortem_runner import PostmortemRunner
+from .batch_review_runner import BatchReviewRunner
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -21,6 +24,10 @@ def build_parser() -> argparse.ArgumentParser:
     campaign = commands.add_parser("campaign", help=argparse.SUPPRESS)
     campaign.add_argument("--config", type=Path, required=True)
     campaign.add_argument("--preflight-only", action="store_true")
+    postmortem = commands.add_parser("postmortem", help=argparse.SUPPRESS)
+    postmortem.add_argument("--campaign-config", type=Path, required=True)
+    postmortem.add_argument("--phase", choices=("auto", "provisional", "final"), default="auto")
+    postmortem.add_argument("--session-date", type=date.fromisoformat)
     return parser
 
 
@@ -34,6 +41,82 @@ def main(argv: list[str] | None = None) -> int:
                 config=CampaignConfig.load(args.config),
                 preflight_only=args.preflight_only,
             )
+        except Exception as exc:
+            print(json.dumps({
+                "status": "fail_closed", "error_type": type(exc).__name__,
+                "message": str(exc),
+            }, sort_keys=True))
+            return 2
+    if args.command == "postmortem":
+        try:
+            campaign = CampaignConfig.load(args.campaign_config)
+            now_et = datetime.now(ZoneInfo("America/New_York"))
+            phase = args.phase
+            session_date = args.session_date
+            if phase == "auto":
+                postmortem_config = json.loads(
+                    (package_root / "config/postmortem.json").read_text(encoding="utf-8")
+                )
+                provisional_after = clock_time.fromisoformat(
+                    postmortem_config["provisional_capture_after_et"]
+                )
+                provisional_candidates = [
+                    value for value in campaign.session_dates
+                    if value == now_et.date()
+                    and now_et.time() >= provisional_after
+                ]
+                if provisional_candidates:
+                    session_date = provisional_candidates[-1]
+                    phase = "provisional"
+                else:
+                    final_candidates = []
+                    for value in campaign.session_dates:
+                        matches = sorted(campaign.runtime_root.glob(
+                            f"SHAQ-CANARY-{value.isoformat()}-*"
+                        ))
+                        if not matches:
+                            continue
+                        post_root = matches[-1] / "postmortem"
+                        if (
+                            value < now_et.date()
+                            and (post_root / "postmortem_provisional.json").is_file()
+                            and not (post_root / "postmortem_final.json").exists()
+                        ):
+                            final_candidates.append(value)
+                    if final_candidates:
+                        session_date = final_candidates[-1]
+                        phase = "final"
+                if session_date is None and now_et >= datetime.combine(
+                    date.fromisoformat(postmortem_config["first_batch_review_date"]),
+                    clock_time.fromisoformat(postmortem_config["batch_review_after_et"]),
+                    ZoneInfo("America/New_York"),
+                ):
+                    output = BatchReviewRunner(
+                        package_root=package_root, runtime_root=campaign.runtime_root
+                    ).run(generated_at_et=now_et)
+                    write_campaign_views(campaign)
+                    print(json.dumps({
+                        "status": "complete", "phase": "batch_review",
+                        "output": str(output),
+                    }, sort_keys=True))
+                    return 0
+            if session_date is None or phase == "auto":
+                print(json.dumps({
+                    "status": "idle", "reason": "no_postmortem_phase_is_due"
+                }, sort_keys=True))
+                return 0
+            runtime = PostmortemRunner(
+                package_root=package_root,
+                runtime_root=campaign.runtime_root,
+                host=campaign.host,
+                port=campaign.port,
+            ).run(session_date=session_date, phase=phase)
+            write_campaign_views(campaign)
+            print(json.dumps({
+                "status": "complete", "phase": phase,
+                "session_date": session_date.isoformat(), "runtime": str(runtime),
+            }, sort_keys=True))
+            return 0
         except Exception as exc:
             print(json.dumps({
                 "status": "fail_closed", "error_type": type(exc).__name__,

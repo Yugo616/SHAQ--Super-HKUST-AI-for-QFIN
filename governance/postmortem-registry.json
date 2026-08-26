@@ -1,0 +1,28 @@
+{
+  "references": {
+    "REF-DAWID-PREQUENTIAL-001": {
+      "title": "Present Position and Potential Developments: Some Personal Views, Statistical Theory, the Prequential Approach",
+      "url": "https://doi.org/10.2307/2981683"
+    },
+    "REF-BACKTEST-OVERFIT-001": {
+      "title": "How Backtest Overfitting in Finance Leads to False Discoveries",
+      "url": "https://academic.oup.com/jrssig/article/18/6/22/7038278"
+    },
+    "REF-SELECTIVE-001": {
+      "title": "Selective Classification via One-Sided Prediction",
+      "url": "https://proceedings.mlr.press/v130/gangrade21a.html"
+    },
+    "REF-ADWIN-001": {
+      "title": "Learning from Time-Changing Data with Adaptive Windowing",
+      "url": "https://doi.org/10.1137/1.9781611972771.42"
+    }
+  },
+  "decisions": {
+    "DEC-FORMAL-CORE-FREEZE-001": "Freeze the formal prediction core during a prospective campaign; retrospective results cannot mutate it.",
+    "DEC-POSTMORTEM-ISOLATION-001": "Keep post-close outcomes and explanations outside the next-session prediction evidence root.",
+    "DEC-BATCH-LEARNING-001": "Create internal hypotheses daily but evaluate and promote only in preregistered batches."
+  },
+  "experiments": {
+    "EXP-POSTMORTEM-001": "Prospective daily candidate-level retrospective diagnostics beginning with the 2026-08-26 campaign."
+  }
+}

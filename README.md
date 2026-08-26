@@ -109,6 +109,9 @@ lineage_root_ids
 
 - The scientific label is the official unadjusted US regular-session open-to-close return.
 - The execution ledger separately records actual arrival prices, fills, fees and implementation shortfall.
+- After each close, every frozen candidate is reviewed with the T-1 market and sector exposures that were available before the forecast. The result is split into market, sector and stock-specific components.
+- Close reviews may record sourced causal hypotheses, but the prediction process cannot read them. Daily outcomes cannot rewrite Skills, prompts, candidate filters or gates.
+- Research changes are considered only in scheduled batches. A drift detector may request inspection; it never retrains or changes the live system automatically.
 - Probability output is generated only from frozen prospective records after the configured proper-score and sample gates are satisfied.
 - Futu execution is locked to `SIMULATE`; external positions are excluded and real trading is not supported.
 - Broker ambiguity, stale inputs, duplicate intents or failed reconciliation add no new risk.

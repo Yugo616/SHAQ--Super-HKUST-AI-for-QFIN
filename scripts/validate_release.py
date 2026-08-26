@@ -54,6 +54,12 @@ REQUIRED_CONFIG_BINDINGS = {
         "label_capture_after", "order_poll_interval_seconds", "account_alias",
         "shares_per_forecast", "maximum_forecasts",
     },
+    "postmortem.json": {
+        "provisional_capture_after_et", "final_reobservation_after_et",
+        "market_symbol", "batch_review_interval_trading_days",
+        "first_batch_review_date", "batch_review_after_et", "drift_alert_delta",
+        "automatic_production_mutation_allowed", "approved_reference_ids",
+    },
 }
 
 
@@ -118,11 +124,14 @@ def main() -> int:
     project = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     if 'daily-oracle = "shaq_daily_oracle.cli:main"' not in project:
         raise ValueError("the public package lacks its single executable entrypoint")
-    registry = json.loads((ROOT / "governance/registry.json").read_text(encoding="utf-8"))
+    registries = [
+        json.loads(path.read_text(encoding="utf-8"))
+        for path in sorted((ROOT / "governance").glob("*registry.json"))
+    ]
     known = {
-        "REF": set(registry["references"]),
-        "DEC": set(registry["decisions"]),
-        "EXP": set(registry["experiments"]),
+        "REF": {key for registry in registries for key in registry.get("references", {})},
+        "DEC": {key for registry in registries for key in registry.get("decisions", {})},
+        "EXP": {key for registry in registries for key in registry.get("experiments", {})},
     }
     for config_path in sorted((ROOT / "config").glob("*.json")):
         config = json.loads(config_path.read_text(encoding="utf-8"))
@@ -158,6 +167,16 @@ def main() -> int:
                             raise ValueError(f"unregistered {prefix} binding in {config_path}: {identifier}")
                 else:
                     stack.extend(value)
+    core_manifest = json.loads(
+        (ROOT / "governance/formal-core-manifest.json").read_text(encoding="utf-8")
+    )
+    if core_manifest.get("schema_version") != 1 or not core_manifest.get("include_patterns"):
+        raise ValueError("formal-core manifest is incomplete")
+    for prefix, key in (
+        ("REF", "reference_id"), ("DEC", "decision_id"), ("EXP", "experiment_id")
+    ):
+        if core_manifest.get(key) not in known[prefix]:
+            raise ValueError(f"formal-core manifest has an unknown {key}")
     print(f"release validation passed: {len(skills)} skills")
     return 0
 

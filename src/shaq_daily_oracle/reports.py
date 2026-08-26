@@ -27,6 +27,7 @@ _ZH = {
     "provider_error": "数据源异常", "not_applicable": "不适用",
     "ordinary": "普通榜", "event": "事件榜", "canary": "正式模拟",
     "shadow": "影子记录", "available": "可用",
+    "provisional": "暂定复盘", "final": "最终复盘",
 }
 
 
@@ -34,9 +35,14 @@ def _zh(value: Any) -> str:
     return _ZH.get(str(value), str(value))
 
 
+def _pct(value: Any) -> str:
+    return f"{100 * float(value):.2f}%"
+
+
 def professor_report(
     *, frozen: dict[str, Any], collection_statuses: dict[str, Any] | None,
     orders: dict[str, Any] | None, labels: dict[str, Any] | None,
+    postmortem: dict[str, Any] | None = None,
 ) -> str:
     prediction_rows = "".join(
         f"<tr><td>{_cell(row['symbol'])}</td><td class={_cell(row['direction'])}>{_cell(_zh(row['direction']))}</td><td>{_cell(_zh(row['track']))}</td><td>{_cell(row['strongest_countercase'])}</td></tr>"
@@ -60,6 +66,33 @@ def professor_report(
         for row in statuses
     )
     not_applicable = sum(row.get("status") == "not_applicable" for row in statuses)
+    retrospective = ""
+    if postmortem:
+        review_rows = "".join(
+            "<tr>"
+            f"<td>{_cell(row['symbol'])}</td>"
+            f"<td>{_cell(_zh(row['actual_direction']))}</td>"
+            f"<td>{_cell(_pct(row['attribution']['stock_open_to_close_return']))}</td>"
+            f"<td>{_cell(_pct(row['attribution']['market_component_return']))}</td>"
+            f"<td>{_cell(_pct(row['attribution']['industry_component_return']))}</td>"
+            f"<td>{_cell(_pct(row['attribution']['stock_specific_component_return']))}</td>"
+            f"<td>{'已发布' if row['published'] else '未入榜'}</td>"
+            "</tr>"
+            for row in postmortem.get("candidate_diagnostics", [])
+        )
+        uncovered = sum(
+            row.get("uncovered_realized_move") is True
+            for row in postmortem.get("candidate_diagnostics", [])
+        )
+        retrospective = (
+            f"<h2>收盘后复盘</h2><p>状态：{_cell(_zh(postmortem.get('phase')))}；"
+            f"复盘候选：{_cell(postmortem.get('candidate_count'))}只；"
+            f"当天有涨跌但未入榜：{uncovered}只。这里的拆分用于诊断，不代表找到了唯一原因。</p>"
+            "<table><thead><tr><th>股票</th><th>实际方向</th><th>实际涨跌</th>"
+            "<th>大盘带来的部分</th><th>行业额外部分</th><th>股票自身部分</th><th>盘前状态</th>"
+            f"</tr></thead><tbody>{review_rows}</tbody></table>"
+            "<p class=muted>盘后AI只能提出带出处的研究假设；它不能自动修改第二天的Skill、门槛或下单规则。</p>"
+        )
     body = (
         f"<h1>SHAQ Daily Oracle 每日模拟记录</h1>"
         f"<p class=muted>运行编号：{_cell(frozen.get('run_id'))} · 模式：{_cell(_zh(frozen.get('mode')))} · 评价口径：美股常规盘官方开盘价到收盘价 · 冻结校验值：<code>{_cell(frozen.get('run_sha256'))}</code></p>"
@@ -68,6 +101,7 @@ def professor_report(
         "<h2>候选覆盖与门禁</h2><table><thead><tr><th>股票</th><th>适用领域</th><th>有方向领域</th><th>未入榜原因</th></tr></thead>"
         f"<tbody>{audit_rows or '<tr><td colspan=4>没有候选。</td></tr>'}</tbody></table>"
         f"<h2>模拟成交与结果</h2><p>订单记录：{order_count} 条；开盘到收盘的评价记录：{label_count} 条。交易账和预测成绩分开保存，互不覆盖。</p>"
+        f"{retrospective}"
         f"<h2>数据采集情况</h2><p>真实不可用：{true_unavailable} 项；当天不适用：{not_applicable} 项。两者分开记录。</p><table><thead><tr><th>股票</th><th>领域</th><th>状态</th><th>说明</th></tr></thead>"
         f"<tbody>{status_rows or '<tr><td colspan=4>今天没有进入深度分析的候选。</td></tr>'}</tbody></table>"
     )
@@ -92,10 +126,12 @@ def agent_trace(*, frozen: dict[str, Any]) -> str:
 def write_reports(
     *, runtime: Path, frozen: dict[str, Any], collection_statuses: dict[str, Any] | None = None,
     orders: dict[str, Any] | None = None, labels: dict[str, Any] | None = None,
+    postmortem: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     outputs = {
         "professor_report.html": professor_report(
-            frozen=frozen, collection_statuses=collection_statuses, orders=orders, labels=labels
+            frozen=frozen, collection_statuses=collection_statuses, orders=orders,
+            labels=labels, postmortem=postmortem,
         ),
         "agent_trace.html": agent_trace(frozen=frozen),
     }

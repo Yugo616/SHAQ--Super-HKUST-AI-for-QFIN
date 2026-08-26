@@ -1300,7 +1300,18 @@ class PublicCoreTests(unittest.TestCase):
             self.assertIn(row["experiment_id"], registry["experiments"])
 
     def test_every_formal_config_parameter_has_registered_governance(self):
-        registry = json.loads((ROOT / "governance/registry.json").read_text(encoding="utf-8"))
+        registries = [
+            json.loads(path.read_text(encoding="utf-8"))
+            for path in sorted((ROOT / "governance").glob("*registry.json"))
+        ]
+        registry = {
+            section: {
+                key: value
+                for source in registries
+                for key, value in source.get(section, {}).items()
+            }
+            for section in ("references", "decisions", "experiments")
+        }
         identity_fields = {"run_id", "parameter_bindings"}
         metadata_fields = {"reference_id", "decision_id", "experiment_id", "parameter_bindings"}
         for path in sorted((ROOT / "config").glob("*.json")):
@@ -1310,7 +1321,7 @@ class PublicCoreTests(unittest.TestCase):
                 excluded = metadata_fields
             else:
                 sections = (config,)
-                excluded = identity_fields
+                excluded = identity_fields | {"schema_version"}
             for section in sections:
                 bindings = section["parameter_bindings"]
                 self.assertEqual(set(bindings), set(section) - excluded, path.name)

@@ -24,6 +24,8 @@ from typing import Any, Iterator
 from zoneinfo import ZoneInfo
 
 from .execution import select_simulate_us_account
+from .identity import ensure_formal_core_lock
+from .postmortem_runner import PostmortemRunner
 from .workflow import Workflow, _resolve_universe
 
 
@@ -211,7 +213,21 @@ def run_preflight(*, package_root: Path, config: CampaignConfig) -> dict[str, An
         "universe_available": False,
         "single_us_simulate_account": False,
         "release_tests_passed": False,
+        "formal_core_frozen": False,
     }
+    try:
+        identity = _read(package_root / "config/system-identity.json")["identity"]
+        ensure_formal_core_lock(
+            package_root=package_root,
+            runtime_root=config.runtime_root,
+            system_identity=identity,
+            freeze_start=config.session_dates[0],
+            freeze_end=config.session_dates[-1],
+            observed_at=datetime.now(ZoneInfo("America/New_York")),
+        )
+        checks["formal_core_frozen"] = True
+    except Exception:
+        pass
     try:
         _resolve_universe(config.runtime_root)
         checks["universe_available"] = True
@@ -278,7 +294,9 @@ def campaign_rows(config: CampaignConfig) -> list[dict[str, Any]]:
             "交易日": session_date.isoformat(), "运行状态": "尚未运行",
             "正式运行": "否",
             "正式预测数": 0, "命中数": 0, "已评价数": 0,
-            "模拟盈亏": None, "费用": None, "异常": "",
+            "模拟盈亏": None, "费用": None, "复盘状态": "尚未复盘",
+            "复盘候选数": 0, "未覆盖候选数": 0,
+            "系统身份": "", "正式核心哈希": "", "异常": "",
         }
         if runtime:
             row["运行状态"] = "已完成" if (runtime / "audit_complete.json").exists() else "运行中或安全停止"
@@ -287,6 +305,10 @@ def campaign_rows(config: CampaignConfig) -> list[dict[str, Any]]:
                 if frozen.get("mode") == "canary":
                     row["正式运行"] = "是"
                     row["正式预测数"] = len(frozen.get("predictions", []))
+                row["系统身份"] = frozen.get("system_identity", "")
+            lock = config.runtime_root / "formal_core_lock.json"
+            if lock.is_file():
+                row["正式核心哈希"] = _read(lock).get("formal_core_sha256", "")
             if (runtime / "evaluations_provisional.json").exists():
                 evaluations = _read(runtime / "evaluations_provisional.json").get("evaluations", [])
                 row["已评价数"] = len(evaluations)
@@ -299,6 +321,20 @@ def campaign_rows(config: CampaignConfig) -> list[dict[str, Any]]:
                 row["费用"] = sum(float(value) for value in fees) if fees else None
             if (runtime / "workflow_failure.json").exists():
                 row["异常"] = _read(runtime / "workflow_failure.json").get("error_type", "安全停止")
+            post_root = runtime / "postmortem"
+            post_path = (
+                post_root / "postmortem_final.json"
+                if (post_root / "postmortem_final.json").is_file()
+                else post_root / "postmortem_provisional.json"
+            )
+            if post_path.is_file():
+                review = _read(post_path)
+                row["复盘状态"] = "最终" if review.get("phase") == "final" else "暂定"
+                row["复盘候选数"] = int(review.get("candidate_count", 0))
+                row["未覆盖候选数"] = sum(
+                    item.get("uncovered_realized_move") is True
+                    for item in review.get("candidate_diagnostics", [])
+                )
         rows.append(row)
     return rows
 
@@ -325,7 +361,24 @@ def write_campaign_views(config: CampaignConfig) -> None:
         "paper_net_pnl": sum(float(row["模拟盈亏"] or 0) for row in rows),
         "fees": sum(float(row["费用"] or 0) for row in rows),
         "exception_sessions": sum(bool(row["异常"]) for row in rows),
+        "postmortem_sessions": sum(row["复盘状态"] in {"暂定", "最终"} for row in rows),
+        "final_postmortem_sessions": sum(row["复盘状态"] == "最终" for row in rows),
+        "identity_groups": [],
     }
+    groups: dict[tuple[str, str], dict[str, Any]] = {}
+    for row in rows:
+        if row["正式运行"] != "是":
+            continue
+        key = (str(row["系统身份"]), str(row["正式核心哈希"]))
+        group = groups.setdefault(key, {
+            "system_identity": key[0], "formal_core_sha256": key[1],
+            "formal_runs": 0, "predictions": 0, "evaluated": 0, "correct": 0,
+        })
+        group["formal_runs"] += 1
+        group["predictions"] += int(row["正式预测数"])
+        group["evaluated"] += int(row["已评价数"])
+        group["correct"] += int(row["命中数"])
+    summary["identity_groups"] = [groups[key] for key in sorted(groups)]
     _write(config.runtime_root / "campaign_summary.json", summary)
     csv_path = config.runtime_root / "campaign_summary.csv"
     csv_buffer = io.StringIO(newline="")
@@ -400,6 +453,34 @@ def run_campaign(*, package_root: Path, config: CampaignConfig, preflight_only: 
     stage = "acquire_campaign_lock"
     try:
         with campaign_lock(config.runtime_root / "campaign.lock"):
+            previous_reviews = []
+            for value in config.session_dates:
+                if value >= today_et:
+                    continue
+                matches = sorted(config.runtime_root.glob(f"SHAQ-CANARY-{value.isoformat()}-*"))
+                if not matches:
+                    continue
+                post_root = matches[-1] / "postmortem"
+                if (
+                    (post_root / "postmortem_provisional.json").is_file()
+                    and not (post_root / "postmortem_final.json").exists()
+                ):
+                    previous_reviews.append(value)
+            if previous_reviews:
+                try:
+                    PostmortemRunner(
+                        package_root=package_root, runtime_root=config.runtime_root,
+                        host=config.host, port=config.port,
+                    ).run(session_date=previous_reviews[-1], phase="final")
+                except Exception as exc:
+                    _write(config.runtime_root / "postmortem_finalization_failure.json", {
+                        "schema_version": 1,
+                        "session_date": previous_reviews[-1].isoformat(),
+                        "recorded_at_et": datetime.now(ZoneInfo("America/New_York")).isoformat(),
+                        "error_type": type(exc).__name__,
+                        "message": str(exc),
+                        "formal_prediction_effect": "none",
+                    })
             stage = "preflight"
             preflight = run_preflight(package_root=package_root, config=config)
             write_campaign_views(config)
