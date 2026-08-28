@@ -67,6 +67,65 @@ class CollectorWorkflowTests(unittest.TestCase):
                 captured_at_et=self.captured,
             )
 
+    def test_capital_reports_actual_times_and_uses_contiguous_time_segments(self):
+        directions = ["BUY"] * 3 + ["SELL"] * 3 + ["BUY"] * 3
+        clocks = [
+            "08:47:00", "08:47:10", "08:47:20",
+            "08:48:00", "08:48:10", "08:48:20",
+            "08:49:00", "08:49:10", "08:49:20",
+        ]
+        ticks = [
+            {"time": clock, "price": 100 + index / 100, "volume": 10, "ticker_direction": direction}
+            for index, (clock, direction) in enumerate(zip(clocks, directions))
+        ]
+        books = [
+            {"observed_at_et": "2026-08-21T08:47:05-04:00", "bid": [{"price": 100, "volume": 100}], "ask": [{"price": 101, "volume": 90}]},
+            {"observed_at_et": "2026-08-21T08:49:30-04:00", "bid": [{"price": 100, "volume": 100}], "ask": [{"price": 101, "volume": 90}]},
+        ]
+        kwargs = {
+            "symbol": "AAPL", "captured_at_et": "2026-08-21T08:49:40-04:00",
+            "window_start_et": "2026-08-21T04:00:00-04:00",
+            "window_end_et": "2026-08-21T08:50:00-04:00",
+            "formal_not_before_et": "2026-08-21T08:47:00-04:00",
+            "segment_count": 3,
+        }
+        document = build_capital_document(
+            ticker_rows=reversed(ticks), order_book_samples=reversed(books), **kwargs,
+        )
+        reordered = build_capital_document(
+            ticker_rows=ticks, order_book_samples=books, **kwargs,
+        )
+        self.assertEqual(document, reordered)
+        self.assertEqual(document["metrics"]["segment_signed_imbalances"], [1.0, -1.0, 1.0])
+        window = document["observation_window"]
+        self.assertEqual(window["requested_end_et"], "2026-08-21T08:50:00-04:00")
+        self.assertEqual(window["ticker_last_observed_at_et"], "2026-08-21T08:49:20-04:00")
+        self.assertEqual(window["order_book_last_observed_at_et"], "2026-08-21T08:49:30-04:00")
+        self.assertTrue(document["metrics"]["formal_direction_eligible"])
+
+    def test_stale_capital_observation_is_diagnostic_only(self):
+        ticks = [
+            {"time": f"08:4{index}:00", "price": 100 + index, "volume": 10, "ticker_direction": "SELL"}
+            for index in range(3)
+        ]
+        books = [{
+            "observed_at_et": "2026-08-21T08:49:30-04:00",
+            "bid": [{"price": 100, "volume": 100}], "ask": [{"price": 101, "volume": 100}],
+        }]
+        document = build_capital_document(
+            symbol="AAPL", ticker_rows=ticks, order_book_samples=books,
+            captured_at_et="2026-08-21T08:49:40-04:00",
+            window_start_et="2026-08-21T04:00:00-04:00",
+            window_end_et="2026-08-21T08:50:00-04:00",
+            formal_not_before_et="2026-08-21T08:47:00-04:00", segment_count=3,
+        )
+        self.assertFalse(document["metrics"]["formal_direction_eligible"])
+        self.assertEqual(document["state_components"]["supported_horizon"], "diagnostic_only")
+        self.assertNotEqual(
+            document["observation_window"]["ticker_last_observed_at_et"],
+            document["observation_window"]["requested_end_et"],
+        )
+
     def test_options_describe_distribution_without_mechanical_direction(self):
         rows = [
             {"code": "C", "option_type": "CALL", "strike_time": "2026-09-18", "strike_price": 100,

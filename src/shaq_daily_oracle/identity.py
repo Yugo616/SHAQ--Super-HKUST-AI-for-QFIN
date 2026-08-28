@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
@@ -10,6 +11,26 @@ from .hashing import sha256_file, sha256_payload
 
 class IdentityError(ValueError):
     """The formal prediction core changed inside a frozen campaign."""
+
+
+def resolve_system_identity(config: dict[str, Any], observed_at: datetime) -> dict[str, Any]:
+    """Resolve the latest identity already effective at the requested ET timestamp."""
+
+    entries = config.get("identities")
+    if not isinstance(entries, list):
+        entries = [{key: value for key, value in config.items() if key != "parameter_bindings"}]
+    eligible = []
+    for entry in entries:
+        if not isinstance(entry, dict) or not str(entry.get("identity", "")).strip():
+            raise IdentityError("system identity history contains an invalid entry")
+        effective = datetime.fromisoformat(str(entry.get("effective_from_et", "")).replace("Z", "+00:00"))
+        if effective.tzinfo is None or effective.utcoffset() is None:
+            raise IdentityError("system identity effective time requires an offset")
+        if effective <= observed_at:
+            eligible.append((effective, entry))
+    if not eligible:
+        raise IdentityError("no system identity is effective for the requested session")
+    return dict(max(eligible, key=lambda item: item[0])[1])
 
 
 def formal_core_sha256(package_root: Path) -> str:
@@ -30,6 +51,22 @@ def formal_core_sha256(package_root: Path) -> str:
     })
 
 
+def formal_core_lock_path(runtime_root: Path, system_identity: str) -> Path:
+    legacy = runtime_root / "formal_core_lock.json"
+    if not legacy.exists():
+        return legacy
+    try:
+        saved_identity = json.loads(legacy.read_text(encoding="utf-8")).get("system_identity")
+    except (OSError, json.JSONDecodeError):
+        saved_identity = None
+    if saved_identity == system_identity:
+        return legacy
+    safe_identity = re.sub(r"[^A-Za-z0-9._-]+", "-", system_identity).strip("-")
+    if not safe_identity:
+        raise IdentityError("system identity cannot form a lock name")
+    return runtime_root / "formal_core_locks" / f"{safe_identity}.json"
+
+
 def ensure_formal_core_lock(
     *, package_root: Path, runtime_root: Path, system_identity: str,
     freeze_start: date, freeze_end: date, observed_at: datetime,
@@ -37,7 +74,7 @@ def ensure_formal_core_lock(
     if freeze_end < freeze_start:
         raise IdentityError("formal-core freeze dates are reversed")
     current = formal_core_sha256(package_root)
-    path = runtime_root / "formal_core_lock.json"
+    path = formal_core_lock_path(runtime_root, system_identity)
     expected = {
         "schema_version": 1,
         "system_identity": system_identity,

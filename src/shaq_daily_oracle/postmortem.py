@@ -212,6 +212,13 @@ def _validate_ai_hypotheses(
         references = {str(value) for value in row["reference_ids"]}
         sources = {str(value) for value in row["source_ids"]}
         domains = {str(value) for value in row["affected_domains"]}
+        for field in (
+            "affected_domains", "reference_ids", "source_ids",
+            "invalidation_conditions", "alternative_explanations",
+        ):
+            values = row[field]
+            if not isinstance(values, list) or len(values) != len({str(value) for value in values}):
+                raise PostmortemError(f"AI hypothesis {field} contains duplicates or is invalid")
         if not hypothesis_id or hypothesis_id in seen:
             raise PostmortemError("AI hypothesis IDs are blank or duplicated")
         if symbol not in symbols or category not in AI_DIAGNOSTIC_CATEGORIES:
@@ -252,6 +259,7 @@ def build_postmortem(
     generated_at_et: str, approved_reference_ids: set[str],
     post_cutoff_sources: list[dict[str, Any]] | None = None,
     ai_hypotheses: list[dict[str, Any]] | None = None,
+    postmortem_pipeline_identity: str | None = None,
 ) -> dict[str, Any]:
     """Build a deterministic retrospective diagnostic that cannot update production."""
 
@@ -359,6 +367,8 @@ def build_postmortem(
         "frozen_run_sha256": frozen["run_sha256"],
         "system_identity": frozen["system_identity"],
         "system_config_sha256": frozen["system_config_sha256"],
+        **({"postmortem_pipeline_identity": postmortem_pipeline_identity}
+           if postmortem_pipeline_identity else {}),
         "phase": outcomes["phase"],
         "trade_date": outcomes["trade_date"],
         "generated_at_et": generated.isoformat(),

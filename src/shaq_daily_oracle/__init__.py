@@ -81,6 +81,7 @@ from .sec_view import (
     SecViewError,
     build_sec_analysis_text,
     build_sec_view_receipt,
+    sec_document_types,
     verify_sec_view_receipt,
 )
 from .tasks import TaskError, build_blind_domain_tasks
@@ -143,6 +144,7 @@ __all__ = [
     "build_seatbelt_profile",
     "build_sec_analysis_text",
     "build_sec_view_receipt",
+    "sec_document_types",
     "derive_predictions",
     "run_sandboxed_six_domain",
     "verify_isolation_attestation",

@@ -15,6 +15,7 @@ from .deep_capture import capture_futu_deep_evidence
 from .evidence_manifest import merge_evidence_manifests
 from .events import capture_futu_earnings_calendar, capture_sec_universe_events
 from .hashing import sha256_file, sha256_payload
+from .identity import resolve_system_identity
 from .lineage import build_lineage_graph
 from .reports import write_reports
 from .run import freeze_run
@@ -257,6 +258,8 @@ class Workflow:
         current = self.now()
         trade_date = session_date or current.date()
         schedule = session_times(trade_date, self.runtime_config)
+        identity_at_session = datetime.combine(trade_date, datetime.min.time(), self.zone)
+        effective_identity = resolve_system_identity(self.system_identity, identity_at_session)
         mode = "shadow" if requested_mode == "shadow" else formal_mode(current, schedule)
         self.runtime_root.mkdir(parents=True, exist_ok=True)
         run_id, runtime = _run_id(self.runtime_root, trade_date)
@@ -275,7 +278,7 @@ class Workflow:
                 "started_at_et": current.isoformat(),
                 "universe_sha256": sha256_file(universe),
                 "schedule": {key: value.isoformat() for key, value in schedule.items()},
-                "system_identity": self.system_identity["identity"],
+                "system_identity": effective_identity["identity"],
                 "system_config_sha256": system_config_sha256,
             })
         else:

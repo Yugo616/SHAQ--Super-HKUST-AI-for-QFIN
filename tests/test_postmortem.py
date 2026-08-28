@@ -15,7 +15,9 @@ from shaq_daily_oracle.batch_review import adwin_mean_shift, build_batch_review 
 from shaq_daily_oracle.identity import (  # noqa: E402
     IdentityError,
     ensure_formal_core_lock,
+    formal_core_lock_path,
     formal_core_sha256,
+    resolve_system_identity,
 )
 from shaq_daily_oracle.postmortem import (  # noqa: E402
     PostmortemError,
@@ -24,6 +26,7 @@ from shaq_daily_oracle.postmortem import (  # noqa: E402
     validate_postmortem,
 )
 from shaq_daily_oracle.tasks import build_blind_domain_tasks  # noqa: E402
+from shaq_daily_oracle.postmortem_runner import _postmortem_schema  # noqa: E402
 
 
 class PostmortemTests(unittest.TestCase):
@@ -206,6 +209,30 @@ class PostmortemTests(unittest.TestCase):
         self.assertFalse(result["automatic_production_mutation_allowed"])
         validate_postmortem(result, frozen)
 
+        duplicated = {**hypothesis, "reference_ids": ["REF-DAWID-001", "REF-DAWID-001"]}
+        with self.assertRaises(PostmortemError):
+            build_postmortem(
+                frozen=frozen,
+                candidate_intake={"candidates": [{
+                    "symbol": "AAA", "gics_sector": "Information Technology",
+                    "sector_benchmark": "XLK",
+                }]},
+                relationships_by_symbol={"AAA": {
+                    "symbol": "AAA", "sector_benchmark": "XLK", "sector_beta": 0.8,
+                    "multi_etf_beta_126": {"SPY": 1.2},
+                }},
+                outcomes=self.outcomes(frozen), generated_at_et="2026-08-26T16:06:00-04:00",
+                approved_reference_ids={"REF-DAWID-001"},
+                post_cutoff_sources=[{
+                    "source_id": "sec:one", "symbol": "AAA",
+                    "published_at_et": "2026-08-26T12:00:00-04:00",
+                    "source_uri": "https://www.sec.gov/example", "raw_sha256": "f" * 64,
+                }], ai_hypotheses=[duplicated],
+            )
+
+    def test_postmortem_api_schema_uses_supported_subset(self):
+        self.assertNotIn("uniqueItems", json.dumps(_postmortem_schema(), sort_keys=True))
+
     def test_postmortem_directory_is_not_a_prediction_evidence_source(self):
         with tempfile.TemporaryDirectory() as name:
             runtime = Path(name)
@@ -254,6 +281,40 @@ class PostmortemTests(unittest.TestCase):
                     freeze_end=datetime.fromisoformat("2026-09-04").date(),
                     observed_at=datetime.fromisoformat("2026-08-27T08:00:00-04:00"),
                 )
+
+    def test_identity_history_starts_a_new_lock_without_overwriting_the_old_one(self):
+        config = {
+            "identities": [
+                {"identity": "old", "effective_from_et": "2026-08-26T00:00:00-04:00"},
+                {"identity": "new", "effective_from_et": "2026-08-31T00:00:00-04:00"},
+            ]
+        }
+        old_time = datetime.fromisoformat("2026-08-28T08:00:00-04:00")
+        new_time = datetime.fromisoformat("2026-08-31T08:00:00-04:00")
+        self.assertEqual(resolve_system_identity(config, old_time)["identity"], "old")
+        self.assertEqual(resolve_system_identity(config, new_time)["identity"], "new")
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            (root / "governance").mkdir()
+            (root / "src").mkdir()
+            (root / "governance/formal-core-manifest.json").write_text(json.dumps({
+                "schema_version": 1, "include_patterns": ["src/formal.py"],
+            }), encoding="utf-8")
+            (root / "src/formal.py").write_text("VALUE = 1\n", encoding="utf-8")
+            runtime = root / "runtime"
+            old_lock = ensure_formal_core_lock(
+                package_root=root, runtime_root=runtime, system_identity="old",
+                freeze_start=old_time.date(), freeze_end=old_time.date(), observed_at=old_time,
+            )
+            old_bytes = (runtime / "formal_core_lock.json").read_bytes()
+            new_lock = ensure_formal_core_lock(
+                package_root=root, runtime_root=runtime, system_identity="new",
+                freeze_start=new_time.date(), freeze_end=new_time.date(), observed_at=new_time,
+            )
+            self.assertEqual((runtime / "formal_core_lock.json").read_bytes(), old_bytes)
+            self.assertEqual(old_lock["system_identity"], "old")
+            self.assertEqual(new_lock["system_identity"], "new")
+            self.assertTrue(formal_core_lock_path(runtime, "new").is_file())
 
     def test_batch_review_clusters_repetition_without_mutating_core(self):
         documents = []

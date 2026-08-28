@@ -27,6 +27,7 @@
     "src/shaq_daily_oracle/execution.py",
     "src/shaq_daily_oracle/fallback.py",
     "src/shaq_daily_oracle/hashing.py",
+    "src/shaq_daily_oracle/identity.py",
     "src/shaq_daily_oracle/isolation.py",
     "src/shaq_daily_oracle/ledger.py",
     "src/shaq_daily_oracle/lineage.py",

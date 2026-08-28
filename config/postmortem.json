@@ -8,6 +8,7 @@
   "batch_review_after_et": "08:30:00",
   "drift_alert_delta": 0.002,
   "automatic_production_mutation_allowed": false,
+  "postmortem_pipeline_identity": "SHAQ-POSTMORTEM-2026-08-28",
   "approved_reference_ids": [
     "REF-ADWIN-001",
     "REF-BACKTEST-OVERFIT-001",
@@ -23,6 +24,7 @@
     "batch_review_after_et": ["REF-DAWID-PREQUENTIAL-001", "DEC-BATCH-LEARNING-001", "EXP-POSTMORTEM-001"],
     "drift_alert_delta": ["REF-ADWIN-001", "DEC-BATCH-LEARNING-001", "EXP-POSTMORTEM-001"],
     "automatic_production_mutation_allowed": ["REF-BACKTEST-OVERFIT-001", "DEC-FORMAL-CORE-FREEZE-001", "EXP-POSTMORTEM-001"],
+    "postmortem_pipeline_identity": ["REF-DAWID-PREQUENTIAL-001", "DEC-POSTMORTEM-ISOLATION-001", "EXP-POSTMORTEM-001"],
     "approved_reference_ids": ["REF-BACKTEST-OVERFIT-001", "DEC-BATCH-LEARNING-001", "EXP-POSTMORTEM-001"]
   }
 }

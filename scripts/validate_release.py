@@ -47,6 +47,7 @@ REQUIRED_CONFIG_BINDINGS = {
         "order_book_depth", "order_book_samples", "sample_interval_seconds",
         "ticker_max_count", "capital_window_start", "relationship_exposure_window", "option_expiry_min_days",
         "option_expiry_max_days", "option_max_contracts", "option_event_page_count",
+        "capital_capture_not_before", "capital_time_segments",
     },
     "runtime.json": {
         "timezone", "precheck_start", "evidence_cutoff", "forecast_deadline",
@@ -59,6 +60,7 @@ REQUIRED_CONFIG_BINDINGS = {
         "market_symbol", "batch_review_interval_trading_days",
         "first_batch_review_date", "batch_review_after_et", "drift_alert_delta",
         "automatic_production_mutation_allowed", "approved_reference_ids",
+        "postmortem_pipeline_identity",
     },
 }
 

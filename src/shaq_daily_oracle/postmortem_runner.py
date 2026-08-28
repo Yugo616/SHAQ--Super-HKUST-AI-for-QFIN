@@ -21,7 +21,7 @@ from .postmortem import (
 )
 from .reports import write_reports
 from .sandboxed_codex import _codex_call, _load_config
-from .sec_view import build_sec_analysis_text
+from .sec_view import build_sec_analysis_text, sec_document_types
 from .workflow import _resolve_universe
 
 
@@ -71,7 +71,7 @@ def _postmortem_schema() -> dict[str, Any]:
             },
             "economic_mechanism": {"type": "string", "minLength": 1},
             "affected_domains": {
-                "type": "array", "uniqueItems": True,
+                "type": "array",
                 "items": {
                     "type": "string",
                     "enum": [
@@ -85,11 +85,11 @@ def _postmortem_schema() -> dict[str, Any]:
                 "type": "array", "items": {"type": "string", "minLength": 1}
             },
             "reference_ids": {
-                "type": "array", "uniqueItems": True,
+                "type": "array",
                 "items": {"type": "string", "minLength": 1},
             },
             "source_ids": {
-                "type": "array", "uniqueItems": True,
+                "type": "array",
                 "items": {"type": "string", "minLength": 1},
             },
             "alternative_explanations": {
@@ -129,6 +129,7 @@ class PostmortemRunner:
             "market_symbol", "batch_review_interval_trading_days",
             "first_batch_review_date", "batch_review_after_et", "drift_alert_delta",
             "automatic_production_mutation_allowed", "approved_reference_ids",
+            "postmortem_pipeline_identity",
         ):
             if len(bindings.get(name, [])) != 3:
                 raise PostmortemError(f"postmortem config lacks governed {name}")
@@ -285,8 +286,15 @@ class PostmortemRunner:
                     if raw_path.exists() or analysis_path.exists():
                         raise FileExistsError("post-cutoff SEC source is partially present")
                     raw_path.write_bytes(raw)
+                    present_types = set(sec_document_types(raw))
+                    selected_types = [
+                        value for value in analysis_config["document_types"]
+                        if str(value).upper() in present_types
+                    ]
+                    if not selected_types:
+                        raise PostmortemError("SEC submission has no allowed analysis document")
                     analysis_path.write_bytes(build_sec_analysis_text(
-                        raw, document_types=analysis_config["document_types"],
+                        raw, document_types=selected_types,
                         maximum_output_bytes=int(analysis_config["maximum_output_bytes"]),
                     ))
                     sources.append({
@@ -310,6 +318,7 @@ class PostmortemRunner:
             "schema_version": 1,
             "run_id": frozen["run_id"],
             "frozen_run_sha256": frozen["run_sha256"],
+            "postmortem_pipeline_identity": self.config["postmortem_pipeline_identity"],
             "window_start_et": cutoff.isoformat(),
             "window_end_et": session_close.isoformat(),
             "sources": sorted(sources, key=lambda row: row["source_id"]),
@@ -419,6 +428,7 @@ class PostmortemRunner:
                 generated_at_et=self.now().isoformat(),
                 approved_reference_ids=set(self.config["approved_reference_ids"]),
                 post_cutoff_sources=sources,
+                postmortem_pipeline_identity=self.config["postmortem_pipeline_identity"],
             )
             hypotheses: list[dict[str, Any]] = []
             ai_failure_path = post_root / "ai_failure.json"
@@ -445,6 +455,7 @@ class PostmortemRunner:
                 generated_at_et=self.now().isoformat(),
                 approved_reference_ids=set(self.config["approved_reference_ids"]),
                 post_cutoff_sources=sources, ai_hypotheses=hypotheses,
+                postmortem_pipeline_identity=self.config["postmortem_pipeline_identity"],
             )
         else:
             provisional_path = post_root / "postmortem_provisional.json"
@@ -468,6 +479,7 @@ class PostmortemRunner:
                         "status", "causal_claim_policy", "automatic_mutation_allowed"
                     }
                 } for row in provisional.get("learning_hypotheses", [])],
+                postmortem_pipeline_identity=self.config["postmortem_pipeline_identity"],
             )
             prior = _read(provisional_outcomes_path)
             revisions = []

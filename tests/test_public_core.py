@@ -28,6 +28,7 @@ from shaq_daily_oracle import (  # noqa: E402
     build_seatbelt_profile,
     build_sec_analysis_text,
     build_sec_view_receipt,
+    sec_document_types,
     build_blind_domain_tasks,
     build_lineage_graph,
     build_prospective_evaluations,
@@ -282,6 +283,11 @@ class PublicCoreTests(unittest.TestCase):
         self.assertIn(b"Revenue fact", analysis)
         self.assertNotIn(b"binary secret", analysis)
         self.assertNotIn(b"hidden duplicate", analysis)
+        self.assertEqual(sec_document_types(raw_event.read_bytes()), ("8-K", "EX-99.1", "GRAPHIC"))
+        only_present = build_sec_analysis_text(
+            raw_event.read_bytes(), document_types=["8-K"], maximum_output_bytes=10000,
+        )
+        self.assertIn(b"Cover fact", only_present)
         analysis_path = evidence_root / "event.analysis.txt"
         analysis_path.write_bytes(analysis)
         analysis_receipt = build_sec_view_receipt(

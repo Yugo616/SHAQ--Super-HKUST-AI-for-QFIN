@@ -1,12 +1,19 @@
 {
-  "identity": "SHAQ-EVIDENCE-PROV-2026-08-26",
-  "effective_from_et": "2026-08-26T00:00:00-04:00",
-  "formal_integration": "prov_root_set_gate",
-  "legacy_integration_role": "internal_shadow_only",
+  "identities": [
+    {
+      "identity": "SHAQ-EVIDENCE-PROV-2026-08-26",
+      "effective_from_et": "2026-08-26T00:00:00-04:00",
+      "formal_integration": "prov_root_set_gate",
+      "legacy_integration_role": "internal_shadow_only"
+    },
+    {
+      "identity": "SHAQ-CAPITAL-TIME-2026-08-31",
+      "effective_from_et": "2026-08-31T00:00:00-04:00",
+      "formal_integration": "prov_root_set_gate",
+      "legacy_integration_role": "internal_shadow_only"
+    }
+  ],
   "parameter_bindings": {
-    "identity": ["REF-PROV-001", "DEC-INTEGRATION-002", "EXP-CANARY-002"],
-    "effective_from_et": ["REF-PROV-001", "DEC-INTEGRATION-002", "EXP-CANARY-002"],
-    "formal_integration": ["REF-SELECTIVE-001", "DEC-INTEGRATION-002", "EXP-CANARY-002"],
-    "legacy_integration_role": ["REF-SELECTIVE-001", "DEC-INTEGRATION-002", "EXP-CANARY-002"]
+    "identities": ["REF-KOLM-OFI-001", "DEC-CAPITAL-TIME-001", "EXP-CAPITAL-TIME-001"]
   }
 }

@@ -52,6 +52,15 @@ def _tag(pattern: re.Pattern[bytes], document: bytes, field: str) -> str:
     return match.group(1).decode("utf-8", errors="strict").strip()
 
 
+def sec_document_types(raw: bytes) -> tuple[str, ...]:
+    """Return only document types that are actually present in this submission."""
+
+    values = []
+    for document in _DOCUMENT.findall(raw):
+        values.append(_tag(_TYPE, document, "TYPE").upper())
+    return tuple(dict.fromkeys(values))
+
+
 def build_sec_analysis_text(
     raw: bytes, *, document_types: Iterable[str], maximum_output_bytes: int
 ) -> bytes:

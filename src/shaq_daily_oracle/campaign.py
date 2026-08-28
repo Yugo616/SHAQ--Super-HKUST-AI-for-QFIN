@@ -24,7 +24,7 @@ from typing import Any, Iterator
 from zoneinfo import ZoneInfo
 
 from .execution import select_simulate_us_account
-from .identity import ensure_formal_core_lock
+from .identity import ensure_formal_core_lock, formal_core_lock_path, resolve_system_identity
 from .postmortem_runner import PostmortemRunner
 from .workflow import Workflow, _resolve_universe
 
@@ -216,14 +216,25 @@ def run_preflight(*, package_root: Path, config: CampaignConfig) -> dict[str, An
         "formal_core_frozen": False,
     }
     try:
-        identity = _read(package_root / "config/system-identity.json")["identity"]
+        identity_config = _read(package_root / "config/system-identity.json")
+        observed = datetime.now(ZoneInfo("America/New_York"))
+        identity = resolve_system_identity(identity_config, observed)["identity"]
+        identity_dates = tuple(
+            session_date for session_date in config.session_dates
+            if resolve_system_identity(
+                identity_config,
+                datetime.combine(session_date, clock_time(12), ZoneInfo("America/New_York")),
+            )["identity"] == identity
+        )
+        if not identity_dates:
+            raise CampaignError("active system identity has no campaign sessions")
         ensure_formal_core_lock(
             package_root=package_root,
             runtime_root=config.runtime_root,
             system_identity=identity,
-            freeze_start=config.session_dates[0],
-            freeze_end=config.session_dates[-1],
-            observed_at=datetime.now(ZoneInfo("America/New_York")),
+            freeze_start=identity_dates[0],
+            freeze_end=identity_dates[-1],
+            observed_at=observed,
         )
         checks["formal_core_frozen"] = True
     except Exception:
@@ -306,7 +317,7 @@ def campaign_rows(config: CampaignConfig) -> list[dict[str, Any]]:
                     row["正式运行"] = "是"
                     row["正式预测数"] = len(frozen.get("predictions", []))
                 row["系统身份"] = frozen.get("system_identity", "")
-            lock = config.runtime_root / "formal_core_lock.json"
+            lock = formal_core_lock_path(config.runtime_root, str(row["系统身份"]))
             if lock.is_file():
                 row["正式核心哈希"] = _read(lock).get("formal_core_sha256", "")
             if (runtime / "evaluations_provisional.json").exists():

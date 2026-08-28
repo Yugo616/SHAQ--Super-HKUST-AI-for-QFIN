@@ -50,10 +50,30 @@ def _finite(value: Any) -> float | None:
     return number if math.isfinite(number) else None
 
 
+def _observed_at(value: Any, *, session_date: datetime) -> datetime | None:
+    """Parse a provider timestamp without silently inventing an observation time."""
+
+    timestamp = str(value or "").strip()
+    if not timestamp:
+        return None
+    try:
+        observed = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+        if observed.tzinfo is None:
+            observed = observed.replace(tzinfo=ZoneInfo("America/New_York"))
+        return observed
+    except ValueError:
+        try:
+            clock = datetime.strptime(timestamp, "%H:%M:%S").time()
+        except ValueError:
+            return None
+        return datetime.combine(session_date.date(), clock, ZoneInfo("America/New_York"))
+
+
 def build_capital_document(
     *, symbol: str, ticker_rows: Iterable[dict[str, Any]],
     order_book_samples: Iterable[dict[str, Any]], captured_at_et: str,
     window_start_et: str | None = None, window_end_et: str | None = None,
+    formal_not_before_et: str | None = None, segment_count: int = 3,
 ) -> dict[str, Any]:
     """Build event-level OFI evidence; aggregate vendor flow is deliberately rejected."""
 
@@ -62,6 +82,14 @@ def build_capital_document(
     captured_time = datetime.fromisoformat(captured_at_et.replace("Z", "+00:00"))
     start = datetime.fromisoformat(window_start_et.replace("Z", "+00:00")) if window_start_et else None
     end = datetime.fromisoformat(window_end_et.replace("Z", "+00:00")) if window_end_et else None
+    not_before = (
+        datetime.fromisoformat(formal_not_before_et.replace("Z", "+00:00"))
+        if formal_not_before_et else None
+    )
+    if captured_time.tzinfo is None or captured_time.utcoffset() is None:
+        raise CollectorError("capital capture time requires a timezone offset")
+    if segment_count < 1:
+        raise CollectorError("capital segment count must be positive")
     for row in ticker_rows:
         direction = str(row.get("ticker_direction", "")).upper()
         if direction not in {"BUY", "SELL", "NEUTRAL"}:
@@ -71,20 +99,16 @@ def build_capital_document(
         timestamp = str(row.get("time", "")).strip()
         if volume is None or volume < 0 or price is None or price <= 0 or not timestamp:
             continue
+        observed = _observed_at(timestamp, session_date=captured_time)
+        if observed is None:
+            continue
         if start is not None and end is not None:
-            try:
-                observed = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
-                if observed.tzinfo is None:
-                    observed = observed.replace(tzinfo=ZoneInfo("America/New_York"))
-            except ValueError:
-                try:
-                    clock = datetime.strptime(timestamp, "%H:%M:%S").time()
-                    observed = datetime.combine(captured_time.date(), clock, ZoneInfo("America/New_York"))
-                except ValueError:
-                    continue
             if observed < start or observed > end:
                 continue
-        ticks.append({"time": timestamp, "price": price, "volume": volume, "aggressor_side": direction})
+        ticks.append({
+            "time": timestamp, "observed_at_et": observed.isoformat(),
+            "price": price, "volume": volume, "aggressor_side": direction,
+        })
         if direction == "BUY":
             buy_volume += volume
         elif direction == "SELL":
@@ -108,8 +132,11 @@ def build_capital_document(
         ):
             continue
         midpoint = (best_bid + best_ask) / 2.0
+        observed = _observed_at(sample.get("observed_at_et"), session_date=captured_time)
+        if observed is None or (start is not None and observed < start) or (end is not None and observed > end):
+            continue
         books.append({
-            "observed_at_et": str(sample.get("observed_at_et", "")),
+            "observed_at_et": observed.isoformat(),
             "relative_spread": (best_ask - best_bid) / midpoint,
             "bid_depth": bid_depth,
             "ask_depth": ask_depth,
@@ -118,42 +145,121 @@ def build_capital_document(
     directional_volume = buy_volume + sell_volume
     if not ticks or not books or directional_volume <= 0:
         raise CollectorError("capital evidence requires event-level direction and order-book depth")
-    ticks.sort(key=lambda row: (row["time"], row["price"], row["volume"], row["aggressor_side"]))
+    ticks.sort(key=lambda row: (
+        row["observed_at_et"], row["price"], row["volume"], row["aggressor_side"],
+    ))
     books.sort(key=lambda row: row["observed_at_et"])
     median_depth = statistics.median(
         row["bid_depth"] + row["ask_depth"] for row in books
     )
     signed_volume = buy_volume - sell_volume
     directional_ticks = [row for row in ticks if row["aggressor_side"] != "NEUTRAL"]
-    thirds = [directional_ticks[index::3] for index in range(3)]
-    segment_imbalances = []
-    for segment in thirds:
+    first_observed = datetime.fromisoformat(directional_ticks[0]["observed_at_et"])
+    last_observed = datetime.fromisoformat(directional_ticks[-1]["observed_at_et"])
+    span_seconds = (last_observed - first_observed).total_seconds()
+    segments: list[list[dict[str, Any]]] = [[] for _ in range(segment_count)]
+    for row in directional_ticks:
+        observed = datetime.fromisoformat(row["observed_at_et"])
+        if span_seconds <= 0:
+            index = 0
+        else:
+            index = min(
+                int(((observed - first_observed).total_seconds() / span_seconds) * segment_count),
+                segment_count - 1,
+            )
+        segments[index].append(row)
+    segment_imbalances: list[float | None] = []
+    segment_windows = []
+    for index, segment in enumerate(segments):
         buy = sum(row["volume"] for row in segment if row["aggressor_side"] == "BUY")
         sell = sum(row["volume"] for row in segment if row["aggressor_side"] == "SELL")
-        segment_imbalances.append((buy - sell) / (buy + sell) if buy + sell else 0.0)
+        segment_imbalances.append((buy - sell) / (buy + sell) if buy + sell else None)
+        lower = first_observed if span_seconds <= 0 else first_observed + (last_observed - first_observed) * (index / segment_count)
+        upper = last_observed if span_seconds <= 0 else first_observed + (last_observed - first_observed) * ((index + 1) / segment_count)
+        segment_windows.append({
+            "start_et": lower.isoformat(), "end_et": upper.isoformat(),
+            "directional_tick_count": len(segment),
+        })
+    persistence_observable = all(value is not None for value in segment_imbalances)
+    ticker_start = datetime.fromisoformat(ticks[0]["observed_at_et"])
+    ticker_end = datetime.fromisoformat(ticks[-1]["observed_at_et"])
+    book_start = datetime.fromisoformat(books[0]["observed_at_et"])
+    book_end = datetime.fromisoformat(books[-1]["observed_at_et"])
+    conservative_end = min(ticker_end, book_end)
+    freshness_seconds = (end - conservative_end).total_seconds() if end else None
+    formal_direction_eligible = bool(
+        not_before is None
+        or (
+            ticker_end >= not_before and book_end >= not_before
+            and (end is None or captured_time <= end)
+            and persistence_observable
+        )
+    )
     first_price, last_price = ticks[0]["price"], ticks[-1]["price"]
+    signed_imbalance = signed_volume / directional_volume
+    depth_imbalance = statistics.median(row["depth_imbalance"] for row in books)
+    price_return = last_price / first_price - 1.0 if first_price > 0 else None
+    persistence = (
+        (sum(value > 0 for value in segment_imbalances if value is not None)
+         - sum(value < 0 for value in segment_imbalances if value is not None))
+        / len(segment_imbalances)
+        if persistence_observable else None
+    )
     return {
         "schema_version": 6,
         "domain": "capital",
         "symbol": symbol.strip().upper(),
         "captured_at_et": captured_at_et,
-        "observation_window": {"start_et": window_start_et, "end_et": window_end_et},
+        "observation_window": {
+            "requested_start_et": window_start_et,
+            "requested_end_et": window_end_et,
+            "ticker_first_observed_at_et": ticker_start.isoformat(),
+            "ticker_last_observed_at_et": ticker_end.isoformat(),
+            "order_book_first_observed_at_et": book_start.isoformat(),
+            "order_book_last_observed_at_et": book_end.isoformat(),
+            "actual_conservative_end_et": conservative_end.isoformat(),
+            "capture_completed_at_et": captured_time.isoformat(),
+            "freshness_seconds_at_cutoff": freshness_seconds,
+            "formal_not_before_et": formal_not_before_et,
+        },
         "method": "event_level_signed_flow_normalized_by_visible_depth",
         "trade_direction_semantics": "provider_classified_ticker_direction",
         "aggregate_vendor_money_flow_used": False,
+        "state_components": {
+            "active_trade_pressure": (
+                "buy" if signed_imbalance > 0 else "sell" if signed_imbalance < 0 else "balanced"
+            ),
+            "visible_book_capacity": (
+                "bid_heavier" if depth_imbalance > 0 else "ask_heavier" if depth_imbalance < 0 else "balanced"
+            ),
+            "pressure_persistence": (
+                "persistent_buy" if persistence == 1
+                else "persistent_sell" if persistence == -1
+                else "mixed" if persistence is not None
+                else "unobservable"
+            ),
+            "observed_price_response": (
+                "rising" if price_return and price_return > 0
+                else "falling" if price_return and price_return < 0
+                else "flat"
+            ),
+            "supported_horizon": "premarket_short_horizon" if formal_direction_eligible else "diagnostic_only",
+        },
         "metrics": {
             "buy_initiated_volume": buy_volume,
             "sell_initiated_volume": sell_volume,
             "neutral_volume": neutral_volume,
-            "signed_volume_imbalance": signed_volume / directional_volume,
+            "signed_volume_imbalance": signed_imbalance,
             "signed_volume_to_median_visible_depth": signed_volume / median_depth if median_depth > 0 else None,
             "median_relative_spread": statistics.median(row["relative_spread"] for row in books),
-            "median_depth_imbalance": statistics.median(row["depth_imbalance"] for row in books),
+            "median_depth_imbalance": depth_imbalance,
             "segment_signed_imbalances": segment_imbalances,
-            "flow_direction_persistence": (
-                sum(value > 0 for value in segment_imbalances) - sum(value < 0 for value in segment_imbalances)
-            ) / len(segment_imbalances),
-            "corresponding_price_return": last_price / first_price - 1.0 if first_price > 0 else None,
+            "segment_windows": segment_windows,
+            "flow_direction_persistence_observable": persistence_observable,
+            "flow_direction_persistence": persistence,
+            "corresponding_price_return": price_return,
+            "formal_direction_eligible": formal_direction_eligible,
+            "supported_horizon": "premarket_short_horizon" if formal_direction_eligible else "diagnostic_only",
         },
         "ticker_rows": ticks,
         "order_book_samples": books,
@@ -170,7 +276,7 @@ def build_capital_analysis(raw: bytes) -> bytes:
     required = {
         "symbol", "captured_at_et", "observation_window", "method",
         "trade_direction_semantics", "aggregate_vendor_money_flow_used",
-        "metrics", "ticker_rows", "order_book_samples",
+        "state_components", "metrics", "ticker_rows", "order_book_samples",
     }
     if not required.issubset(source):
         raise CollectorError("capital analysis source is incomplete")
@@ -186,6 +292,7 @@ def build_capital_analysis(raw: bytes) -> bytes:
         "method": source["method"],
         "trade_direction_semantics": source["trade_direction_semantics"],
         "aggregate_vendor_money_flow_used": source["aggregate_vendor_money_flow_used"],
+        "state_components": source["state_components"],
         "metrics": source["metrics"],
         "source_observation_counts": {
             "ticker_rows": len(source["ticker_rows"]),

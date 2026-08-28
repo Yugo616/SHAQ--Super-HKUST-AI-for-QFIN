@@ -6,7 +6,7 @@ import math
 import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from zoneinfo import ZoneInfo
 
 from .collectors import (
@@ -150,15 +150,34 @@ def _subscribe_us_all_sessions(quote: Any, code: str, subtype: Any, session: Any
     )
 
 
+def _session_clock(value: str, *, session_date: date) -> datetime:
+    return datetime.combine(
+        session_date, datetime.strptime(value, "%H:%M:%S").time(),
+        ZoneInfo("America/New_York"),
+    )
+
+
+def _wait_until(
+    target: datetime, *, clock: Callable[[], datetime], sleeper: Callable[[float], None],
+) -> None:
+    while True:
+        remaining = (target - clock()).total_seconds()
+        if remaining <= 0:
+            return
+        sleeper(min(remaining, 30.0))
+
+
 def capture_futu_deep_evidence(
     *, candidates: list[dict[str, Any]], universe_csv: Path,
     price_history_dir: Path, evidence_root: Path, output_manifest: Path,
     status_output: Path, cutoff_et: str, config: dict[str, Any],
-    host: str, port: int,
+    host: str, port: int, clock: Callable[[], datetime] | None = None,
+    sleeper: Callable[[float], None] = time.sleep,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Capture the three structurally missing domains, failing each provider independently."""
 
-    now = datetime.now(ZoneInfo("America/New_York"))
+    clock = clock or (lambda: datetime.now(ZoneInfo("America/New_York")))
+    now = clock()
     cutoff = datetime.fromisoformat(cutoff_et.replace("Z", "+00:00"))
     if now > cutoff:
         raise CollectorError("deep evidence capture started after cutoff")
@@ -166,10 +185,15 @@ def capture_futu_deep_evidence(
         "order_book_depth", "order_book_samples", "sample_interval_seconds",
         "ticker_max_count", "capital_window_start", "relationship_exposure_window", "option_expiry_min_days",
         "option_expiry_max_days", "option_max_contracts",
-        "option_event_page_count",
+        "option_event_page_count", "capital_capture_not_before", "capital_time_segments",
     ):
         if len(config.get("parameter_bindings", {}).get(name, [])) != 3:
             raise CollectorError(f"deep-evidence config lacks bindings for {name}")
+    capital_not_before = _session_clock(
+        str(config["capital_capture_not_before"]), session_date=cutoff.date(),
+    )
+    if capital_not_before >= cutoff:
+        raise CollectorError("capital capture start must precede the evidence cutoff")
     with universe_csv.open(newline="", encoding="utf-8-sig") as handle:
         universe_rows = list(csv.DictReader(handle))
 
@@ -181,11 +205,12 @@ def capture_futu_deep_evidence(
     quote = OpenQuoteContext(host=host, port=port)
     records: list[dict[str, Any]] = []
     statuses: list[dict[str, Any]] = []
+    capital_candidates: list[tuple[str, str]] = []
     try:
         for candidate in candidates:
             symbol = str(candidate["symbol"]).upper()
             code = f"US.{symbol}"
-            captured = datetime.now(ZoneInfo("America/New_York")).isoformat()
+            captured = clock().isoformat()
 
             history_path = price_history_dir / f"{symbol}.json"
             try:
@@ -195,7 +220,7 @@ def capture_futu_deep_evidence(
                     captured_at_et=captured,
                     exposure_window=int(config["relationship_exposure_window"]),
                 )
-                relationship_captured = datetime.now(ZoneInfo("America/New_York")).isoformat()
+                relationship_captured = clock().isoformat()
                 relationship["captured_at_et"] = relationship_captured
                 path = evidence_root / "relationships_by_symbol" / f"{symbol}.json"
                 _write_immutable(path, relationship)
@@ -215,68 +240,15 @@ def capture_futu_deep_evidence(
                     captured_at_et=captured, reason=str(exc),
                 ))
 
-            try:
-                ret, error = _subscribe_us_all_sessions(quote, code, SubType, Session)
-                if ret != RET_OK:
-                    message = str(error)
-                    status = "not_entitled" if "right" in message.lower() or "authority" in message.lower() else "provider_error"
-                    statuses.append(collection_status(
-                        domain="capital", symbol=symbol, status=status,
-                        captured_at_et=captured, reason=message,
-                    ))
-                else:
-                    ret, ticker_frame = quote.get_rt_ticker(code, num=int(config["ticker_max_count"]))
-                    if ret != RET_OK:
-                        raise RuntimeError(str(ticker_frame))
-                    books = []
-                    for index in range(int(config["order_book_samples"])):
-                        ret, order_book = quote.get_order_book(code, num=int(config["order_book_depth"]))
-                        if ret != RET_OK:
-                            raise RuntimeError(str(order_book))
-                        books.append(_book(order_book, datetime.now(ZoneInfo("America/New_York")).isoformat()))
-                        if index + 1 < int(config["order_book_samples"]):
-                            time.sleep(float(config["sample_interval_seconds"]))
-                    capital_captured = datetime.now(ZoneInfo("America/New_York"))
-                    capital_window_start = datetime.combine(
-                        capital_captured.date(),
-                        datetime.strptime(str(config["capital_window_start"]), "%H:%M:%S").time(),
-                        ZoneInfo("America/New_York"),
-                    )
-                    capital = build_capital_document(
-                        symbol=symbol, ticker_rows=_directions(ticker_frame),
-                        order_book_samples=books, captured_at_et=capital_captured.isoformat(),
-                        window_start_et=capital_window_start.isoformat(), window_end_et=cutoff.isoformat(),
-                    )
-                    path = evidence_root / "capital_by_symbol" / f"{symbol}.json"
-                    _write_immutable(path, capital)
-                    analysis_path = evidence_root / "capital_by_symbol" / f"{symbol}.analysis.json"
-                    analysis_path.write_bytes(build_capital_analysis(path.read_bytes()))
-                    raw_sha256 = sha256_file(path)
-                    records.append(_record(
-                        domain="capital", symbol=symbol, path=path,
-                        evidence_root=evidence_root, captured_at=capital_captured.isoformat(),
-                        source_uri=f"futu-opend://ticker-orderbook/{code}",
-                        analysis_path=analysis_path,
-                        analysis_transform={
-                            "name": "capital_ofi_analysis_view_v1",
-                            "source_sha256": raw_sha256,
-                        },
-                    ))
-                    statuses.append(collection_status(
-                        domain="capital", symbol=symbol, status="collected",
-                        captured_at_et=capital_captured.isoformat(), record_count=len(capital["ticker_rows"]) + len(capital["order_book_samples"]),
-                    ))
-            except CollectorError as exc:
-                statuses.append(collection_status(
-                    domain="capital", symbol=symbol, status="no_data",
-                    captured_at_et=captured, reason=str(exc),
-                ))
-            except Exception as exc:
-                statuses.append(collection_status(
-                    domain="capital", symbol=symbol, status="provider_error",
-                    captured_at_et=captured, reason=f"{type(exc).__name__}: {exc}",
-                ))
+            capital_candidates.append((symbol, code))
 
+            if clock() >= capital_not_before:
+                statuses.append(collection_status(
+                    domain="derivatives", symbol=symbol, status="no_data",
+                    captured_at_et=clock().isoformat(),
+                    reason="not captured before the governed final capital window",
+                ))
+                continue
             try:
                 ret, underlying = quote.get_market_snapshot([code])
                 if ret != RET_OK or underlying.empty:
@@ -312,7 +284,7 @@ def capture_futu_deep_evidence(
                             raise RuntimeError(str(frame))
                         frames.append(frame)
                     snapshots = pd.concat(frames, ignore_index=True)
-                    derivatives_captured = datetime.now(ZoneInfo("America/New_York")).isoformat()
+                    derivatives_captured = clock().isoformat()
                     event_rows = []
                     ret, option_event_result = quote.get_option_event(
                         OptionMarket.US_SECURITY,
@@ -322,7 +294,7 @@ def capture_futu_deep_evidence(
                         )],
                     )
                     if ret == RET_OK:
-                        previous_session = datetime.now(ZoneInfo("America/New_York")).date() - timedelta(days=1)
+                        previous_session = clock().date() - timedelta(days=1)
                         while previous_session.weekday() >= 5:
                             previous_session -= timedelta(days=1)
                         event_rows = _option_event_rows(
@@ -370,9 +342,89 @@ def capture_futu_deep_evidence(
                     domain="derivatives", symbol=symbol, status=status,
                     captured_at_et=captured, reason=message,
                 ))
+
+        _wait_until(capital_not_before, clock=clock, sleeper=sleeper)
+        for symbol, code in capital_candidates:
+            captured = clock().isoformat()
+            try:
+                if clock() > cutoff:
+                    raise CollectorError("capital evidence capture started after cutoff")
+                ret, error = _subscribe_us_all_sessions(quote, code, SubType, Session)
+                if ret != RET_OK:
+                    message = str(error)
+                    status = "not_entitled" if "right" in message.lower() or "authority" in message.lower() else "provider_error"
+                    statuses.append(collection_status(
+                        domain="capital", symbol=symbol, status=status,
+                        captured_at_et=captured, reason=message,
+                    ))
+                    continue
+                ret, ticker_frame = quote.get_rt_ticker(code, num=int(config["ticker_max_count"]))
+                if ret != RET_OK:
+                    raise RuntimeError(str(ticker_frame))
+                books = []
+                for index in range(int(config["order_book_samples"])):
+                    ret, order_book = quote.get_order_book(code, num=int(config["order_book_depth"]))
+                    if ret != RET_OK:
+                        raise RuntimeError(str(order_book))
+                    books.append(_book(order_book, clock().isoformat()))
+                    if index + 1 < int(config["order_book_samples"]):
+                        sleeper(float(config["sample_interval_seconds"]))
+                capital_captured = clock()
+                capital_window_start = _session_clock(
+                    str(config["capital_window_start"]), session_date=capital_captured.date(),
+                )
+                capital = build_capital_document(
+                    symbol=symbol, ticker_rows=_directions(ticker_frame),
+                    order_book_samples=books, captured_at_et=capital_captured.isoformat(),
+                    window_start_et=capital_window_start.isoformat(), window_end_et=cutoff.isoformat(),
+                    formal_not_before_et=capital_not_before.isoformat(),
+                    segment_count=int(config["capital_time_segments"]),
+                )
+                eligible = bool(capital["metrics"]["formal_direction_eligible"])
+                directory = "capital_by_symbol" if eligible else "capital_diagnostics_by_symbol"
+                path = evidence_root / directory / f"{symbol}.json"
+                _write_immutable(path, capital)
+                if not eligible:
+                    statuses.append(collection_status(
+                        domain="capital", symbol=symbol, status="no_data",
+                        captured_at_et=capital_captured.isoformat(),
+                        reason=(
+                            "last ticker/order-book observation was not fresh enough for "
+                            "the governed final premarket capture window"
+                        ),
+                    ))
+                    continue
+                analysis_path = evidence_root / directory / f"{symbol}.analysis.json"
+                analysis_path.write_bytes(build_capital_analysis(path.read_bytes()))
+                raw_sha256 = sha256_file(path)
+                records.append(_record(
+                    domain="capital", symbol=symbol, path=path,
+                    evidence_root=evidence_root, captured_at=capital_captured.isoformat(),
+                    source_uri=f"futu-opend://ticker-orderbook/{code}",
+                    analysis_path=analysis_path,
+                    analysis_transform={
+                        "name": "capital_ofi_analysis_view_v1",
+                        "source_sha256": raw_sha256,
+                    },
+                ))
+                statuses.append(collection_status(
+                    domain="capital", symbol=symbol, status="collected",
+                    captured_at_et=capital_captured.isoformat(),
+                    record_count=len(capital["ticker_rows"]) + len(capital["order_book_samples"]),
+                ))
+            except CollectorError as exc:
+                statuses.append(collection_status(
+                    domain="capital", symbol=symbol, status="no_data",
+                    captured_at_et=captured, reason=str(exc),
+                ))
+            except Exception as exc:
+                statuses.append(collection_status(
+                    domain="capital", symbol=symbol, status="provider_error",
+                    captured_at_et=captured, reason=f"{type(exc).__name__}: {exc}",
+                ))
     finally:
         quote.close()
-    ended = datetime.now(ZoneInfo("America/New_York"))
+    ended = clock()
     if ended > cutoff:
         raise CollectorError("deep evidence capture completed after cutoff")
     manifest = {"schema_version": 6, "evidence": sorted(records, key=lambda row: row["evidence_id"])}
