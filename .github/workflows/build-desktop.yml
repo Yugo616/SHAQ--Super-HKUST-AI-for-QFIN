@@ -32,6 +32,18 @@ jobs:
       - name: Build installer
         shell: pwsh
         run: .\packaging\build_windows.ps1
+      - name: Install, smoke test, and uninstall
+        shell: pwsh
+        run: |
+          $InstallDir = Join-Path $env:RUNNER_TEMP "SHAQ-Daily-Oracle-Test"
+          $Setup = Join-Path $PWD "dist\SHAQ-Daily-Oracle-Windows-x64-Setup.exe"
+          $Process = Start-Process $Setup -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/DIR=$InstallDir" -Wait -PassThru
+          if ($Process.ExitCode -ne 0) { throw "Installer failed" }
+          & (Join-Path $InstallDir "SHAQ Daily Oracle.exe") --smoke
+          if ($LASTEXITCODE -ne 0) { throw "Installed app smoke test failed" }
+          $Uninstall = Join-Path $InstallDir "unins000.exe"
+          $Process = Start-Process $Uninstall -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART" -Wait -PassThru
+          if ($Process.ExitCode -ne 0) { throw "Uninstaller failed" }
       - uses: actions/upload-artifact@v4
         with:
           name: SHAQ-Daily-Oracle-Windows-x64
@@ -56,6 +68,17 @@ jobs:
           python -m unittest discover -s tests -v
       - name: Build disk image
         run: zsh packaging/build_macos.sh
+      - name: Mount, smoke test, and remove test install
+        run: |
+          MOUNT_POINT="$RUNNER_TEMP/shaq-dmg"
+          INSTALL_ROOT="$RUNNER_TEMP/shaq-applications"
+          mkdir -p "$MOUNT_POINT" "$INSTALL_ROOT"
+          hdiutil attach -nobrowse -mountpoint "$MOUNT_POINT" dist/SHAQ-Daily-Oracle-macOS-Apple-Silicon.dmg
+          ditto "$MOUNT_POINT/SHAQ Daily Oracle.app" "$INSTALL_ROOT/SHAQ Daily Oracle.app"
+          "$INSTALL_ROOT/SHAQ Daily Oracle.app/Contents/MacOS/SHAQ Daily Oracle" --smoke
+          codesign --verify --deep --strict "$INSTALL_ROOT/SHAQ Daily Oracle.app"
+          hdiutil detach "$MOUNT_POINT"
+          find "$INSTALL_ROOT/SHAQ Daily Oracle.app" -depth -delete
       - uses: actions/upload-artifact@v4
         with:
           name: SHAQ-Daily-Oracle-macOS-Apple-Silicon
