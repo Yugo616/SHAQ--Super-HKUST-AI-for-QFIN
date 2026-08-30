@@ -35,5 +35,6 @@ APP_PATH="${OUTPUT_ROOT}/${APP_NAME}.app"
 "${APP_PATH}/Contents/MacOS/${APP_NAME}" --smoke
 
 DMG_PATH="${PROJECT_ROOT}/dist/SHAQ-Daily-Oracle-macOS-Apple-Silicon.dmg"
+mkdir -p "${PROJECT_ROOT}/dist"
 hdiutil create -volname "${APP_NAME}" -srcfolder "${APP_PATH}" -ov -format UDZO "${DMG_PATH}"
 shasum -a 256 "${DMG_PATH}" > "${DMG_PATH}.sha256"

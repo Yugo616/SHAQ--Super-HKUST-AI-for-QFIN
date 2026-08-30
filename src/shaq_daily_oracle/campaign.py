@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import csv
 import errno
-import fcntl
 import html
 import io
 import json
@@ -22,6 +21,13 @@ from datetime import date, datetime, time as clock_time
 from pathlib import Path
 from typing import Any, Iterator
 from zoneinfo import ZoneInfo
+
+from filelock import FileLock, Timeout
+
+try:
+    import fcntl
+except ImportError:  # Windows uses filelock below.
+    fcntl = None  # type: ignore[assignment]
 
 from .execution import select_simulate_us_account
 from .identity import ensure_formal_core_lock, formal_core_lock_path, resolve_system_identity
@@ -111,6 +117,17 @@ class CampaignConfig:
 @contextmanager
 def campaign_lock(path: Path) -> Iterator[None]:
     path.parent.mkdir(parents=True, exist_ok=True)
+    if fcntl is None:
+        lock = FileLock(str(path))
+        try:
+            lock.acquire(timeout=0)
+        except Timeout as exc:
+            raise CampaignAlreadyRunning("another campaign process is already active") from exc
+        try:
+            yield
+        finally:
+            lock.release()
+        return
     handle = path.open("a+", encoding="utf-8")
     locked = False
     try:

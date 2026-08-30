@@ -3,6 +3,8 @@ $ProjectRoot = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Pa
 $OutputRoot = Join-Path $ProjectRoot "dist\desktop-windows"
 $AppName = "SHAQ Daily Oracle"
 
+New-Item -ItemType Directory -Force (Join-Path $ProjectRoot "dist") | Out-Null
+
 Set-Location $ProjectRoot
 python -m PyInstaller `
   --noconfirm `

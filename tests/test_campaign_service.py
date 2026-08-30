@@ -68,6 +68,7 @@ class CampaignServiceTests(unittest.TestCase):
                 with campaign_lock(lock_path):
                     pass
 
+    @unittest.skipUnless(sys.platform == "darwin", "macOS flock behavior")
     def test_macos_deadlock_lock_is_treated_as_benign_duplicate(self):
         with patch(
             "shaq_daily_oracle.campaign.fcntl.flock",

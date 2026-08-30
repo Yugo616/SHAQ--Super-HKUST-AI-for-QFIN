@@ -633,6 +633,7 @@ class PublicCoreTests(unittest.TestCase):
             with self.assertRaises(jsonschema.ValidationError):
                 jsonschema.validate(invalid, public)
 
+    @unittest.skipUnless(sys.platform == "darwin", "macOS Seatbelt profile")
     def test_sandbox_profile_and_deterministic_integrator_fail_closed(self):
         profile = build_seatbelt_profile(
             codex_path=Path("/Applications/ChatGPT.app/Contents/Resources/codex"),
