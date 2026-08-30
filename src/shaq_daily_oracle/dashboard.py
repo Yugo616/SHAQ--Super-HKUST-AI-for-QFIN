@@ -109,11 +109,13 @@ class DashboardIndex:
                 journal = _read(directory / "broker_journal.json", {"orders": {}})
                 ledger = _read(directory / "execution_ledger.json", {"round_trips": []})
                 round_trips = ledger.get("round_trips", [])
+                corrections = (
+                    _read(path, {}) for path in directory.glob("correction_*.json")
+                )
                 excluded = any(
                     bool(document.get("excluded_from_professor_summary"))
-                    for document in (
-                        _read(path, {}) for path in directory.glob("correction_*.json")
-                    )
+                    or "excluded" in str(document.get("professor_summary_policy", "")).lower()
+                    for document in corrections
                 )
                 net_values = [row.get("net_pnl") for row in round_trips if row.get("net_pnl") is not None]
                 fee_values = [row.get("fees") for row in round_trips if row.get("fees") is not None]

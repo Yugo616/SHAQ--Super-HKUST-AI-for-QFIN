@@ -259,6 +259,13 @@ class DesktopFoundationTests(unittest.TestCase):
             paths.dashboard_db.unlink()
             second = index.overview()
             self.assertEqual(first["runs"], second["runs"])
+            (runtime / "correction_2026-08-30.json").write_text(json.dumps({
+                "status": "audit_correction",
+                "professor_summary_policy": "This run remains excluded from professor performance summaries.",
+            }), encoding="utf-8")
+            excluded = index.overview()
+            self.assertEqual(excluded["totals"]["runs"], 0)
+            self.assertTrue(excluded["runs"][0]["excluded"])
             frozen["predictions"][0]["direction"] = "bearish"
             (runtime / "frozen_run.json").write_text(json.dumps(frozen), encoding="utf-8")
             damaged = index.overview()
