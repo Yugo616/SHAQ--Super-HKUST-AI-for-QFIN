@@ -39,8 +39,9 @@ jobs:
           $Setup = Join-Path $PWD "dist\SHAQ-Daily-Oracle-Windows-x64-Setup.exe"
           $Process = Start-Process $Setup -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/DIR=$InstallDir" -Wait -PassThru
           if ($Process.ExitCode -ne 0) { throw "Installer failed" }
-          & (Join-Path $InstallDir "SHAQ Daily Oracle.exe") --smoke
-          if ($LASTEXITCODE -ne 0) { throw "Installed app smoke test failed" }
+          $Executable = Join-Path $InstallDir "SHAQ Daily Oracle.exe"
+          $Process = Start-Process $Executable -ArgumentList "--smoke" -Wait -PassThru
+          if ($Process.ExitCode -ne 0) { throw "Installed app smoke test failed" }
           $Uninstall = Join-Path $InstallDir "unins000.exe"
           $Process = Start-Process $Uninstall -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART" -Wait -PassThru
           if ($Process.ExitCode -ne 0) { throw "Uninstaller failed" }

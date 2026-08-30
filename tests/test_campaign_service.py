@@ -80,16 +80,21 @@ class CampaignServiceTests(unittest.TestCase):
 
     def test_atomic_status_writes_remain_valid_under_competing_writers(self):
         path = self.root / "status.json"
+        errors = []
 
         def writer(identity: int) -> None:
-            for sequence in range(20):
-                _write(path, {"writer": identity, "sequence": sequence})
+            try:
+                for sequence in range(20):
+                    _write(path, {"writer": identity, "sequence": sequence})
+            except Exception as exc:
+                errors.append(exc)
 
         threads = [threading.Thread(target=writer, args=(identity,)) for identity in range(4)]
         for thread in threads:
             thread.start()
         for thread in threads:
             thread.join()
+        self.assertEqual(errors, [])
         value = json.loads(path.read_text(encoding="utf-8"))
         self.assertIn(value["writer"], range(4))
         self.assertEqual(list(self.root.glob(".status.json.*.tmp")), [])
