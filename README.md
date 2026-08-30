@@ -46,6 +46,9 @@ The normal user flow is:
 Download the installer → Open the app → Complete setup once → Enable daily paper trading
 ```
 
+Internal reviewers can download the matching macOS Apple Silicon or Windows x64
+installer from the repository [Releases](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases) page and verify it with the adjacent SHA-256 file.
+
 The native desktop window contains Today, Run History, Holdings and Fills, Portfolio Performance, System Health, and Settings and Export. It rebuilds its display index from immutable run files, so deleting the SQLite display cache cannot delete or change a forecast. Closing the window does not stop an enabled background watcher.
 
 The default AI backend is the OpenAI Responses API. Codex is not required for normal operation and remains an explicitly selected development backend. The API receives only the frozen evidence packet; tools, external retrieval, and response storage are disabled. Futu OpenD is still installed and logged in separately under the user's simulated account.
