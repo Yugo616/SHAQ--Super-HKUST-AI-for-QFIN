@@ -11,9 +11,15 @@
       "effective_from_et": "2026-08-31T00:00:00-04:00",
       "formal_integration": "prov_root_set_gate",
       "legacy_integration_role": "internal_shadow_only"
+    },
+    {
+      "identity": "SHAQ-DESKTOP-API-2026-08-31",
+      "effective_from_et": "2026-08-30T23:59:59-04:00",
+      "formal_integration": "prov_root_set_gate",
+      "legacy_integration_role": "internal_shadow_only"
     }
   ],
   "parameter_bindings": {
-    "identities": ["REF-KOLM-OFI-001", "DEC-CAPITAL-TIME-001", "EXP-CAPITAL-TIME-001"]
+    "identities": ["REF-OPENAI-RESPONSES-001", "DEC-AI-BACKEND-001", "EXP-DESKTOP-API-001"]
   }
 }

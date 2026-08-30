@@ -11,6 +11,7 @@ from .workflow import Workflow
 from .campaign import CampaignConfig, run_campaign, write_campaign_views
 from .postmortem_runner import PostmortemRunner
 from .batch_review_runner import BatchReviewRunner
+from .market_calendar import market_session, next_market_session
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -129,6 +130,25 @@ def main(argv: list[str] | None = None) -> int:
         host=os.environ.get("FUTU_OPEND_HOST"),
         port=int(os.environ.get("FUTU_OPEND_PORT", "11111")),
     )
+    now_et = datetime.now(ZoneInfo("America/New_York"))
+    selected_date = args.session_date or now_et.date()
+    if market_session(selected_date) is None:
+        if args.session_date is None:
+            following = next_market_session(selected_date)
+            print(json.dumps({
+                "status": "idle",
+                "reason": "market_closed",
+                "observed_date_et": selected_date.isoformat(),
+                "next_session": following.session_date.isoformat(),
+                "next_market_open_et": following.market_open.isoformat(),
+            }, sort_keys=True))
+            return 0
+        runtime = workflow.failure_record(ValueError("explicit session date is not an NYSE session"))
+        print(json.dumps({
+            "status": "fail_closed", "error_type": "MarketCalendarError",
+            "runtime": str(runtime), "professor_report": str(runtime / "professor_report.html"),
+        }, sort_keys=True))
+        return 2
     try:
         runtime = workflow.run(
             requested_mode=args.mode, session_date=args.session_date, wait=not args.no_wait

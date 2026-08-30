@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>SHAQ Daily Oracle</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <aside class="sidebar">
+    <div class="brand"><div class="mark">S</div><div><strong>SHAQ</strong><span>Daily Oracle</span></div></div>
+    <nav>
+      <button class="nav active" data-page="today">今天</button>
+      <button class="nav" data-page="history">历史回放</button>
+      <button class="nav" data-page="holdings">持仓与成交</button>
+      <button class="nav" data-page="performance">组合表现</button>
+      <button class="nav" data-page="health">系统健康</button>
+      <button class="nav" data-page="settings">设置与导出</button>
+    </nav>
+    <div class="sidebar-foot"><span id="service-dot" class="dot"></span><span id="service-text">正在读取状态</span></div>
+  </aside>
+  <main>
+    <header><div><p class="eyebrow">RESEARCH-GROUNDED PAPER TRADING</p><h1 id="page-title">今天</h1></div>
+      <div class="header-actions"><button class="secondary" id="doctor-button">系统检查</button><button class="primary" id="run-button">开始 / 恢复今日模拟</button></div>
+    </header>
+    <section id="notice" class="notice hidden"></section>
+    <section id="today" class="page active"></section>
+    <section id="history" class="page"></section>
+    <section id="holdings" class="page"></section>
+    <section id="performance" class="page"></section>
+    <section id="health" class="page"></section>
+    <section id="settings" class="page"></section>
+  </main>
+  <div id="setup" class="modal hidden"><form id="setup-form" class="setup-card">
+    <div class="step-label">首次设置 · 只需一次</div><h2>把研究系统连接到你的电脑</h2>
+    <p>密钥保存在系统凭据管理器，不会写入运行记录或报告。</p>
+    <div class="form-grid">
+      <label>AI 后端<select name="ai_backend"><option value="openai-responses">OpenAI API（推荐）</option><option value="codex-cli">Codex CLI（开发）</option></select></label>
+      <label>模型<input name="model" value="gpt-5.6" required></label>
+      <label class="wide">OpenAI API Key<input name="openai_api_key" type="password" placeholder="sk-…"></label>
+      <label class="wide">SEC 研究身份<input name="sec_identity" placeholder="Research Team contact@example.edu" required></label>
+      <label>OpenD 地址<input name="opend_host" value="127.0.0.1" required></label>
+      <label>OpenD 端口<input name="opend_port" type="number" value="11111" required></label>
+      <label class="wide">股票池文件<div class="file-row"><input name="universe_file" placeholder="选择有效股票池 CSV" required><button id="choose-universe" class="secondary" type="button">选择文件</button></div></label>
+      <label>每日启动时间（ET）<input name="automatic_start_et" type="time" step="1" value="08:15:00" required></label>
+    </div>
+    <div class="modal-actions"><span id="setup-error"></span><button class="primary" type="submit">保存并进入系统</button></div>
+  </form></div>
+  <script src="app.js"></script>
+</body>
+</html>

@@ -207,6 +207,7 @@ class CollectorWorkflowTests(unittest.TestCase):
             self.assertEqual(manifest["frozen_run_sha256"], "a" * 64)
             self.assertTrue((root / "professor_report.html").is_file())
             self.assertTrue((root / "agent_trace.html").is_file())
+            self.assertTrue((root / "run_replay.html").is_file())
 
     def test_stage_resume_does_not_repeat_completed_work(self):
         with tempfile.TemporaryDirectory() as name:

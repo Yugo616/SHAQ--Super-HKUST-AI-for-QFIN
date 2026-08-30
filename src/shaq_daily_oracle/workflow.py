@@ -17,6 +17,7 @@ from .events import capture_futu_earnings_calendar, capture_sec_universe_events
 from .hashing import sha256_file, sha256_payload
 from .identity import resolve_system_identity
 from .lineage import build_lineage_graph
+from .market_calendar import previous_market_session
 from .reports import write_reports
 from .run import freeze_run
 from .schedule import formal_mode, session_times
@@ -39,10 +40,8 @@ def _write(path: Path, value: dict[str, Any], *, immutable: bool = True) -> None
 
 
 def _previous_weekday(value: date) -> date:
-    candidate = value - timedelta(days=1)
-    while candidate.weekday() >= 5:
-        candidate -= timedelta(days=1)
-    return candidate
+    """Return the previous real NYSE session; retained as an internal compatibility name."""
+    return previous_market_session(value).session_date
 
 
 def _run_id(runtime_root: Path, session_date: date) -> tuple[str, Path]:
@@ -110,9 +109,18 @@ class Workflow:
         self.port = port or int(os.environ.get("FUTU_OPEND_PORT", "11111"))
         self.runtime_config = _read(self.package_root / "config/runtime.json")
         self.system_identity = _read(self.package_root / "config/system-identity.json")
+        configured_ai = os.environ.get("DAILY_ORACLE_AI_CONFIG")
+        self.ai_config_path = (
+            Path(configured_ai).expanduser().resolve()
+            if configured_ai else self.package_root / "config/ai-backend.json"
+        )
+        if not self.ai_config_path.is_file():
+            raise WorkflowError("the configured AI backend file is unavailable")
+        self.ai_config = _read(self.ai_config_path)
         self.zone = ZoneInfo(self.runtime_config["timezone"])
         self.now = now or (lambda: datetime.now(self.zone))
         self.sleep = sleep
+        self.active_runtime: Path | None = None
 
     def _script(self, name: str, *arguments: str) -> None:
         result = subprocess.run(
@@ -218,9 +226,7 @@ class Workflow:
             "session_scope": "US_regular_session",
             "official_label_status": "not_applicable_no_forecasts",
             "trade_date": trade_date.isoformat(),
-            "session_close_et": datetime.combine(
-                trade_date, datetime.min.time().replace(hour=16), self.zone
-            ).isoformat(),
+            "session_close_et": schedule["market_close"].isoformat(),
             "labels": [],
         }
         _write(provisional_view, no_forecast_labels, immutable=False)
@@ -264,11 +270,13 @@ class Workflow:
         self.runtime_root.mkdir(parents=True, exist_ok=True)
         run_id, runtime = _run_id(self.runtime_root, trade_date)
         runtime.mkdir(parents=True, exist_ok=True)
+        self.active_runtime = runtime
         evidence_root = runtime / "evidence"
         universe = _resolve_universe(self.runtime_root)
         system_config_sha256 = _system_config_sha256(self.package_root)
         initial = runtime / "workflow_identity.json"
-        if not initial.exists():
+        resuming = initial.exists()
+        if not resuming:
             _write(initial, {
                 "schema_version": 6,
                 "run_id": run_id,
@@ -280,6 +288,7 @@ class Workflow:
                 "schedule": {key: value.isoformat() for key, value in schedule.items()},
                 "system_identity": effective_identity["identity"],
                 "system_config_sha256": system_config_sha256,
+                "ai_backend_config_sha256": sha256_payload(self.ai_config),
             })
         else:
             identity = _read(initial)
@@ -287,6 +296,9 @@ class Workflow:
                 raise WorkflowError("resumed run resolved a different universe")
             if identity.get("system_config_sha256") != system_config_sha256:
                 raise WorkflowError("resumed run resolved a different system version")
+            if identity.get("ai_backend_config_sha256") != sha256_payload(self.ai_config):
+                raise WorkflowError("resumed run resolved a different AI backend configuration")
+            mode = str(identity.get("effective_mode_at_start", mode))
         if (runtime / "audit_complete.json").exists():
             return runtime
         universe_manifest = universe.parent / "active_manifest.json"
@@ -302,7 +314,7 @@ class Workflow:
             mode = "shadow"
         if wait and self.now() < schedule["precheck_start"]:
             self._wait(schedule["precheck_start"])
-        if self.now() > schedule["evidence_cutoff"]:
+        if self.now() > schedule["evidence_cutoff"] and not resuming:
             mode = "shadow"
 
         stocks = runtime / "stock_snapshot.json"
@@ -333,9 +345,7 @@ class Workflow:
         earnings_status = runtime / "earnings_calendar_collection_status.json"
         event_manifest = runtime / "event_evidence_manifest.json"
         event_status = runtime / "event_collection_status.json"
-        previous_close = datetime.combine(
-            _previous_weekday(trade_date), datetime.min.time().replace(hour=16), self.zone
-        )
+        previous_close = previous_market_session(trade_date).market_close
         event_discovery_config = _read(self.package_root / "config/event-discovery.json")
         event_analysis_config = _read(self.package_root / "config/event-analysis.json")
         self._stage(runtime, "sec_event_discovery", [sec_event_manifest, sec_event_status], lambda: capture_sec_universe_events(
@@ -462,8 +472,10 @@ class Workflow:
             try:
                 self._script(
                     "snapshot_isolation.py", "--output", str(isolation_status),
-                    "--backend", "sandboxed-codex", "--workspace-root", str(self.package_root.parent),
+                    "--backend", str(self.ai_config["backend"]),
+                    "--workspace-root", str(self.package_root.parent),
                     "--attestation", str(attestation),
+                    "--config", str(self.ai_config_path),
                 )
             except Exception:
                 if attestation.exists():
@@ -477,11 +489,12 @@ class Workflow:
             if candidates and isolation.get("formal_ai_enabled") is True:
                 try:
                     self._script(
-                        "run_sandboxed_six_domain.py", "--run-id", run_id,
+                        "run_six_domain.py", "--run-id", run_id,
                         "--cutoff-et", analysis_cutoff, "--tasks", str(tasks_path),
                         "--lineage", str(lineage_path), "--candidate-intake", str(intake),
                         "--evidence-manifest", str(evidence_manifest), "--evidence-root", str(evidence_root),
                         "--isolation-status", str(isolation_status), "--attestation", str(attestation),
+                        "--config", str(self.ai_config_path),
                         "--calls-dir", str(runtime / "ai_calls"), "--output", str(run_input),
                     )
                 except Exception as exc:
@@ -717,8 +730,11 @@ class Workflow:
 
     def failure_record(self, error: Exception) -> Path:
         current = self.now()
-        candidates = sorted(self.runtime_root.glob("SHAQ-CANARY-*"), key=lambda path: path.stat().st_mtime)
-        runtime = candidates[-1] if candidates else self.runtime_root / f"SHAQ-CANARY-{current.date().isoformat()}-FAILED"
+        if self.active_runtime is None:
+            token = current.strftime("%Y%m%dT%H%M%S%f%z")
+            runtime = self.runtime_root / "startup_failures" / f"STARTUP-{token}"
+        else:
+            runtime = self.active_runtime
         runtime.mkdir(parents=True, exist_ok=True)
         journal_path = runtime / "broker_journal.json"
         journal = _read(journal_path) if journal_path.exists() else {"orders": {}}
@@ -733,7 +749,12 @@ class Workflow:
             "message": str(error),
             "orders_submitted": orders_submitted,
         }
-        _write(runtime / "workflow_failure.json", payload, immutable=not (runtime / "workflow_failure.json").exists())
+        if self.active_runtime is None:
+            failure_path = runtime / "workflow_failure.json"
+        else:
+            token = current.strftime("%Y%m%dT%H%M%S%f%z")
+            failure_path = runtime / "failure_events" / f"{token}.json"
+        _write(failure_path, payload)
         body = (
             "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><title>SHAQ Daily Oracle 安全停止记录</title></head>"
             f"<body><h1>SHAQ Daily Oracle 当日安全停止</h1><p>异常类型：{type(error).__name__}</p>"
@@ -743,5 +764,6 @@ class Workflow:
                 "<p>系统没有提交订单。</p></body></html>"
             )
         )
-        (runtime / "professor_report.html").write_text(body, encoding="utf-8")
+        if self.active_runtime is None:
+            (runtime / "professor_report.html").write_text(body, encoding="utf-8")
         return runtime

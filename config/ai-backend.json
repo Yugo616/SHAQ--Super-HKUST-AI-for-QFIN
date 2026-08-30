@@ -1,12 +1,16 @@
 {
-  "model": "gpt-5.6-sol",
+  "backend": "openai-responses",
+  "model": "gpt-5.6",
   "reasoning_effort": "high",
   "timeout_seconds": 360,
   "maximum_input_bytes": 600000,
+  "maximum_output_tokens": 24000,
   "parameter_bindings": {
-    "model": ["REF-OPENAI-MODEL-001", "DEC-AI-BACKEND-001", "EXP-CANARY-001"],
-    "reasoning_effort": ["REF-OPENAI-MODEL-001", "DEC-AI-BACKEND-001", "EXP-CANARY-001"],
-    "timeout_seconds": ["REF-APPLE-SANDBOX-001", "DEC-AI-BACKEND-001", "EXP-CANARY-002"],
-    "maximum_input_bytes": ["REF-OPENAI-MODEL-001", "DEC-AI-BACKEND-001", "EXP-CANARY-002"]
+    "backend": ["REF-OPENAI-RESPONSES-001", "DEC-AI-BACKEND-001", "EXP-DESKTOP-API-001"],
+    "model": ["REF-OPENAI-MODEL-001", "DEC-AI-BACKEND-001", "EXP-DESKTOP-API-001"],
+    "reasoning_effort": ["REF-OPENAI-MODEL-001", "DEC-AI-BACKEND-001", "EXP-DESKTOP-API-001"],
+    "timeout_seconds": ["REF-OPENAI-RESPONSES-001", "DEC-AI-BACKEND-001", "EXP-DESKTOP-API-001"],
+    "maximum_input_bytes": ["REF-OPENAI-RESPONSES-001", "DEC-AI-BACKEND-001", "EXP-DESKTOP-API-001"],
+    "maximum_output_tokens": ["REF-OPENAI-RESPONSES-001", "DEC-AI-BACKEND-001", "EXP-DESKTOP-API-001"]
   }
 }

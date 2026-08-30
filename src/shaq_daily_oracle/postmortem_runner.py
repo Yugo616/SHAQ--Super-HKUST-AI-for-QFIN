@@ -20,7 +20,7 @@ from .postmortem import (
     validate_postmortem,
 )
 from .reports import write_reports
-from .sandboxed_codex import _codex_call, _load_config
+from .sandboxed_codex import _inference_call, _load_config
 from .sec_view import build_sec_analysis_text, sec_document_types
 from .workflow import _resolve_universe
 
@@ -375,7 +375,7 @@ class PostmortemRunner:
             f"PACKET JSON:\n{json.dumps(packet, ensure_ascii=False, sort_keys=True)}"
         )
         config = _load_config(_read(self.package_root / "config/ai-backend.json"))
-        parsed, audit = _codex_call(
+        parsed, audit = _inference_call(
             prompt=prompt, schema=_postmortem_schema(), config=config,
             workspace_root=self.package_root.parent,
         )

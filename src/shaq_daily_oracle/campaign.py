@@ -25,6 +25,7 @@ from zoneinfo import ZoneInfo
 
 from .execution import select_simulate_us_account
 from .identity import ensure_formal_core_lock, formal_core_lock_path, resolve_system_identity
+from .market_calendar import market_session
 from .postmortem_runner import PostmortemRunner
 from .workflow import Workflow, _resolve_universe
 
@@ -81,8 +82,8 @@ class CampaignConfig:
         dates = tuple(date.fromisoformat(item) for item in value["session_dates"])
         if not dates or len(dates) != len(set(dates)) or dates != tuple(sorted(dates)):
             raise CampaignError("campaign dates must be unique, nonempty and ordered")
-        if any(item.weekday() >= 5 for item in dates):
-            raise CampaignError("campaign dates must be weekdays")
+        if any(market_session(item) is None for item in dates):
+            raise CampaignError("campaign dates must be NYSE trading sessions")
         intervals = {
             "heartbeat_seconds": int(value["heartbeat_seconds"]),
             "active_health_seconds": int(value["active_health_seconds"]),
@@ -204,12 +205,27 @@ class Heartbeat:
 
 
 def run_preflight(*, package_root: Path, config: CampaignConfig) -> dict[str, Any]:
+    ai_config_path = Path(
+        os.environ.get("DAILY_ORACLE_AI_CONFIG", package_root / "config/ai-backend.json")
+    ).expanduser().resolve()
+    ai_config = _read(ai_config_path) if ai_config_path.is_file() else {}
+    ai_backend = ai_config.get("backend")
+    api_ready = bool(os.environ.get("OPENAI_API_KEY", "").strip())
+    if api_ready:
+        try:
+            import openai  # type: ignore  # noqa: F401
+        except ImportError:
+            api_ready = False
     checks: dict[str, bool] = {
         "sec_identity_configured": bool(os.environ.get("DAILY_ORACLE_SEC_USER_AGENT", "").strip()),
         "sec_access": _sec_ready(),
         "opend_reachable": _tcp_ready(config.host, config.port),
-        "codex_available": shutil.which("codex") is not None,
-        "codex_isolation": False,
+        "ai_backend_available": (
+            api_ready if ai_backend == "openai-responses"
+            else shutil.which("codex") is not None if ai_backend == "codex-cli"
+            else False
+        ),
+        "ai_isolation": False,
         "universe_available": False,
         "single_us_simulate_account": False,
         "release_tests_passed": False,
@@ -265,13 +281,13 @@ def run_preflight(*, package_root: Path, config: CampaignConfig) -> dict[str, An
         attestation_path = Path(temporary) / "isolation_attestation.json"
         isolation_result = subprocess.run(
             [sys.executable, str(package_root / "scripts/snapshot_isolation.py"),
-             "--output", str(isolation_path), "--backend", "sandboxed-codex",
+             "--output", str(isolation_path), "--backend", str(ai_backend),
              "--workspace-root", str(package_root.parent),
-             "--attestation", str(attestation_path)],
+             "--attestation", str(attestation_path), "--config", str(ai_config_path)],
             cwd=package_root, capture_output=True, text=True, check=False,
         )
         if isolation_result.returncode == 0 and isolation_path.exists():
-            checks["codex_isolation"] = _read(isolation_path).get("formal_ai_enabled") is True
+            checks["ai_isolation"] = _read(isolation_path).get("formal_ai_enabled") is True
     with tempfile.TemporaryDirectory(prefix="shaq-tests-") as temporary:
         report_path = Path(temporary) / "acceptance.json"
         result = subprocess.run(

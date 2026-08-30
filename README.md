@@ -38,26 +38,32 @@ The system does not count Agents or reports as votes. Every raw observation keep
 
 Each skill contains a concise `SKILL.md` and a one-level `references/foundations.md` file. The reference file states the research mechanism used by the skill; it does not copy an external paper's performance claim.
 
-## Install and run
+## Desktop application
+
+The normal user flow is:
+
+```text
+Download the installer → Open the app → Complete setup once → Enable daily paper trading
+```
+
+The native desktop window contains Today, Run History, Holdings and Fills, Portfolio Performance, System Health, and Settings and Export. It rebuilds its display index from immutable run files, so deleting the SQLite display cache cannot delete or change a forecast. Closing the window does not stop an enabled background watcher.
+
+The default AI backend is the OpenAI Responses API. Codex is not required for normal operation and remains an explicitly selected development backend. The API receives only the frozen evidence packet; tools, external retrieval, and response storage are disabled. Futu OpenD is still installed and logged in separately under the user's simulated account.
+
+Internal test packages are built for macOS Apple Silicon and Windows x64. They use checksums and temporary or ad-hoc signing, so the operating system may request confirmation on first launch.
+
+## Developer installation
 
 No Codex installation is required to review the architecture. Start with `skills/daily-oracle/SKILL.md`, then inspect the six domain skills and their foundation files. The `src/` package contains the deterministic evidence, integration, evaluation and broker-safety controls.
-
-Install the standalone Python safety core from the repository:
 
 ```bash
 git clone https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN.git shaq-daily-oracle
 cd shaq-daily-oracle
 python3 -m venv .venv
 source .venv/bin/activate
-python3 -m pip install -e ".[test]"
+python3 -m pip install -e ".[desktop,futu,test]"
 python3 scripts/validate_release.py
 python3 -m unittest discover -s tests -v
-```
-
-Install the optional Futu adapter only on a machine that already runs Futu OpenD:
-
-```bash
-python3 -m pip install -e ".[futu]"
 ```
 
 Set machine-specific inputs without editing the repository:
@@ -65,9 +71,16 @@ Set machine-specific inputs without editing the repository:
 ```bash
 export DAILY_ORACLE_UNIVERSE=/path/to/effective-universe.csv
 export DAILY_ORACLE_SEC_USER_AGENT="Research Team contact@example.edu"
+export OPENAI_API_KEY="your-key-from-a-secure-local-environment"
 ```
 
-Then use the single operating command:
+Open the desktop source build with:
+
+```bash
+shaq-daily-oracle-desktop
+```
+
+The developer command remains available and calls the same workflow service:
 
 ```bash
 daily-oracle run --mode paper

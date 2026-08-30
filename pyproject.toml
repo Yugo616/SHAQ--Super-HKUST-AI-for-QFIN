@@ -4,20 +4,34 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "shaq-daily-oracle"
-version = "0.1.0"
+version = "0.2.0"
 description = "Reference-grounded six-domain premarket forecasting safety core"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+  "openai>=1.100",
+  "pandas-market-calendars>=5.1",
+  "platformdirs>=4.3",
+  "filelock>=3.16",
+]
 
 [project.scripts]
 daily-oracle = "shaq_daily_oracle.cli:main"
+shaq-daily-oracle-desktop = "shaq_daily_oracle.desktop:main"
 
 [project.optional-dependencies]
 futu = ["futu-api>=10.10"]
 test = ["jsonschema>=4.21"]
+desktop = [
+  "keyring>=25.6",
+  "pywebview>=6.0",
+  "pyinstaller>=6.16",
+]
 
 [tool.setuptools]
 package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+shaq_daily_oracle = ["desktop/*"]

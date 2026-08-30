@@ -7,7 +7,13 @@ import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-TEXT_SUFFIXES = {".md", ".py", ".json", ".yaml", ".toml"}
+TEXT_SUFFIXES = {
+    ".css", ".html", ".iss", ".js", ".json", ".md", ".ps1", ".py",
+    ".sh", ".toml", ".yaml", ".yml",
+}
+IGNORED_TOP_LEVEL = {
+    ".git", ".pytest_cache", "build", "dist", "runtime",
+}
 DISALLOWED_TEXT = ("to" + "do", "pend" + "ing")
 DISALLOWED_PATH_PATTERNS = (
     re.compile("/" + "Users/" + "[^/]+/"),
@@ -15,7 +21,10 @@ DISALLOWED_PATH_PATTERNS = (
     re.compile(r"\bhybrid_" + r"qlib_demo\b"),
 )
 REQUIRED_CONFIG_BINDINGS = {
-    "ai-backend.json": {"model", "reasoning_effort", "timeout_seconds", "maximum_input_bytes"},
+    "ai-backend.json": {
+        "backend", "model", "reasoning_effort", "timeout_seconds",
+        "maximum_input_bytes", "maximum_output_tokens",
+    },
     "canary.example.json": {
         "forecast_cutoff", "entry_after", "entry_deadline", "exit_at", "exit_deadline",
         "order_poll_interval_seconds",
@@ -106,7 +115,10 @@ def main() -> int:
     for path in ROOT.rglob("*"):
         if not path.is_file() or path.suffix not in TEXT_SUFFIXES:
             continue
-        if path.relative_to(ROOT).parts[0] == "runtime":
+        relative = path.relative_to(ROOT)
+        if relative.parts[0] in IGNORED_TOP_LEVEL or any(
+            part == "__pycache__" or part.endswith(".egg-info") for part in relative.parts
+        ):
             continue
         text = path.read_text(encoding="utf-8", errors="replace")
         if path.suffix == ".py":

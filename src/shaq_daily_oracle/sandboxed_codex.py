@@ -171,6 +171,71 @@ def attest_sandboxed_codex(*, workspace_root: Path, output: Path) -> dict[str, A
     return artifact
 
 
+def attest_openai_responses(
+    *, workspace_root: Path, output: Path, config: dict[str, Any]
+) -> dict[str, Any]:
+    """Freeze proof of the API request boundary without making a paid model call."""
+
+    if output.exists():
+        raise FileExistsError("isolation attestation is immutable")
+    normalized = _load_config(config)
+    key_present = bool(os.environ.get("OPENAI_API_KEY", "").strip())
+    try:
+        import openai  # type: ignore
+
+        sdk_version = str(getattr(openai, "__version__", "unknown"))
+        sdk_available = True
+    except ImportError:
+        sdk_version = "unavailable"
+        sdk_available = False
+    checks = {
+        "openai_sdk_available": sdk_available,
+        "api_key_available": key_present,
+        "responses_api_selected": normalized["backend"] == "openai-responses",
+        "model_tools_disabled": True,
+        "response_storage_disabled": True,
+        "only_frozen_packet_is_submitted": True,
+    }
+    enabled = all(checks.values())
+    status = {
+        "schema_version": 6,
+        "backend": "openai-responses-api" if enabled else "unavailable",
+        "formal_ai_enabled": enabled,
+        "evidence_read_only": enabled,
+        "labels_unmounted": enabled,
+        "network_denied": enabled,
+        "tools_denied": enabled,
+        "reason": (
+            "the model receives only the inlined frozen evidence packet; API tools, external "
+            "retrieval and response storage are disabled"
+            if enabled else "the OpenAI API request boundary is not ready"
+        ),
+    }
+    started = datetime.now(ZoneInfo("America/New_York")).isoformat()
+    unsigned = {
+        "schema_version": 6,
+        "started_at_et": started,
+        "completed_at_et": datetime.now(ZoneInfo("America/New_York")).isoformat(),
+        "workspace_root": str(workspace_root.resolve()),
+        "backend": status["backend"],
+        "openai_sdk_version": sdk_version,
+        "backend_config_sha256": sha256_payload(normalized),
+        "request_policy": {
+            "store": False,
+            "tools": [],
+            "tool_choice": "none",
+        },
+        "checks": checks,
+        "status": status,
+    }
+    artifact = {**unsigned, "attestation_sha256": sha256_payload(unsigned)}
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(artifact, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    if not enabled:
+        raise SandboxedCodexError("OpenAI Responses API attestation failed")
+    return artifact
+
+
 def verify_isolation_attestation(*, status: dict[str, Any], attestation_path: Path, workspace_root: Path) -> dict[str, Any]:
     normalized = validate_isolation_status(status)
     if normalized["formal_ai_enabled"] is not True:
@@ -405,15 +470,109 @@ def _codex_call(*, prompt: str, schema: dict[str, Any], config: dict[str, Any], 
             auth_copy.unlink(missing_ok=True)
 
 
+def _openai_call(
+    *, prompt: str, schema: dict[str, Any], config: dict[str, Any], workspace_root: Path
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    del workspace_root  # Only the verified prompt crosses this backend boundary.
+    api_key = os.environ.get("OPENAI_API_KEY", "").strip()
+    if not api_key:
+        raise SandboxedCodexError("OPENAI_API_KEY is unavailable")
+    try:
+        from openai import OpenAI  # type: ignore
+    except ImportError as exc:
+        raise SandboxedCodexError("the OpenAI Python SDK is unavailable") from exc
+    started = datetime.now(ZoneInfo("America/New_York")).isoformat()
+    request_policy = {
+        "model": str(config["model"]),
+        "input": prompt,
+        "reasoning": {"effort": str(config["reasoning_effort"])},
+        "text": {
+            "format": {
+                "type": "json_schema",
+                "name": "daily_oracle_output",
+                "strict": True,
+                "schema": schema,
+            }
+        },
+        "tools": [],
+        "tool_choice": "none",
+        "store": False,
+        "max_output_tokens": int(config["maximum_output_tokens"]),
+    }
+    try:
+        client = OpenAI(
+            api_key=api_key,
+            timeout=float(config["timeout_seconds"]),
+            max_retries=0,
+        )
+        response = client.responses.create(**request_policy)
+        output_text = getattr(response, "output_text", None)
+        if not isinstance(output_text, str) or not output_text.strip():
+            raise SandboxedCodexError("OpenAI Responses API returned no structured output")
+        parsed = json.loads(output_text)
+    except SandboxedCodexError:
+        raise
+    except Exception as exc:
+        raise SandboxedCodexError(f"OpenAI Responses API failed: {type(exc).__name__}: {exc}") from exc
+    usage = getattr(response, "usage", None)
+    if hasattr(usage, "model_dump"):
+        usage = usage.model_dump()
+    elif usage is not None and not isinstance(usage, (dict, str, int, float, bool, list)):
+        usage = str(usage)
+    audit = {
+        "backend": "openai-responses-api",
+        "response_id": str(getattr(response, "id", "")),
+        "started_at_et": started,
+        "completed_at_et": datetime.now(ZoneInfo("America/New_York")).isoformat(),
+        "model": config["model"],
+        "response_model": str(getattr(response, "model", config["model"])),
+        "reasoning_effort": config["reasoning_effort"],
+        "prompt_sha256": hashlib.sha256(prompt.encode()).hexdigest(),
+        "output_sha256": sha256_payload(parsed),
+        "request_policy_sha256": sha256_payload({
+            key: value for key, value in request_policy.items() if key != "input"
+        }),
+        "response_store_enabled": False,
+        "transport_network_allowed": True,
+        "model_facing_tools_allowed": False,
+        "usage": usage,
+    }
+    return parsed, audit
+
+
+def _inference_call(
+    *, prompt: str, schema: dict[str, Any], config: dict[str, Any], workspace_root: Path
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    backend = config["backend"]
+    if backend == "openai-responses":
+        return _openai_call(
+            prompt=prompt, schema=schema, config=config, workspace_root=workspace_root
+        )
+    if backend == "codex-cli":
+        return _codex_call(
+            prompt=prompt, schema=schema, config=config, workspace_root=workspace_root
+        )
+    raise SandboxedCodexError(f"unsupported AI backend: {backend}")
+
+
 def _load_config(config: dict[str, Any]) -> dict[str, Any]:
-    required = ("model", "reasoning_effort", "timeout_seconds", "maximum_input_bytes")
+    required = (
+        "backend", "model", "reasoning_effort", "timeout_seconds",
+        "maximum_input_bytes", "maximum_output_tokens",
+    )
     bindings = config.get("parameter_bindings", {})
     for name in required:
         if name not in config or len(bindings.get(name, [])) != 3:
             raise SandboxedCodexError(f"AI backend config lacks a governed {name}")
     if config["reasoning_effort"] not in {"low", "medium", "high", "xhigh"}:
         raise SandboxedCodexError("unsupported reasoning effort")
-    if int(config["timeout_seconds"]) <= 0 or int(config["maximum_input_bytes"]) <= 0:
+    if config["backend"] not in {"openai-responses", "codex-cli"}:
+        raise SandboxedCodexError("unsupported AI backend")
+    if (
+        int(config["timeout_seconds"]) <= 0
+        or int(config["maximum_input_bytes"]) <= 0
+        or int(config["maximum_output_tokens"]) <= 0
+    ):
         raise SandboxedCodexError("AI backend resource limits must be positive")
     return config
 
@@ -589,7 +748,7 @@ def run_sandboxed_six_domain(*, run_id: str, created_at: str, cutoff_et: str, ta
             parsed, audit = saved.get("raw_output"), saved.get("audit")
         else:
             saved = None
-            parsed, audit = _codex_call(
+            parsed, audit = _inference_call(
                 prompt=prompt, schema=_report_schema(), config=config, workspace_root=workspace_root
             )
         if (
@@ -689,7 +848,7 @@ def run_sandboxed_six_domain(*, run_id: str, created_at: str, cutoff_et: str, ta
         parsed, audit = saved_adversary.get("raw_output"), saved_adversary.get("audit")
     else:
         saved_adversary = None
-        parsed, audit = _codex_call(
+        parsed, audit = _inference_call(
             prompt=adversary_prompt, schema=_adversary_schema(), config=config, workspace_root=workspace_root
         )
     if (
@@ -764,3 +923,6 @@ def run_sandboxed_six_domain(*, run_id: str, created_at: str, cutoff_et: str, ta
             predictions=predictions,
         ),
     }
+
+
+run_six_domain = run_sandboxed_six_domain

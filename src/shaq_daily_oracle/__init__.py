@@ -52,10 +52,12 @@ from .labels import (
 from .isolation import IsolationError, formal_ai_status, validate_isolation_status
 from .sandboxed_codex import (
     SandboxedCodexError,
+    attest_openai_responses,
     attest_sandboxed_codex,
     build_seatbelt_profile,
     derive_predictions,
     run_sandboxed_six_domain,
+    run_six_domain,
     verify_isolation_attestation,
 )
 from .lineage import EvidenceError, build_lineage_graph
@@ -141,12 +143,14 @@ __all__ = [
     "find_broker_order",
     "formal_ai_status",
     "attest_sandboxed_codex",
+    "attest_openai_responses",
     "build_seatbelt_profile",
     "build_sec_analysis_text",
     "build_sec_view_receipt",
     "sec_document_types",
     "derive_predictions",
     "run_sandboxed_six_domain",
+    "run_six_domain",
     "verify_isolation_attestation",
     "freeze_run",
     "normalize_futu_order_status",

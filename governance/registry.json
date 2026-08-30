@@ -11,6 +11,7 @@
     ,"REF-HP-001": {"title": "Text-Based Network Industries and Endogenous Product Differentiation", "url": "https://doi.org/10.1086/688176"}
     ,"REF-CHARTING-001": {"title": "Charting by Machines", "url": "https://doi.org/10.1016/j.jfineco.2024.103791"}
     ,"REF-OPENAI-MODEL-001": {"title": "OpenAI Model Selection and Structured Output Guidance", "url": "https://developers.openai.com/api/docs/guides/latest-model"}
+    ,"REF-OPENAI-RESPONSES-001": {"title": "OpenAI Responses API Create Response", "url": "https://developers.openai.com/api/reference/resources/responses/methods/create"}
     ,"REF-APPLE-SANDBOX-001": {"title": "Configuring the macOS App Sandbox", "url": "https://developer.apple.com/documentation/xcode/configuring-the-macos-app-sandbox"}
     ,"REF-SEC-FILER-001": {"title": "SEC EDGAR Filer Manual and Document Structure", "url": "https://www.sec.gov/submit-filings/edgar-filer-manual"}
     ,"REF-FUTU-HISTORY-001": {"title": "Futu OpenAPI Historical Candlesticks", "url": "https://openapi.futunn.com/futu-api-doc/en/quote/request-history-kline.html"}
@@ -42,7 +43,7 @@
     ,"DEC-SECTOR-BENCHMARKS-001": "Use all eleven broad GICS-sector ETFs as exposure context; relation type, not ETF correlation alone, determines spillover."
     ,"DEC-INTEGRATION-001": "Publish only when independent causal-context and market-absorption roots align without an independent opposing root; never substitute Agent counts or hand weights."
     ,"DEC-CANDIDATE-INTAKE-001": "Deep-review cutoff-safe primary-event symbols and the largest absolute stock-minus-sector premarket residuals after an adaptive cross-sectional participation-maturity gate; intake never assigns direction or strength."
-    ,"DEC-AI-BACKEND-001": "Formal domain inference requires a runtime-specific macOS kernel-sandbox attestation, inlined verified evidence, fixed structured output and first-valid immutable results; any failed probe disables AI."
+    ,"DEC-AI-BACKEND-001": "Formal domain inference uses one governed backend at a time. The default Responses API receives only inlined frozen evidence with structured output, tools and storage disabled; Codex CLI remains an explicitly selected development backend. Any failed boundary check disables AI without fallback."
     ,"DEC-SEC-VIEW-001": "Archive the complete SEC submission and give AI only a deterministic, reproducible visible-text view of configured filing documents; never summarize or truncate to fit."
     ,"DEC-PRICE-HISTORY-001": "Give price-volume analysis only T-1 unadjusted regular-session paths and lineage-bound stock-sector premarket residual context; unavailable histories do not receive substitutes."
     ,"DEC-DEEP-EVIDENCE-001": "Collect relationship context, event-level order flow and option distributions with explicit provider status; never infer unavailable semantics."
@@ -58,6 +59,7 @@
     "EXP-SHAQ-PROBABILITY-001": "Prospective SHAQ decision-signature calibration.",
     "EXP-SHAQ-COST-001": "Prospective paper execution-cost collection.",
     "EXP-SHAQ-NET-EV-001": "Prospective SHAQ net expected-value and concentration gate.",
-    "EXP-CAPITAL-TIME-001": "Prospective capital-observation timing and contiguous-segmentation repair beginning 2026-08-31."
+    "EXP-CAPITAL-TIME-001": "Prospective capital-observation timing and contiguous-segmentation repair beginning 2026-08-31.",
+    "EXP-DESKTOP-API-001": "Prospective desktop-run identity using the governed OpenAI Responses API boundary beginning 2026-08-31."
   }
 }

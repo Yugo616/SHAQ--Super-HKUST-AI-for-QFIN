@@ -18,9 +18,9 @@ REQUIRED_CAPABILITIES = (
 def formal_ai_status() -> dict[str, Any]:
     """Return the capability status of the public package's inference runner.
 
-    This default is deliberately disabled. The macOS backend may only become
-    formal after ``snapshot_isolation.py --backend sandboxed-codex`` writes an
-    immutable, runtime-specific kernel-sandbox attestation.
+    This default is deliberately disabled. A configured OpenAI Responses or
+    Codex development backend becomes formal only after its runtime-specific
+    evidence-boundary attestation has been frozen.
     """
 
     return {

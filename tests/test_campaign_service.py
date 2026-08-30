@@ -58,6 +58,8 @@ class CampaignServiceTests(unittest.TestCase):
             self.config(["2026-08-29"])
         with self.assertRaises(CampaignError):
             self.config(["2026-08-25", "2026-08-25"])
+        with self.assertRaises(CampaignError):
+            self.config(["2026-09-07"])
 
     def test_duplicate_service_lock_fails_closed(self):
         lock_path = self.root / "service.lock"

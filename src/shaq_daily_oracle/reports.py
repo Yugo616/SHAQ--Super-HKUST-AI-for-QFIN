@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from .hashing import sha256_file, sha256_payload
+from .replay import run_replay
 
 
 def _cell(value: Any) -> str:
@@ -134,6 +135,7 @@ def write_reports(
             labels=labels, postmortem=postmortem,
         ),
         "agent_trace.html": agent_trace(frozen=frozen),
+        "run_replay.html": run_replay(runtime=runtime, frozen=frozen),
     }
     for name, content in outputs.items():
         path = runtime / name
