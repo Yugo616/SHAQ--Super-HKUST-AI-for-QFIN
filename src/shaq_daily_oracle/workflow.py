@@ -15,7 +15,7 @@ from .deep_capture import capture_futu_deep_evidence
 from .evidence_manifest import merge_evidence_manifests
 from .events import capture_futu_earnings_calendar, capture_sec_universe_events
 from .hashing import sha256_file, sha256_payload
-from .identity import resolve_system_identity
+from .identity import resolve_runtime_identity
 from .lineage import build_lineage_graph
 from .market_calendar import previous_market_session
 from .reports import write_reports
@@ -37,6 +37,15 @@ def _write(path: Path, value: dict[str, Any], *, immutable: bool = True) -> None
         raise FileExistsError(f"immutable workflow artifact exists: {path.name}")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _serialize_schedule(schedule: dict[str, Any]) -> dict[str, Any]:
+    """Serialize clock values without coercing non-clock session metadata."""
+
+    return {
+        key: value.isoformat() if isinstance(value, datetime) else value
+        for key, value in schedule.items()
+    }
 
 
 def _previous_weekday(value: date) -> date:
@@ -265,7 +274,9 @@ class Workflow:
         trade_date = session_date or current.date()
         schedule = session_times(trade_date, self.runtime_config)
         identity_at_session = datetime.combine(trade_date, datetime.min.time(), self.zone)
-        effective_identity = resolve_system_identity(self.system_identity, identity_at_session)
+        effective_identity = resolve_runtime_identity(
+            self.system_identity, identity_at_session, self.ai_config
+        )
         mode = "shadow" if requested_mode == "shadow" else formal_mode(current, schedule)
         self.runtime_root.mkdir(parents=True, exist_ok=True)
         run_id, runtime = _run_id(self.runtime_root, trade_date)
@@ -285,7 +296,7 @@ class Workflow:
                 "effective_mode_at_start": mode,
                 "started_at_et": current.isoformat(),
                 "universe_sha256": sha256_file(universe),
-                "schedule": {key: value.isoformat() for key, value in schedule.items()},
+                "schedule": _serialize_schedule(schedule),
                 "system_identity": effective_identity["identity"],
                 "system_config_sha256": system_config_sha256,
                 "ai_backend_config_sha256": sha256_payload(self.ai_config),

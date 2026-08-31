@@ -33,6 +33,28 @@ def resolve_system_identity(config: dict[str, Any], observed_at: datetime) -> di
     return dict(max(eligible, key=lambda item: item[0])[1])
 
 
+def resolve_runtime_identity(
+    config: dict[str, Any], observed_at: datetime, ai_config: dict[str, Any],
+) -> dict[str, Any]:
+    """Bind the governed research identity to the exact inference backend config."""
+
+    base = resolve_system_identity(config, observed_at)
+    backend = str(ai_config.get("backend", "")).strip()
+    if not backend:
+        raise IdentityError("runtime identity requires a named AI backend")
+    safe_backend = re.sub(r"[^A-Za-z0-9._-]+", "-", backend).strip("-")
+    if not safe_backend:
+        raise IdentityError("AI backend cannot form a runtime identity")
+    backend_config_sha256 = sha256_payload(ai_config)
+    return {
+        **base,
+        "base_identity": base["identity"],
+        "identity": f"{base['identity']}--{safe_backend}--{backend_config_sha256[:12]}",
+        "ai_backend": backend,
+        "ai_backend_config_sha256": backend_config_sha256,
+    }
+
+
 def formal_core_sha256(package_root: Path) -> str:
     manifest_path = package_root / "governance/formal-core-manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))

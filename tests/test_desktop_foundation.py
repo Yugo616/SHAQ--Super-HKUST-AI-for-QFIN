@@ -5,6 +5,7 @@ import os
 import tempfile
 import unittest
 from datetime import date, datetime
+from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
@@ -177,6 +178,28 @@ class DesktopFoundationTests(unittest.TestCase):
             self.assertEqual(effective["backend"], "openai-responses")
             self.assertEqual(effective["model"], "gpt-test")
 
+    def test_codex_setup_needs_no_api_key_and_rebinds_backend_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            paths = self.paths(Path(name))
+            universe = Path(name) / "universe.csv"
+            universe.write_text(
+                "symbol,gics_sector\nAAPL,Information Technology\n", encoding="utf-8"
+            )
+            store = SettingsStore(paths)
+            saved = store.save_setup({
+                "ai_backend": "codex-cli", "model": "gpt-test",
+                "sec_identity": "Research contact@example.edu",
+                "opend_host": "127.0.0.1", "opend_port": 11111,
+                "universe_file": str(universe), "automatic_start_et": "08:15:00",
+            })
+            self.assertTrue(saved["setup_complete"])
+            effective = json.loads(paths.effective_ai_config.read_text())
+            self.assertEqual(effective["backend"], "codex-cli")
+            self.assertEqual(
+                effective["parameter_bindings"]["backend"],
+                ["REF-OPENAI-CODEX-AUTH-001", "DEC-AI-BACKEND-001", "EXP-DESKTOP-CODEX-001"],
+            )
+
     def test_setup_is_not_complete_until_live_gates_pass(self) -> None:
         with tempfile.TemporaryDirectory() as name:
             paths = self.paths(Path(name))
@@ -192,7 +215,8 @@ class DesktopFoundationTests(unittest.TestCase):
             }
             with patch.object(bridge.store, "save_setup", return_value=submitted), patch.object(
                 bridge, "_doctor_checks", return_value={
-                    "ai_model_ready": True, "opend_reachable": True,
+                    "ai_model_ready": True, "ai_isolation_ready": True,
+                    "opend_reachable": True,
                     "simulate_account_ready": False, "universe_available": True,
                 }
             ):
@@ -214,6 +238,67 @@ class DesktopFoundationTests(unittest.TestCase):
             status = json.loads((paths.runtime_root / "service_status.json").read_text())
             self.assertEqual(status["state"], "market_closed")
             self.assertFalse(any(paths.runtime_root.glob("SHAQ-CANARY-*-*")))
+
+    def test_worker_does_not_backfill_after_evidence_cutoff(self) -> None:
+        class FixedDateTime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return cls(2026, 8, 31, 10, 0, tzinfo=tz)
+
+        with tempfile.TemporaryDirectory() as name:
+            paths = self.paths(Path(name))
+            ready = {
+                **SettingsStore(paths).load(), "setup_complete": True,
+                "automatic_run_enabled": True,
+            }
+            session = SimpleNamespace(
+                session_date=date(2026, 8, 31),
+                market_close=FixedDateTime(2026, 8, 31, 16, 0, tzinfo=ZoneInfo("America/New_York")),
+            )
+            with patch.object(SettingsStore, "load", return_value=ready), patch.object(
+                SettingsStore, "apply_to_environment", return_value={}
+            ), patch("shaq_daily_oracle.service.market_session", return_value=session), patch(
+                "shaq_daily_oracle.service.datetime", FixedDateTime
+            ):
+                self.assertEqual(run_worker(paths=paths, once=True), 0)
+            status = json.loads((paths.runtime_root / "service_status.json").read_text())
+            self.assertEqual(status["state"], "missed_daily_cutoff")
+            self.assertFalse(any(paths.runtime_root.glob("SHAQ-CANARY-*-*")))
+
+    def test_campaign_worker_starts_one_research_companion(self) -> None:
+        class FixedDateTime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return cls(2026, 8, 31, 8, 16, tzinfo=tz)
+
+        with tempfile.TemporaryDirectory() as name:
+            paths = self.paths(Path(name))
+            (paths.data_root / "campaign.json").write_text(json.dumps({
+                "campaign_id": "test", "session_dates": ["2026-08-31"],
+                "runtime_root": str(paths.runtime_root), "workflow_start_et": "08:20:00",
+                "heartbeat_seconds": 30, "active_health_seconds": 60,
+                "idle_health_seconds": 300, "opend_host": "127.0.0.1", "opend_port": 11111,
+            }), encoding="utf-8")
+            ready = {
+                **SettingsStore(paths).load(), "setup_complete": True,
+                "automatic_run_enabled": True,
+            }
+            session = SimpleNamespace(
+                session_date=date(2026, 8, 31),
+                market_close=FixedDateTime(2026, 8, 31, 16, 0, tzinfo=ZoneInfo("America/New_York")),
+            )
+            companion_calls = []
+            with patch.object(SettingsStore, "load", return_value=ready), patch.object(
+                SettingsStore, "apply_to_environment", return_value={}
+            ), patch("shaq_daily_oracle.service.market_session", return_value=session), patch(
+                "shaq_daily_oracle.service.datetime", FixedDateTime
+            ), patch("shaq_daily_oracle.service.run_campaign", return_value=0):
+                result = run_worker(
+                    paths=paths, once=True,
+                    research_companion=lambda: companion_calls.append("called"),
+                )
+            self.assertEqual(result, 0)
+            self.assertEqual(companion_calls, ["called"])
 
     def test_dashboard_is_disposable_and_rebuilds_from_frozen_sources(self) -> None:
         with tempfile.TemporaryDirectory() as name:

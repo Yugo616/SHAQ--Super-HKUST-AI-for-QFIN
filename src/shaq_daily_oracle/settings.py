@@ -125,6 +125,18 @@ class SettingsStore:
         )
         base["backend"] = value["ai_backend"]
         base["model"] = value["model"]
+        if value["ai_backend"] == "codex-cli":
+            experiment = "EXP-DESKTOP-CODEX-001"
+            for name in (
+                "backend", "timeout_seconds", "maximum_input_bytes", "maximum_output_tokens",
+            ):
+                base["parameter_bindings"][name] = [
+                    "REF-OPENAI-CODEX-AUTH-001", "DEC-AI-BACKEND-001", experiment,
+                ]
+            for name in ("model", "reasoning_effort"):
+                base["parameter_bindings"][name] = [
+                    "REF-OPENAI-MODEL-001", "DEC-AI-BACKEND-001", experiment,
+                ]
         _atomic_json(self.paths.effective_ai_config, base)
         return self.paths.effective_ai_config
 

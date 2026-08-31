@@ -4,18 +4,21 @@ import json
 import os
 import platform
 import plistlib
+import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from datetime import datetime, time as clock_time, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from zoneinfo import ZoneInfo
 
 from filelock import FileLock, Timeout
 
 from .app_paths import AppPaths
+from .campaign import CampaignConfig, run_campaign
 from .market_calendar import market_session, next_market_session
 from .settings import SettingsStore, _atomic_json
 from .workflow import Workflow
@@ -46,7 +49,17 @@ def _has_completed_session(paths: AppPaths, session_date: str) -> bool:
     )
 
 
-def run_worker(*, paths: AppPaths, once: bool = False) -> int:
+def _has_resumable_session(paths: AppPaths, session_date: str) -> bool:
+    return any(
+        (runtime / "workflow_identity.json").is_file()
+        for runtime in paths.runtime_root.glob(f"SHAQ-CANARY-{session_date}-*")
+    )
+
+
+def run_worker(
+    *, paths: AppPaths, once: bool = False,
+    research_companion: Callable[[], None] | None = None,
+) -> int:
     paths.ensure()
     lock = FileLock(str(paths.data_root / "worker.lock"))
     try:
@@ -55,6 +68,7 @@ def run_worker(*, paths: AppPaths, once: bool = False) -> int:
         _write_status(paths, {"state": "connected_to_existing_worker"})
         return 0
     store = SettingsStore(paths)
+    attempted_sessions: set[str] = set()
     try:
         while True:
             settings = store.load()
@@ -103,7 +117,86 @@ def run_worker(*, paths: AppPaths, once: bool = False) -> int:
                     return 0
                 time.sleep(300)
                 continue
+            runtime_config = json.loads(
+                (paths.package_root / "config/runtime.json").read_text(encoding="utf-8")
+            )
+            evidence_cutoff = datetime.combine(
+                session.session_date,
+                clock_time.fromisoformat(str(runtime_config["evidence_cutoff"])),
+                ZoneInfo(str(runtime_config["timezone"])),
+            )
+            if now_et > evidence_cutoff and not _has_resumable_session(
+                paths, session.session_date.isoformat()
+            ):
+                attempted_sessions.add(session.session_date.isoformat())
+                _write_status(paths, {
+                    "state": "missed_daily_cutoff",
+                    "session": session.session_date.isoformat(),
+                    "evidence_cutoff_et": evidence_cutoff.isoformat(),
+                    "orders_submitted": False,
+                })
+                if once:
+                    return 0
+                time.sleep(300)
+                continue
+            if session.session_date.isoformat() in attempted_sessions:
+                _write_status(paths, {
+                    "state": "session_failed_no_in_process_retry",
+                    "session": session.session_date.isoformat(),
+                })
+                if once:
+                    return 2
+                time.sleep(300)
+                continue
             _write_status(paths, {"state": "workflow_running", "session": session.session_date.isoformat()})
+            attempted_sessions.add(session.session_date.isoformat())
+            campaign_path = paths.data_root / "campaign.json"
+            if campaign_path.is_file():
+                campaign = CampaignConfig.load(campaign_path)
+                if session.session_date in campaign.session_dates:
+                    companion_error: list[Exception] = []
+                    companion_thread = None
+                    if research_companion is not None:
+                        def run_companion() -> None:
+                            try:
+                                research_companion()
+                            except Exception as exc:
+                                companion_error.append(exc)
+
+                        companion_thread = threading.Thread(
+                            target=run_companion,
+                            name="daily-oracle-research-companion",
+                            daemon=False,
+                        )
+                        companion_thread.start()
+                    campaign_failed = False
+                    try:
+                        result = run_campaign(package_root=paths.package_root, config=campaign)
+                        if result != 0:
+                            raise ServiceError(f"campaign returned fail-closed status {result}")
+                        _write_status(paths, {
+                            "state": "workflow_complete", "session": session.session_date.isoformat(),
+                        })
+                    except Exception as exc:
+                        campaign_failed = True
+                        _write_status(paths, {
+                            "state": "workflow_failed", "error_type": type(exc).__name__,
+                            "message": str(exc), "session": session.session_date.isoformat(),
+                        })
+                    if companion_thread is not None:
+                        companion_thread.join(timeout=5)
+                    if companion_error:
+                        error = companion_error[0]
+                        _write_status(paths, {
+                            "state": "research_companion_failed",
+                            "error_type": type(error).__name__, "message": str(error),
+                            "session": session.session_date.isoformat(),
+                            "formal_prediction_effect": "none",
+                        })
+                    if once:
+                        return 2 if campaign_failed else 0
+                    time.sleep(300)
+                    continue
             workflow = Workflow(
                 package_root=paths.package_root,
                 runtime_root=paths.runtime_root,
@@ -178,6 +271,18 @@ def enable_autostart(paths: AppPaths) -> dict[str, Any]:
             "StandardOutPath": str(paths.log_root / "worker.log"),
             "StandardErrorPath": str(paths.log_root / "worker-error.log"),
         }
+        settings = SettingsStore(paths).load()
+        if settings.get("ai_backend") == "codex-cli":
+            codex = shutil.which("codex")
+            if not codex:
+                raise ServiceError("Codex CLI is unavailable")
+            payload["EnvironmentVariables"] = {
+                "PATH": ":".join((
+                    str(Path(codex).resolve().parent),
+                    str(Path(sys.executable).resolve().parent),
+                    "/usr/bin", "/bin", "/usr/sbin", "/sbin",
+                )),
+            }
         descriptor, name = tempfile.mkstemp(dir=destination.parent, suffix=".plist")
         os.close(descriptor)
         temporary = Path(name)
@@ -186,6 +291,15 @@ def enable_autostart(paths: AppPaths) -> dict[str, Any]:
             os.replace(temporary, destination)
         finally:
             temporary.unlink(missing_ok=True)
+        subprocess.run(
+            ["launchctl", "bootout", f"gui/{os.getuid()}",
+             str(Path.home() / "Library/LaunchAgents/com.shaq.dailyoracle.campaign.plist")],
+            capture_output=True, text=True, check=False,
+        )
+        subprocess.run(
+            ["launchctl", "bootout", f"gui/{os.getuid()}", str(destination)],
+            capture_output=True, text=True, check=False,
+        )
         subprocess.run(
             ["launchctl", "bootstrap", f"gui/{os.getuid()}", str(destination)],
             capture_output=True, text=True, check=False,

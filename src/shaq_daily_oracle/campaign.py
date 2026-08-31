@@ -30,7 +30,11 @@ except ImportError:  # Windows uses filelock below.
     fcntl = None  # type: ignore[assignment]
 
 from .execution import select_simulate_us_account
-from .identity import ensure_formal_core_lock, formal_core_lock_path, resolve_system_identity
+from .identity import (
+    ensure_formal_core_lock,
+    formal_core_lock_path,
+    resolve_runtime_identity,
+)
 from .market_calendar import market_session
 from .postmortem_runner import PostmortemRunner
 from .workflow import Workflow, _resolve_universe
@@ -249,15 +253,28 @@ def run_preflight(*, package_root: Path, config: CampaignConfig) -> dict[str, An
         "release_tests_passed": False,
         "formal_core_frozen": False,
     }
+    check_details: dict[str, str] = {
+        name: ("passed" if passed else "not_ready")
+        for name, passed in checks.items()
+    }
+    if not checks["ai_backend_available"]:
+        check_details["ai_backend_available"] = (
+            "Codex CLI or its authenticated session is unavailable"
+            if ai_backend == "codex-cli"
+            else "OpenAI API key or SDK is unavailable"
+            if ai_backend == "openai-responses"
+            else "AI backend is unsupported or missing"
+        )
     try:
         identity_config = _read(package_root / "config/system-identity.json")
         observed = datetime.now(ZoneInfo("America/New_York"))
-        identity = resolve_system_identity(identity_config, observed)["identity"]
+        identity = resolve_runtime_identity(identity_config, observed, ai_config)["identity"]
         identity_dates = tuple(
             session_date for session_date in config.session_dates
-            if resolve_system_identity(
+            if resolve_runtime_identity(
                 identity_config,
                 datetime.combine(session_date, clock_time(12), ZoneInfo("America/New_York")),
+                ai_config,
             )["identity"] == identity
         )
         if not identity_dates:
@@ -271,13 +288,15 @@ def run_preflight(*, package_root: Path, config: CampaignConfig) -> dict[str, An
             observed_at=observed,
         )
         checks["formal_core_frozen"] = True
-    except Exception:
-        pass
+        check_details["formal_core_frozen"] = "passed"
+    except Exception as exc:
+        check_details["formal_core_frozen"] = f"{type(exc).__name__}: {exc}"
     try:
         _resolve_universe(config.runtime_root)
         checks["universe_available"] = True
-    except Exception:
-        pass
+        check_details["universe_available"] = "passed"
+    except Exception as exc:
+        check_details["universe_available"] = f"{type(exc).__name__}: {exc}"
     if checks["opend_reachable"]:
         try:
             from futu import OpenSecTradeContext, RET_OK, TrdMarket  # type: ignore
@@ -290,10 +309,11 @@ def run_preflight(*, package_root: Path, config: CampaignConfig) -> dict[str, An
                 if result == RET_OK:
                     select_simulate_us_account([row.to_dict() for _, row in frame.iterrows()])
                     checks["single_us_simulate_account"] = True
+                    check_details["single_us_simulate_account"] = "passed"
             finally:
                 trade.close()
-        except Exception:
-            pass
+        except Exception as exc:
+            check_details["single_us_simulate_account"] = f"{type(exc).__name__}: {exc}"
     with tempfile.TemporaryDirectory(prefix="shaq-preflight-") as temporary:
         isolation_path = Path(temporary) / "isolation_status.json"
         attestation_path = Path(temporary) / "isolation_attestation.json"
@@ -306,6 +326,14 @@ def run_preflight(*, package_root: Path, config: CampaignConfig) -> dict[str, An
         )
         if isolation_result.returncode == 0 and isolation_path.exists():
             checks["ai_isolation"] = _read(isolation_path).get("formal_ai_enabled") is True
+            check_details["ai_isolation"] = (
+                "passed" if checks["ai_isolation"] else "isolation attestation disabled formal AI"
+            )
+        else:
+            check_details["ai_isolation"] = (
+                isolation_result.stderr.strip() or isolation_result.stdout.strip()
+                or "isolation attestation did not complete"
+            )[-2000:]
     with tempfile.TemporaryDirectory(prefix="shaq-tests-") as temporary:
         report_path = Path(temporary) / "acceptance.json"
         result = subprocess.run(
@@ -318,12 +346,20 @@ def run_preflight(*, package_root: Path, config: CampaignConfig) -> dict[str, An
             checks["release_tests_passed"] = bool(
                 report.get("public_passed") and report.get("release_validator_passed")
             )
+            check_details["release_tests_passed"] = (
+                "passed" if checks["release_tests_passed"] else "release validation reported a failure"
+            )
             _write(config.runtime_root / "campaign_preflight_tests.json", report)
+        else:
+            check_details["release_tests_passed"] = (
+                result.stderr.strip() or result.stdout.strip() or "acceptance tests did not complete"
+            )[-2000:]
     value = {
         "schema_version": 1,
         "campaign_id": config.campaign_id,
         "checked_at_et": datetime.now(ZoneInfo("America/New_York")).isoformat(),
         "checks": checks,
+        "check_details": check_details,
         "paper_allowed": all(checks.values()),
     }
     _write(config.runtime_root / "campaign_preflight.json", value)
@@ -344,16 +380,26 @@ def campaign_rows(config: CampaignConfig) -> list[dict[str, Any]]:
             "系统身份": "", "正式核心哈希": "", "异常": "",
         }
         if runtime:
-            row["运行状态"] = "已完成" if (runtime / "audit_complete.json").exists() else "运行中或安全停止"
+            completed = (runtime / "audit_complete.json").exists()
+            failure_path = runtime / "workflow_failure.json"
+            failure_events = sorted((runtime / "failure_events").glob("*.json"))
+            if not failure_path.is_file() and failure_events:
+                failure_path = failure_events[-1]
+            row["运行状态"] = (
+                "已完成" if completed else "工程故障" if failure_path.is_file()
+                else "运行中或安全停止"
+            )
             if (runtime / "frozen_run.json").exists():
                 frozen = _read(runtime / "frozen_run.json")
                 if frozen.get("mode") == "canary":
                     row["正式运行"] = "是"
                     row["正式预测数"] = len(frozen.get("predictions", []))
                 row["系统身份"] = frozen.get("system_identity", "")
-            lock = formal_core_lock_path(config.runtime_root, str(row["系统身份"]))
-            if lock.is_file():
-                row["正式核心哈希"] = _read(lock).get("formal_core_sha256", "")
+            system_identity = str(row["系统身份"]).strip()
+            if system_identity:
+                lock = formal_core_lock_path(config.runtime_root, system_identity)
+                if lock.is_file():
+                    row["正式核心哈希"] = _read(lock).get("formal_core_sha256", "")
             if (runtime / "evaluations_provisional.json").exists():
                 evaluations = _read(runtime / "evaluations_provisional.json").get("evaluations", [])
                 row["已评价数"] = len(evaluations)
@@ -364,8 +410,9 @@ def campaign_rows(config: CampaignConfig) -> list[dict[str, Any]]:
                 fees = [item.get("fees") for item in trips if item.get("fees") is not None]
                 row["模拟盈亏"] = sum(profits) if profits else None
                 row["费用"] = sum(float(value) for value in fees) if fees else None
-            if (runtime / "workflow_failure.json").exists():
-                row["异常"] = _read(runtime / "workflow_failure.json").get("error_type", "安全停止")
+            if failure_path.is_file():
+                failure = _read(failure_path)
+                row["异常"] = failure.get("error_type", "安全停止")
             post_root = runtime / "postmortem"
             post_path = (
                 post_root / "postmortem_final.json"

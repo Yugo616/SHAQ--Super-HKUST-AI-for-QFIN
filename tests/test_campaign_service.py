@@ -140,6 +140,21 @@ class CampaignServiceTests(unittest.TestCase):
         self.assertIn("连续模拟进度", (config.runtime_root / "campaign_status.html").read_text(encoding="utf-8"))
         self.assertTrue((config.runtime_root / "campaign_summary.csv").is_file())
 
+    def test_incomplete_failed_run_is_reported_without_identity_lock_lookup(self):
+        config = self.config(["2026-08-31"])
+        runtime = config.runtime_root / "SHAQ-CANARY-2026-08-31-001"
+        failures = runtime / "failure_events"
+        failures.mkdir(parents=True)
+        (failures / "20260831T085515-0400.json").write_text(json.dumps({
+            "status": "fail_closed", "error_type": "ScheduleError",
+            "orders_submitted": False,
+        }), encoding="utf-8")
+        rows = campaign_rows(config)
+        self.assertEqual(rows[0]["运行状态"], "工程故障")
+        self.assertEqual(rows[0]["异常"], "ScheduleError")
+        self.assertEqual(rows[0]["正式预测数"], 0)
+        self.assertEqual(rows[0]["系统身份"], "")
+
     def test_professor_report_uses_plain_chinese(self):
         page = professor_report(
             frozen={"run_id": "r", "mode": "canary", "run_sha256": "a" * 64, "predictions": []},

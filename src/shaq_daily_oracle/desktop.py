@@ -4,6 +4,7 @@ import argparse
 import json
 import socket
 import sys
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -15,6 +16,7 @@ from .execution import select_simulate_us_account
 from .market_calendar import market_session, next_market_session
 from .service import disable_future_runs, enable_autostart, run_worker, start_worker
 from .settings import SettingsError, SettingsStore, _atomic_json
+from .sandboxed_codex import attest_sandboxed_codex
 
 
 def _tcp_ready(host: str, port: int) -> bool:
@@ -67,7 +69,7 @@ class DesktopBridge:
             saved = self.store.save_setup(submitted)
             checks = self._doctor_checks(saved)
             required = (
-                "ai_model_ready", "opend_reachable",
+                "ai_model_ready", "ai_isolation_ready", "opend_reachable",
                 "simulate_account_ready", "universe_available",
             )
             if not all(checks.get(name) is True for name in required):
@@ -119,6 +121,7 @@ class DesktopBridge:
     def _doctor_checks(self, settings: dict[str, Any] | None = None) -> dict[str, Any]:
         settings = settings or self.store.load()
         model_ready = False
+        isolation_ready = False
         model_error = None
         if settings.get("ai_backend") == "openai-responses" and self.store.get_openai_key():
             try:
@@ -128,12 +131,20 @@ class DesktopBridge:
                     api_key=self.store.get_openai_key(), max_retries=0, timeout=10
                 ).models.retrieve(str(settings["model"]))
                 model_ready = True
+                isolation_ready = True
             except Exception as exc:
                 model_error = f"{type(exc).__name__}: {exc}"
         elif settings.get("ai_backend") == "codex-cli":
-            import shutil
-
-            model_ready = shutil.which("codex") is not None
+            try:
+                with tempfile.TemporaryDirectory(prefix="shaq-codex-doctor-") as name:
+                    artifact = attest_sandboxed_codex(
+                        workspace_root=self.paths.package_root.parent,
+                        output=Path(name) / "attestation.json",
+                    )
+                model_ready = True
+                isolation_ready = artifact["status"]["formal_ai_enabled"] is True
+            except Exception as exc:
+                model_error = f"{type(exc).__name__}: {exc}"
         universe = Path(str(settings.get("universe_file", ""))).expanduser()
         opend_ready = _tcp_ready(
             str(settings.get("opend_host", "127.0.0.1")),
@@ -165,6 +176,7 @@ class DesktopBridge:
         return {
             "setup_complete": settings.get("setup_complete") is True,
             "ai_model_ready": model_ready,
+            "ai_isolation_ready": isolation_ready,
             "ai_model_error": model_error,
             "opend_reachable": opend_ready,
             "simulate_account_ready": simulate_ready,

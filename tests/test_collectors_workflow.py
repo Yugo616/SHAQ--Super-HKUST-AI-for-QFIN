@@ -25,6 +25,7 @@ from shaq_daily_oracle.schedule import formal_mode, session_times  # noqa: E402
 from shaq_daily_oracle.workflow import (  # noqa: E402
     Workflow,
     WorkflowError,
+    _serialize_schedule,
     _system_config_sha256,
 )
 from shaq_daily_oracle.canary import build_canary_intents  # noqa: E402
@@ -187,6 +188,14 @@ class CollectorWorkflowTests(unittest.TestCase):
         zone = ZoneInfo("America/New_York")
         self.assertEqual(formal_mode(datetime(2026, 8, 21, 8, 49, tzinfo=zone), schedule), "paper")
         self.assertEqual(formal_mode(datetime(2026, 8, 21, 8, 51, tzinfo=zone), schedule), "shadow")
+
+    def test_schedule_serialization_preserves_early_close_boolean(self):
+        config = json.loads((ROOT / "config/runtime.json").read_text(encoding="utf-8"))
+        regular = _serialize_schedule(session_times(date(2026, 8, 31), config))
+        early = _serialize_schedule(session_times(date(2026, 11, 27), config))
+        self.assertIs(regular["early_close"], False)
+        self.assertIs(early["early_close"], True)
+        self.assertEqual(early["market_close"], "2026-11-27T13:00:00-05:00")
 
     def test_single_entry_parser_is_the_public_operation(self):
         args = build_parser().parse_args(["run", "--mode", "paper"])

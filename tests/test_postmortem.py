@@ -18,6 +18,7 @@ from shaq_daily_oracle.identity import (  # noqa: E402
     formal_core_lock_path,
     formal_core_sha256,
     resolve_system_identity,
+    resolve_runtime_identity,
 )
 from shaq_daily_oracle.postmortem import (  # noqa: E402
     PostmortemError,
@@ -293,6 +294,14 @@ class PostmortemTests(unittest.TestCase):
         new_time = datetime.fromisoformat("2026-08-31T08:00:00-04:00")
         self.assertEqual(resolve_system_identity(config, old_time)["identity"], "old")
         self.assertEqual(resolve_system_identity(config, new_time)["identity"], "new")
+        codex_identity = resolve_runtime_identity(
+            config, new_time, {"backend": "codex-cli", "model": "gpt-test"}
+        )
+        api_identity = resolve_runtime_identity(
+            config, new_time, {"backend": "openai-responses", "model": "gpt-test"}
+        )
+        self.assertTrue(codex_identity["identity"].startswith("new--codex-cli--"))
+        self.assertNotEqual(codex_identity["identity"], api_identity["identity"])
         with tempfile.TemporaryDirectory() as name:
             root = Path(name)
             (root / "governance").mkdir()
