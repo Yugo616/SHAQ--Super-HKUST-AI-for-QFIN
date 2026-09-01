@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import errno
+import inspect
 import sys
 import tempfile
 import threading
@@ -22,6 +23,8 @@ from shaq_daily_oracle.campaign import (  # noqa: E402
     _write,
     campaign_lock,
     campaign_rows,
+    daily_health_check_times,
+    run_preflight,
     write_campaign_views,
 )
 from shaq_daily_oracle.execution import phase_is_terminal  # noqa: E402
@@ -60,6 +63,22 @@ class CampaignServiceTests(unittest.TestCase):
             self.config(["2026-08-25", "2026-08-25"])
         with self.assertRaises(CampaignError):
             self.config(["2026-09-07"])
+
+    def test_live_preflight_never_runs_the_development_test_suite(self):
+        source = inspect.getsource(run_preflight)
+        self.assertNotIn("run_acceptance_tests.py", source)
+        self.assertIn("verify_release_certificate", source)
+        self.assertLess(
+            source.index('checks["release_certificate_valid"] = True'),
+            source.index("ensure_formal_core_lock("),
+        )
+
+    def test_health_schedule_starts_early_and_has_two_rechecks_before_final_gate(self):
+        values = daily_health_check_times(ROOT)
+        self.assertEqual(
+            [value.isoformat() for value in values],
+            ["07:45:00", "08:00:00", "08:15:00", "08:30:00"],
+        )
 
     def test_duplicate_service_lock_fails_closed(self):
         lock_path = self.root / "service.lock"
@@ -154,6 +173,18 @@ class CampaignServiceTests(unittest.TestCase):
         self.assertEqual(rows[0]["异常"], "ScheduleError")
         self.assertEqual(rows[0]["正式预测数"], 0)
         self.assertEqual(rows[0]["系统身份"], "")
+
+    def test_failure_before_run_directory_is_still_visible_in_campaign_summary(self):
+        config = self.config(["2026-09-02"])
+        failures = config.runtime_root / "campaign_failures"
+        failures.mkdir(parents=True)
+        (failures / "failure.json").write_text(json.dumps({
+            "recorded_at_et": "2026-09-02T07:45:01-04:00",
+            "error_type": "CampaignError", "stage": "dynamic_health_checks",
+        }), encoding="utf-8")
+        rows = campaign_rows(config)
+        self.assertEqual(rows[0]["运行状态"], "工程故障")
+        self.assertEqual(rows[0]["异常"], "CampaignError")
 
     def test_professor_report_uses_plain_chinese(self):
         page = professor_report(

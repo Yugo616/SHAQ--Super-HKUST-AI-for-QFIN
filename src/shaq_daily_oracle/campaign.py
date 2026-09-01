@@ -19,7 +19,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime, time as clock_time
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 from zoneinfo import ZoneInfo
 
 from filelock import FileLock, Timeout
@@ -30,6 +30,7 @@ except ImportError:  # Windows uses filelock below.
     fcntl = None  # type: ignore[assignment]
 
 from .execution import select_simulate_us_account
+from .hashing import sha256_file
 from .identity import (
     ensure_formal_core_lock,
     formal_core_lock_path,
@@ -37,6 +38,13 @@ from .identity import (
 )
 from .market_calendar import market_session
 from .postmortem_runner import PostmortemRunner
+from .reliability import (
+    ReliabilityError,
+    certificate_path_for_runtime,
+    minimum_disk_ready,
+    verify_release_certificate,
+)
+from .sandboxed_codex import SandboxedCodexError, probe_ai_backend
 from .workflow import Workflow, _resolve_universe
 
 
@@ -177,6 +185,17 @@ def _sec_ready() -> bool:
         return False
 
 
+def daily_health_check_times(package_root: Path) -> tuple[clock_time, ...]:
+    reliability = _read(package_root / "config/reliability.json")
+    values = tuple(
+        clock_time.fromisoformat(str(value))
+        for value in reliability["daily_health_check_times_et"]
+    )
+    if not values or values != tuple(sorted(values)) or len(set(values)) != len(values):
+        raise CampaignError("daily health-check times must be nonempty, unique and ordered")
+    return values
+
+
 class Heartbeat:
     def __init__(self, config: CampaignConfig, *, session_date: date) -> None:
         self.config = config
@@ -192,7 +211,7 @@ class Heartbeat:
 
     def _active(self, now_et: datetime) -> bool:
         minute = now_et.hour * 60 + now_et.minute
-        return 8 * 60 + 15 <= minute <= 9 * 60 + 40 or 15 * 60 + 50 <= minute <= 16 * 60 + 6
+        return 7 * 60 + 45 <= minute <= 9 * 60 + 40 or 15 * 60 + 50 <= minute <= 16 * 60 + 6
 
     def _run(self) -> None:
         zone = ZoneInfo("America/New_York")
@@ -226,7 +245,15 @@ class Heartbeat:
             self.thread.join(timeout=5)
 
 
-def run_preflight(*, package_root: Path, config: CampaignConfig) -> dict[str, Any]:
+def run_preflight(
+    *, package_root: Path, config: CampaignConfig, check_id: str | None = None,
+) -> dict[str, Any]:
+    started = datetime.now(ZoneInfo("America/New_York"))
+    history_name = f"{check_id or 'manual'}-{started.strftime('%H%M%S%f')}"
+    command_log_root = (
+        config.runtime_root / "health_checks" / started.date().isoformat()
+        / f"{history_name}.logs"
+    )
     ai_config_path = Path(
         os.environ.get("DAILY_ORACLE_AI_CONFIG", package_root / "config/ai-backend.json")
     ).expanduser().resolve()
@@ -247,10 +274,13 @@ def run_preflight(*, package_root: Path, config: CampaignConfig) -> dict[str, An
             else shutil.which("codex") is not None if ai_backend == "codex-cli"
             else False
         ),
+        "ai_model_call": False,
         "ai_isolation": False,
+        "network_ready": False,
         "universe_available": False,
         "single_us_simulate_account": False,
-        "release_tests_passed": False,
+        "release_certificate_valid": False,
+        "disk_space_ready": False,
         "formal_core_frozen": False,
     }
     check_details: dict[str, str] = {
@@ -265,7 +295,21 @@ def run_preflight(*, package_root: Path, config: CampaignConfig) -> dict[str, An
             if ai_backend == "openai-responses"
             else "AI backend is unsupported or missing"
         )
+    reliability_config = _read(package_root / "config/reliability.json")
     try:
+        certificate_path = certificate_path_for_runtime(config.runtime_root)
+        verify_release_certificate(
+            package_root=package_root,
+            ai_config_path=ai_config_path,
+            certificate_path=certificate_path,
+        )
+        checks["release_certificate_valid"] = True
+        check_details["release_certificate_valid"] = "passed"
+    except ReliabilityError as exc:
+        check_details["release_certificate_valid"] = f"ReliabilityError: {exc}"
+    try:
+        if not checks["release_certificate_valid"]:
+            raise CampaignError("release certificate must pass before the formal core is locked")
         identity_config = _read(package_root / "config/system-identity.json")
         observed = datetime.now(ZoneInfo("America/New_York"))
         identity = resolve_runtime_identity(identity_config, observed, ai_config)["identity"]
@@ -291,6 +335,11 @@ def run_preflight(*, package_root: Path, config: CampaignConfig) -> dict[str, An
         check_details["formal_core_frozen"] = "passed"
     except Exception as exc:
         check_details["formal_core_frozen"] = f"{type(exc).__name__}: {exc}"
+    disk_ready, disk_detail = minimum_disk_ready(
+        config.runtime_root, float(reliability_config["minimum_free_gib"])
+    )
+    checks["disk_space_ready"] = disk_ready
+    check_details["disk_space_ready"] = disk_detail
     try:
         _resolve_universe(config.runtime_root)
         checks["universe_available"] = True
@@ -324,6 +373,29 @@ def run_preflight(*, package_root: Path, config: CampaignConfig) -> dict[str, An
              "--attestation", str(attestation_path), "--config", str(ai_config_path)],
             cwd=package_root, capture_output=True, text=True, check=False,
         )
+        isolation_stdout = command_log_root / "snapshot_isolation.stdout.log"
+        isolation_stderr = command_log_root / "snapshot_isolation.stderr.log"
+        _write_text(isolation_stdout, isolation_result.stdout)
+        _write_text(isolation_stderr, isolation_result.stderr)
+        _write(command_log_root / "snapshot_isolation.json", {
+            "schema_version": 1,
+            "command": [
+                sys.executable, str(package_root / "scripts/snapshot_isolation.py"),
+                "--backend", str(ai_backend),
+            ],
+            "started_at_et": started.isoformat(),
+            "ended_at_et": datetime.now(ZoneInfo("America/New_York")).isoformat(),
+            "returncode": isolation_result.returncode,
+            "stdout_file": isolation_stdout.name,
+            "stdout_sha256": sha256_file(isolation_stdout),
+            "stderr_file": isolation_stderr.name,
+            "stderr_sha256": sha256_file(isolation_stderr),
+            "environment": {
+                "python_executable": str(Path(sys.executable).resolve()),
+                "python_version": sys.version.split()[0],
+                "ai_backend": ai_backend,
+            },
+        })
         if isolation_result.returncode == 0 and isolation_path.exists():
             checks["ai_isolation"] = _read(isolation_path).get("formal_ai_enabled") is True
             check_details["ai_isolation"] = (
@@ -334,40 +406,58 @@ def run_preflight(*, package_root: Path, config: CampaignConfig) -> dict[str, An
                 isolation_result.stderr.strip() or isolation_result.stdout.strip()
                 or "isolation attestation did not complete"
             )[-2000:]
-    with tempfile.TemporaryDirectory(prefix="shaq-tests-") as temporary:
-        report_path = Path(temporary) / "acceptance.json"
-        result = subprocess.run(
-            [sys.executable, str(package_root / "scripts/run_acceptance_tests.py"),
-             "--output", str(report_path)],
-            cwd=package_root, capture_output=True, text=True, check=False,
-        )
-        if result.returncode == 0 and report_path.exists():
-            report = _read(report_path)
-            checks["release_tests_passed"] = bool(
-                report.get("public_passed") and report.get("release_validator_passed")
+    if checks["ai_backend_available"] and checks["ai_isolation"]:
+        try:
+            probe_audit = probe_ai_backend(
+                config=ai_config,
+                workspace_root=package_root.parent,
+                timeout_seconds=int(reliability_config["health_model_timeout_seconds"]),
             )
-            check_details["release_tests_passed"] = (
-                "passed" if checks["release_tests_passed"] else "release validation reported a failure"
-            )
-            _write(config.runtime_root / "campaign_preflight_tests.json", report)
-        else:
-            check_details["release_tests_passed"] = (
-                result.stderr.strip() or result.stdout.strip() or "acceptance tests did not complete"
-            )[-2000:]
+            checks["ai_model_call"] = True
+            check_details["ai_model_call"] = json.dumps({
+                "model": probe_audit.get("model"),
+                "started_at_et": probe_audit.get("started_at_et"),
+                "completed_at_et": probe_audit.get("completed_at_et"),
+                "prompt_sha256": probe_audit.get("prompt_sha256"),
+                "output_sha256": probe_audit.get("output_sha256"),
+            }, sort_keys=True)
+        except (SandboxedCodexError, OSError, ValueError) as exc:
+            check_details["ai_model_call"] = f"{type(exc).__name__}: {exc}"
+    checks["network_ready"] = checks["sec_access"] and checks["ai_model_call"]
+    check_details["network_ready"] = (
+        "passed" if checks["network_ready"]
+        else "SEC and isolated AI transports must both succeed"
+    )
+    observed = datetime.now(ZoneInfo("America/New_York"))
     value = {
         "schema_version": 1,
         "campaign_id": config.campaign_id,
-        "checked_at_et": datetime.now(ZoneInfo("America/New_York")).isoformat(),
+        "check_id": check_id,
+        "checked_at_et": observed.isoformat(),
         "checks": checks,
         "check_details": check_details,
         "paper_allowed": all(checks.values()),
+        "command_logs": str(command_log_root.relative_to(config.runtime_root)),
     }
     _write(config.runtime_root / "campaign_preflight.json", value)
+    _write(
+        config.runtime_root / "health_checks" / started.date().isoformat()
+        / f"{history_name}.json",
+        value,
+    )
     return value
 
 
 def campaign_rows(config: CampaignConfig) -> list[dict[str, Any]]:
     rows = []
+    campaign_failures: dict[str, dict[str, Any]] = {}
+    for failure_path in sorted((config.runtime_root / "campaign_failures").glob("*.json")):
+        try:
+            failure = _read(failure_path)
+            observed = datetime.fromisoformat(str(failure.get("recorded_at_et", "")))
+            campaign_failures[observed.date().isoformat()] = failure
+        except (OSError, ValueError, json.JSONDecodeError):
+            continue
     for session_date in config.session_dates:
         matches = sorted(config.runtime_root.glob(f"SHAQ-CANARY-{session_date.isoformat()}-*"))
         runtime = matches[-1] if matches else None
@@ -427,6 +517,10 @@ def campaign_rows(config: CampaignConfig) -> list[dict[str, Any]]:
                     item.get("uncovered_realized_move") is True
                     for item in review.get("candidate_diagnostics", [])
                 )
+        elif session_date.isoformat() in campaign_failures:
+            failure = campaign_failures[session_date.isoformat()]
+            row["运行状态"] = "工程故障"
+            row["异常"] = failure.get("error_type", "安全停止")
         rows.append(row)
     return rows
 
@@ -517,6 +611,19 @@ def _record_campaign_failure(
     *, config: CampaignConfig, stage: str, error: Exception
 ) -> None:
     observed = datetime.now(ZoneInfo("America/New_York"))
+    matches = sorted(
+        config.runtime_root.glob(f"SHAQ-CANARY-{observed.date().isoformat()}-*")
+    )
+    runtime = matches[-1] if matches else None
+    journal = _read(runtime / "broker_journal.json") if runtime and (
+        runtime / "broker_journal.json"
+    ).is_file() else {"orders": {}}
+    orders_submitted = any(
+        row.get("broker_order_id")
+        for row in journal.get("orders", {}).values()
+        if isinstance(row, dict)
+    )
+    evidence_ready = bool(runtime and (runtime / "evidence_ready.json").is_file())
     payload = {
         "schema_version": 1,
         "campaign_id": config.campaign_id,
@@ -527,6 +634,20 @@ def _record_campaign_failure(
         "error_type": type(error).__name__,
         "message": str(error),
         "traceback": traceback.format_exc(),
+        "impact": {
+            "formal_path": "stopped",
+            "shadow_paths": "may_continue" if evidence_ready else "stopped_without_frozen_evidence",
+            "orders_submitted": orders_submitted,
+            "backfill_allowed": False,
+        },
+        "trigger_condition": f"{stage}: {type(error).__name__}: {error}",
+        "root_cause_record": "the captured exception and full traceback above are the authoritative failure cause",
+        "remediation_policy": "recover a live dependency before the final gate or deploy a newly certified release; never backfill a forecast",
+        "prevention_controls": [
+            "immutable release certificate",
+            "named live health gate",
+            "formal and Shadow bulkhead isolation",
+        ],
     }
     failure_root = config.runtime_root / "campaign_failures"
     name = f"{observed.strftime('%Y%m%dT%H%M%S%f%z')}-{os.getpid()}.json"
@@ -537,7 +658,10 @@ def _record_campaign_failure(
         pass
 
 
-def run_campaign(*, package_root: Path, config: CampaignConfig, preflight_only: bool = False) -> int:
+def run_campaign(
+    *, package_root: Path, config: CampaignConfig, preflight_only: bool = False,
+    preflight_observer: Callable[[dict[str, Any]], None] | None = None,
+) -> int:
     today_et = datetime.now(ZoneInfo("America/New_York")).date()
     if not preflight_only and today_et not in config.session_dates:
         return 0
@@ -545,42 +669,44 @@ def run_campaign(*, package_root: Path, config: CampaignConfig, preflight_only: 
     stage = "acquire_campaign_lock"
     try:
         with campaign_lock(config.runtime_root / "campaign.lock"):
-            previous_reviews = []
-            for value in config.session_dates:
-                if value >= today_et:
-                    continue
-                matches = sorted(config.runtime_root.glob(f"SHAQ-CANARY-{value.isoformat()}-*"))
-                if not matches:
-                    continue
-                post_root = matches[-1] / "postmortem"
-                if (
-                    (post_root / "postmortem_provisional.json").is_file()
-                    and not (post_root / "postmortem_final.json").exists()
-                ):
-                    previous_reviews.append(value)
-            if previous_reviews:
-                try:
-                    PostmortemRunner(
-                        package_root=package_root, runtime_root=config.runtime_root,
-                        host=config.host, port=config.port,
-                    ).run(session_date=previous_reviews[-1], phase="final")
-                except Exception as exc:
-                    _write(config.runtime_root / "postmortem_finalization_failure.json", {
-                        "schema_version": 1,
-                        "session_date": previous_reviews[-1].isoformat(),
-                        "recorded_at_et": datetime.now(ZoneInfo("America/New_York")).isoformat(),
-                        "error_type": type(exc).__name__,
-                        "message": str(exc),
-                        "formal_prediction_effect": "none",
-                    })
-            stage = "preflight"
-            preflight = run_preflight(package_root=package_root, config=config)
-            write_campaign_views(config)
             if preflight_only:
+                preflight = run_preflight(
+                    package_root=package_root, config=config, check_id="manual"
+                )
+                write_campaign_views(config)
                 return 0 if preflight["paper_allowed"] else 2
             heartbeat = Heartbeat(config, session_date=today_et)
             heartbeat.start()
             try:
+                stage = "dynamic_health_checks"
+                health_times = daily_health_check_times(package_root)
+                preflight = None
+                for health_time in health_times:
+                    target = datetime.combine(
+                        today_et, health_time, ZoneInfo("America/New_York")
+                    )
+                    while datetime.now(ZoneInfo("America/New_York")) < target:
+                        heartbeat.set_stage(f"等待{health_time.isoformat()}动态检查")
+                        remaining = (
+                            target - datetime.now(ZoneInfo("America/New_York"))
+                        ).total_seconds()
+                        time.sleep(min(config.heartbeat_seconds, remaining))
+                    heartbeat.set_stage(f"执行{health_time.isoformat()}动态检查")
+                    preflight = run_preflight(
+                        package_root=package_root,
+                        config=config,
+                        check_id=health_time.strftime("%H%M%S"),
+                    )
+                    if preflight_observer is not None:
+                        preflight_observer(preflight)
+                if preflight is None:
+                    raise CampaignError("no dynamic health check was configured")
+                write_campaign_views(config)
+                if preflight["paper_allowed"] is not True:
+                    failed = [name for name, passed in preflight["checks"].items() if not passed]
+                    raise CampaignError(
+                        "final dynamic health gate failed: " + ", ".join(failed)
+                    )
                 start_at = datetime.combine(
                     today_et, config.workflow_start_et, ZoneInfo("America/New_York")
                 )
@@ -599,10 +725,9 @@ def run_campaign(*, package_root: Path, config: CampaignConfig, preflight_only: 
                     host=config.host,
                     port=config.port,
                 )
-                requested_mode = "paper" if preflight["paper_allowed"] else "shadow"
                 try:
                     workflow.run(
-                        requested_mode=requested_mode,
+                        requested_mode="paper",
                         session_date=today_et,
                         wait=True,
                     )
@@ -612,6 +737,36 @@ def run_campaign(*, package_root: Path, config: CampaignConfig, preflight_only: 
                 stage = "daily_report"
                 heartbeat.set_stage("生成当日审计与汇总")
                 write_campaign_views(config)
+                previous_reviews = []
+                for value in config.session_dates:
+                    if value >= today_et:
+                        continue
+                    matches = sorted(
+                        config.runtime_root.glob(f"SHAQ-CANARY-{value.isoformat()}-*")
+                    )
+                    if not matches:
+                        continue
+                    post_root = matches[-1] / "postmortem"
+                    if (
+                        (post_root / "postmortem_provisional.json").is_file()
+                        and not (post_root / "postmortem_final.json").exists()
+                    ):
+                        previous_reviews.append(value)
+                if previous_reviews:
+                    try:
+                        PostmortemRunner(
+                            package_root=package_root, runtime_root=config.runtime_root,
+                            host=config.host, port=config.port,
+                        ).run(session_date=previous_reviews[-1], phase="final")
+                    except Exception as exc:
+                        _write(config.runtime_root / "postmortem_finalization_failure.json", {
+                            "schema_version": 1,
+                            "session_date": previous_reviews[-1].isoformat(),
+                            "recorded_at_et": datetime.now(ZoneInfo("America/New_York")).isoformat(),
+                            "error_type": type(exc).__name__,
+                            "message": str(exc),
+                            "formal_prediction_effect": "none",
+                        })
                 if today_et == config.session_dates[-1]:
                     stage = "final_summary"
                     build_final_summary_ppt(package_root=package_root, config=config)
@@ -622,4 +777,5 @@ def run_campaign(*, package_root: Path, config: CampaignConfig, preflight_only: 
         return 0
     except Exception as exc:
         _record_campaign_failure(config=config, stage=stage, error=exc)
+        write_campaign_views(config)
         raise

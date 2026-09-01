@@ -13,6 +13,10 @@
     ,"REF-OPENAI-MODEL-001": {"title": "OpenAI Model Selection and Structured Output Guidance", "url": "https://developers.openai.com/api/docs/guides/latest-model"}
     ,"REF-OPENAI-RESPONSES-001": {"title": "OpenAI Responses API Create Response", "url": "https://developers.openai.com/api/reference/resources/responses/methods/create"}
     ,"REF-OPENAI-CODEX-AUTH-001": {"title": "Codex Authentication", "url": "https://learn.chatgpt.com/docs/auth"}
+    ,"REF-GOOGLE-SRE-RELEASE-001": {"title": "Google SRE: Release Engineering", "url": "https://sre.google/sre-book/release-engineering/"}
+    ,"REF-GOOGLE-SRE-POSTMORTEM-001": {"title": "Google SRE: Postmortem Culture", "url": "https://sre.google/sre-book/postmortem-culture/"}
+    ,"REF-SLSA-PROVENANCE-001": {"title": "SLSA Provenance Specification", "url": "https://slsa.dev/spec/v1.2/"}
+    ,"REF-AZURE-BULKHEAD-001": {"title": "Microsoft Azure Bulkhead Pattern", "url": "https://learn.microsoft.com/en-us/azure/architecture/patterns/bulkhead"}
     ,"REF-APPLE-SANDBOX-001": {"title": "Configuring the macOS App Sandbox", "url": "https://developer.apple.com/documentation/xcode/configuring-the-macos-app-sandbox"}
     ,"REF-SEC-FILER-001": {"title": "SEC EDGAR Filer Manual and Document Structure", "url": "https://www.sec.gov/submit-filings/edgar-filer-manual"}
     ,"REF-FUTU-HISTORY-001": {"title": "Futu OpenAPI Historical Candlesticks", "url": "https://openapi.futunn.com/futu-api-doc/en/quote/request-history-kline.html"}
@@ -45,6 +49,10 @@
     ,"DEC-INTEGRATION-001": "Publish only when independent causal-context and market-absorption roots align without an independent opposing root; never substitute Agent counts or hand weights."
     ,"DEC-CANDIDATE-INTAKE-001": "Deep-review cutoff-safe primary-event symbols and the largest absolute stock-minus-sector premarket residuals after an adaptive cross-sectional participation-maturity gate; intake never assigns direction or strength."
     ,"DEC-AI-BACKEND-001": "Formal domain inference uses one governed backend at a time. The default Responses API and an explicitly selected authenticated Codex CLI both receive only inlined frozen evidence and become formal only after their own isolation boundary passes. Any failed boundary check disables AI without fallback."
+    ,"DEC-RELEASE-CERTIFICATE-001": "Run complete development and release validation before the trading window, bind the result to exact code, configuration, dependencies and AI backend, and verify only the certificate during the live window."
+    ,"DEC-DYNAMIC-HEALTH-001": "During the live window check only mutable dependencies on a governed schedule; a failed final gate prevents formal inference and orders."
+    ,"DEC-FAILURE-VISIBILITY-001": "Every failure preserves full command logs, refreshes derived status immediately and emits a local operator notification."
+    ,"DEC-RELIABLE-RUN-001": "Use a certified release, scheduled dynamic health gates and fault-isolated formal and research branches without changing forecasting semantics."
     ,"DEC-SEC-VIEW-001": "Archive the complete SEC submission and give AI only a deterministic, reproducible visible-text view of configured filing documents; never summarize or truncate to fit."
     ,"DEC-PRICE-HISTORY-001": "Give price-volume analysis only T-1 unadjusted regular-session paths and lineage-bound stock-sector premarket residual context; unavailable histories do not receive substitutes."
     ,"DEC-DEEP-EVIDENCE-001": "Collect relationship context, event-level order flow and option distributions with explicit provider status; never infer unavailable semantics."
@@ -62,6 +70,7 @@
     "EXP-SHAQ-NET-EV-001": "Prospective SHAQ net expected-value and concentration gate.",
     "EXP-CAPITAL-TIME-001": "Prospective capital-observation timing and contiguous-segmentation repair beginning 2026-08-31.",
     "EXP-DESKTOP-API-001": "Prospective desktop-run identity using the governed OpenAI Responses API boundary beginning 2026-08-31.",
-    "EXP-DESKTOP-CODEX-001": "Prospective local paper-run identity using the governed Codex login and macOS isolation boundary beginning 2026-09-01."
+    "EXP-DESKTOP-CODEX-001": "Prospective local paper-run identity using the governed Codex login and macOS isolation boundary beginning 2026-09-01.",
+    "EXP-RELIABLE-RUN-001": "Prospective certified and fault-isolated runtime identity beginning 2026-09-02."
   }
 }

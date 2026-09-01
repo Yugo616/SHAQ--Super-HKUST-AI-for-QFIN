@@ -19,6 +19,7 @@ from .identity import resolve_runtime_identity
 from .lineage import build_lineage_graph
 from .market_calendar import previous_market_session
 from .reports import write_reports
+from .reliability import certificate_path_for_runtime, write_release_receipt
 from .run import freeze_run
 from .schedule import formal_mode, session_times
 from .tasks import build_blind_domain_tasks
@@ -132,13 +133,35 @@ class Workflow:
         self.active_runtime: Path | None = None
 
     def _script(self, name: str, *arguments: str) -> None:
+        started = self.now()
+        command = [sys.executable, str(self.package_root / "scripts" / name), *arguments]
         result = subprocess.run(
-            [sys.executable, str(self.package_root / "scripts" / name), *arguments],
+            command,
             cwd=self.package_root,
             text=True,
             capture_output=True,
             check=False,
         )
+        if self.active_runtime is not None:
+            token = started.strftime("%Y%m%dT%H%M%S%f%z")
+            log_root = self.active_runtime / "command_logs"
+            stdout = log_root / f"{token}-{name}.stdout.log"
+            stderr = log_root / f"{token}-{name}.stderr.log"
+            stdout.parent.mkdir(parents=True, exist_ok=True)
+            stdout.write_text(result.stdout, encoding="utf-8")
+            stderr.write_text(result.stderr, encoding="utf-8")
+            _write(log_root / f"{token}-{name}.json", {
+                "schema_version": 1,
+                "name": name,
+                "command": command,
+                "started_at_et": started.isoformat(),
+                "ended_at_et": self.now().isoformat(),
+                "returncode": result.returncode,
+                "stdout_file": stdout.name,
+                "stdout_sha256": sha256_file(stdout),
+                "stderr_file": stderr.name,
+                "stderr_sha256": sha256_file(stderr),
+            })
         if result.returncode:
             message = (result.stderr or result.stdout).strip()
             raise WorkflowError(f"{name} failed: {message[-2000:]}")
@@ -318,11 +341,13 @@ class Workflow:
             shutil.copy2(universe_manifest, runtime / "universe/active_manifest.json")
 
         tests = runtime / "tests_report.json"
-        self._stage(runtime, "release_preflight", [tests], lambda: self._script(
-            "run_acceptance_tests.py", "--output", str(tests)
+        release_certificate = certificate_path_for_runtime(self.runtime_root)
+        self._stage(runtime, "release_preflight", [tests], lambda: write_release_receipt(
+            output=tests,
+            package_root=self.package_root,
+            ai_config_path=self.ai_config_path,
+            certificate_path=release_certificate,
         ))
-        if not _read(tests).get("public_passed") or not _read(tests).get("release_validator_passed"):
-            mode = "shadow"
         if wait and self.now() < schedule["precheck_start"]:
             self._wait(schedule["precheck_start"])
         if self.now() > schedule["evidence_cutoff"] and not resuming:
@@ -471,6 +496,28 @@ class Workflow:
                 })
             _write(availability_path, {"schema_version": 7, "statuses": statuses})
         self._stage(runtime, "domain_availability", [availability_path], write_availability)
+
+        evidence_ready_path = runtime / "evidence_ready.json"
+        def write_evidence_ready() -> None:
+            unsigned = {
+                "schema_version": 1,
+                "run_id": run_id,
+                "trade_date": trade_date.isoformat(),
+                "cutoff_et": analysis_cutoff,
+                "system_identity": _read(initial)["system_identity"],
+                "artifacts": {
+                    path.name: sha256_file(path)
+                    for path in (
+                        intake, evidence_manifest, lineage_path, tasks_path,
+                        availability_path,
+                    )
+                },
+                "release_certificate_sha256": _read(tests)["release_certificate_sha256"],
+            }
+            _write(evidence_ready_path, {
+                **unsigned, "evidence_ready_sha256": sha256_payload(unsigned),
+            })
+        self._stage(runtime, "evidence_ready", [evidence_ready_path], write_evidence_ready)
 
         isolation_status = runtime / "isolation_status.json"
         attestation = runtime / "isolation_attestation.json"
@@ -760,6 +807,14 @@ class Workflow:
             "message": str(error),
             "orders_submitted": orders_submitted,
         }
+        if (runtime / "evidence_ready.json").is_file():
+            branch_path = runtime / "formal_branch_failure.json"
+            if not branch_path.exists():
+                _write(branch_path, {
+                    **payload,
+                    "evidence_ready_sha256": sha256_file(runtime / "evidence_ready.json"),
+                    "shadow_effect": "none",
+                })
         if self.active_runtime is None:
             failure_path = runtime / "workflow_failure.json"
         else:

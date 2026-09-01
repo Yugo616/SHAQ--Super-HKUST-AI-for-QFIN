@@ -17,9 +17,24 @@
       "effective_from_et": "2026-08-30T23:59:59-04:00",
       "formal_integration": "prov_root_set_gate",
       "legacy_integration_role": "internal_shadow_only"
+    },
+    {
+      "identity": "SHAQ-RELIABLE-RUN-2026-09-02",
+      "effective_from_et": "2026-09-02T00:00:00-04:00",
+      "formal_integration": "prov_root_set_gate",
+      "runtime_reliability": "certified_release_dynamic_health_bulkhead_v1",
+      "legacy_integration_role": "internal_shadow_only"
+    },
+    {
+      "identity": "SHAQ-RELIABLE-RUN-2026-09-02-R2",
+      "effective_from_et": "2026-09-02T00:00:01-04:00",
+      "formal_integration": "prov_root_set_gate",
+      "runtime_reliability": "certified_release_dynamic_health_bulkhead_v1",
+      "supersedes": "SHAQ-RELIABLE-RUN-2026-09-02",
+      "legacy_integration_role": "internal_shadow_only"
     }
   ],
   "parameter_bindings": {
-    "identities": ["REF-OPENAI-RESPONSES-001", "DEC-AI-BACKEND-001", "EXP-DESKTOP-API-001"]
+    "identities": ["REF-GOOGLE-SRE-RELEASE-001", "DEC-RELIABLE-RUN-001", "EXP-RELIABLE-RUN-001"]
   }
 }

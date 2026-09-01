@@ -71,6 +71,10 @@ REQUIRED_CONFIG_BINDINGS = {
         "automatic_production_mutation_allowed", "approved_reference_ids",
         "postmortem_pipeline_identity",
     },
+    "reliability.json": {
+        "certification_repetitions", "daily_health_check_times_et",
+        "health_model_timeout_seconds", "minimum_free_gib", "notification_title",
+    },
 }
 
 

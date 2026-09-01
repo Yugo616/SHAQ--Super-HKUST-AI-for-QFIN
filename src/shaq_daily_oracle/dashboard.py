@@ -176,13 +176,26 @@ class DashboardIndex:
                 "COALESCE(SUM(fees), 0) AS fees FROM runs WHERE audit_valid = 1 AND excluded = 0"
             ).fetchone())
         latest = self.run_detail(rows[0]["run_id"]) if rows else None
+        health = _read(self.runtime_root / "service_status.json", {})
+        incident = _read(self.runtime_root / "campaign_failure_latest.json", {})
+        if incident:
+            health = {**health, "latest_incident": {
+                "recorded_at_et": incident.get("recorded_at_et"),
+                "stage": incident.get("stage"),
+                "error_type": incident.get("error_type"),
+                "message": incident.get("message"),
+                "impact": incident.get("impact"),
+            }}
+        shadow_incident = _read(self.runtime_root / "shadow_failure_latest.json", {})
+        if shadow_incident:
+            health = {**health, "latest_shadow_incident": shadow_incident}
         return {
             "generated_at_et": datetime.now(ZoneInfo("America/New_York")).isoformat(),
             "runs": rows,
             "totals": totals,
             "performance": self._performance(rows),
             "latest": latest,
-            "health": _read(self.runtime_root / "service_status.json", {}),
+            "health": health,
         }
 
     def _performance(self, run_rows: list[dict[str, Any]]) -> dict[str, Any]:

@@ -25,6 +25,7 @@ from shaq_daily_oracle.sandboxed_codex import (
     _inference_call,
     _openai_call,
     attest_openai_responses,
+    probe_ai_backend,
 )
 from shaq_daily_oracle.workflow import Workflow
 from shaq_daily_oracle.settings import SettingsStore
@@ -155,6 +156,29 @@ class DesktopFoundationTests(unittest.TestCase):
                 )
             codex.assert_not_called()
 
+    def test_live_ai_probe_requires_the_exact_ready_response(self) -> None:
+        audit = {"model": "gpt-test", "prompt_sha256": "a", "output_sha256": "b"}
+        with patch(
+            "shaq_daily_oracle.sandboxed_codex._inference_call",
+            return_value=({"status": "ready"}, audit),
+        ):
+            self.assertEqual(
+                probe_ai_backend(
+                    config=self.ai_config(), workspace_root=ROOT.parent,
+                    timeout_seconds=60,
+                ),
+                audit,
+            )
+        with patch(
+            "shaq_daily_oracle.sandboxed_codex._inference_call",
+            return_value=({"status": "not-ready"}, audit),
+        ):
+            with self.assertRaises(SandboxedCodexError):
+                probe_ai_backend(
+                    config=self.ai_config(), workspace_root=ROOT.parent,
+                    timeout_seconds=60,
+                )
+
     def test_setup_keeps_key_out_of_files_and_writes_effective_backend(self) -> None:
         with tempfile.TemporaryDirectory() as name:
             paths = self.paths(Path(name))
@@ -265,6 +289,75 @@ class DesktopFoundationTests(unittest.TestCase):
             self.assertEqual(status["state"], "missed_daily_cutoff")
             self.assertFalse(any(paths.runtime_root.glob("SHAQ-CANARY-*-*")))
 
+    def test_corrected_engineering_failure_is_never_resumed(self) -> None:
+        class FixedDateTime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return cls(2026, 9, 1, 11, 30, tzinfo=tz)
+
+        with tempfile.TemporaryDirectory() as name:
+            paths = self.paths(Path(name))
+            runtime = paths.runtime_root / "SHAQ-CANARY-2026-09-01-001"
+            runtime.mkdir()
+            (runtime / "workflow_identity.json").write_text("{}", encoding="utf-8")
+            (runtime / "correction_2026-09-01.json").write_text(json.dumps({
+                "backfill_allowed": False,
+                "excluded_from_professor_summary": True,
+            }), encoding="utf-8")
+            ready = {
+                **SettingsStore(paths).load(), "setup_complete": True,
+                "automatic_run_enabled": True,
+            }
+            session = SimpleNamespace(
+                session_date=date(2026, 9, 1),
+                market_close=FixedDateTime(
+                    2026, 9, 1, 16, 0, tzinfo=ZoneInfo("America/New_York")
+                ),
+            )
+            with patch.object(SettingsStore, "load", return_value=ready), patch.object(
+                SettingsStore, "apply_to_environment", return_value={}
+            ), patch("shaq_daily_oracle.service.market_session", return_value=session), patch(
+                "shaq_daily_oracle.service.datetime", FixedDateTime
+            ), patch("shaq_daily_oracle.service.run_campaign") as campaign:
+                result = run_worker(paths=paths, once=True)
+            self.assertEqual(result, 0)
+            campaign.assert_not_called()
+            status = json.loads((paths.runtime_root / "service_status.json").read_text())
+            self.assertEqual(status["state"], "missed_daily_cutoff")
+            self.assertFalse(status["orders_submitted"])
+
+    def test_single_worker_owns_the_due_postmortem(self) -> None:
+        class FixedDateTime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return cls(2026, 9, 2, 16, 6, tzinfo=tz)
+
+        with tempfile.TemporaryDirectory() as name:
+            paths = self.paths(Path(name))
+            runtime = paths.runtime_root / "SHAQ-CANARY-2026-09-02-001"
+            runtime.mkdir()
+            (runtime / "audit_complete.json").write_text("{}", encoding="utf-8")
+            ready = {
+                **SettingsStore(paths).load(), "setup_complete": True,
+                "automatic_run_enabled": True,
+            }
+            session = SimpleNamespace(
+                session_date=date(2026, 9, 2),
+                market_close=FixedDateTime(
+                    2026, 9, 2, 16, 0, tzinfo=ZoneInfo("America/New_York")
+                ),
+            )
+            with patch.object(SettingsStore, "load", return_value=ready), patch.object(
+                SettingsStore, "apply_to_environment", return_value={}
+            ), patch("shaq_daily_oracle.service.market_session", return_value=session), patch(
+                "shaq_daily_oracle.service.datetime", FixedDateTime
+            ), patch("shaq_daily_oracle.service.PostmortemRunner") as runner:
+                result = run_worker(paths=paths, once=True)
+            self.assertEqual(result, 0)
+            runner.return_value.run.assert_called_once_with(
+                session_date=date(2026, 9, 2), phase="provisional"
+            )
+
     def test_campaign_worker_starts_one_research_companion(self) -> None:
         class FixedDateTime(datetime):
             @classmethod
@@ -299,6 +392,51 @@ class DesktopFoundationTests(unittest.TestCase):
                 )
             self.assertEqual(result, 0)
             self.assertEqual(companion_calls, ["called"])
+
+    def test_shadow_failure_does_not_fail_the_formal_campaign(self) -> None:
+        class FixedDateTime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return cls(2026, 9, 2, 8, 16, tzinfo=tz)
+
+        with tempfile.TemporaryDirectory() as name:
+            paths = self.paths(Path(name))
+            (paths.data_root / "campaign.json").write_text(json.dumps({
+                "campaign_id": "test", "session_dates": ["2026-09-02"],
+                "runtime_root": str(paths.runtime_root), "workflow_start_et": "08:20:00",
+                "heartbeat_seconds": 30, "active_health_seconds": 60,
+                "idle_health_seconds": 300, "opend_host": "127.0.0.1", "opend_port": 11111,
+            }), encoding="utf-8")
+            ready = {
+                **SettingsStore(paths).load(), "setup_complete": True,
+                "automatic_run_enabled": True,
+            }
+            session = SimpleNamespace(
+                session_date=date(2026, 9, 2),
+                market_close=FixedDateTime(2026, 9, 2, 16, 0, tzinfo=ZoneInfo("America/New_York")),
+            )
+
+            def broken_shadow() -> None:
+                raise RuntimeError("shadow failed")
+
+            with patch.object(SettingsStore, "load", return_value=ready), patch.object(
+                SettingsStore, "apply_to_environment", return_value={}
+            ), patch("shaq_daily_oracle.service.market_session", return_value=session), patch(
+                "shaq_daily_oracle.service.datetime", FixedDateTime
+            ), patch("shaq_daily_oracle.service.run_campaign", return_value=0), patch(
+                "shaq_daily_oracle.service._notify"
+            ):
+                result = run_worker(
+                    paths=paths, once=True, research_companion=broken_shadow,
+                )
+            self.assertEqual(result, 0)
+            status = json.loads((paths.runtime_root / "service_status.json").read_text())
+            self.assertEqual(status["state"], "research_companion_failed")
+            self.assertEqual(status["formal_prediction_effect"], "none")
+            shadow_failure = json.loads(
+                (paths.runtime_root / "shadow_failure_latest.json").read_text()
+            )
+            self.assertFalse(shadow_failure["orders_submitted"])
 
     def test_dashboard_is_disposable_and_rebuilds_from_frozen_sources(self) -> None:
         with tempfile.TemporaryDirectory() as name:
@@ -344,6 +482,14 @@ class DesktopFoundationTests(unittest.TestCase):
             paths.dashboard_db.unlink()
             second = index.overview()
             self.assertEqual(first["runs"], second["runs"])
+            (paths.runtime_root / "campaign_failure_latest.json").write_text(json.dumps({
+                "recorded_at_et": "2026-08-31T07:45:00-04:00",
+                "stage": "dynamic_health_checks", "error_type": "CampaignError",
+                "message": "OpenD unavailable", "impact": {"orders_submitted": False},
+            }), encoding="utf-8")
+            incident = index.overview()["health"]["latest_incident"]
+            self.assertEqual(incident["stage"], "dynamic_health_checks")
+            self.assertFalse(incident["impact"]["orders_submitted"])
             (runtime / "correction_2026-08-30.json").write_text(json.dumps({
                 "status": "audit_correction",
                 "professor_summary_policy": "This run remains excluded from professor performance summaries.",

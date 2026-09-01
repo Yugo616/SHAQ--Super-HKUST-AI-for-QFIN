@@ -89,7 +89,9 @@ The developer command remains available and calls the same workflow service:
 daily-oracle run --mode paper
 ```
 
-It starts preflight at 08:35 ET, freezes evidence at 08:50, freezes the forecast by 09:00, opens eligible one-share `SIMULATE` positions during 09:30–09:35, and exits during 15:55–15:58. Re-running the command resumes immutable stage files and broker idempotency keys.
+Before a version can run, the same background environment must certify the exact code, configuration, Skills, Python runtime, dependencies and AI backend with three consecutive full test runs. That immutable certificate becomes invalid after any change. On each trading day, the watcher checks only conditions that can change—Codex, OpenD, SEC access, the stock universe, the NYSE calendar, the system clock, network and disk—at 07:45, 08:00, 08:15 and 08:30 ET. It freezes evidence at 08:50, freezes the forecast by 09:00, opens eligible one-share `SIMULATE` positions during 09:30–09:35, and exits during 15:55–15:58. Re-running the command resumes immutable stage files and broker idempotency keys.
+
+The frozen evidence is shared by three isolated paths: the formal path, a continuation/reversal research Shadow and a no-capital-flow Shadow. The formal path never waits for a Shadow, and a Shadow can never submit an order. If the evidence itself misses 08:50, all three paths stop. This follows release-artifact discipline from Google SRE and SLSA, and fault isolation from the Azure Bulkhead pattern.
 
 The command invokes the six skills internally. Reviewers consume `professor_report.html` and `agent_trace.html`; they do not need to know Skill names or write prompts. Only `daily-oracle` allows implicit Skill invocation. The domain skills and adversary are internal components.
 

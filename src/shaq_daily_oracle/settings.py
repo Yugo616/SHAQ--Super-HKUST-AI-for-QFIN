@@ -28,7 +28,7 @@ def default_settings() -> dict[str, Any]:
         "opend_port": 11111,
         "universe_file": "",
         "automatic_run_enabled": False,
-        "automatic_start_et": "08:15:00",
+        "automatic_start_et": "07:45:00",
     }
 
 

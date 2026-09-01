@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "certification_repetitions": 3,
+  "daily_health_check_times_et": ["07:45:00", "08:00:00", "08:15:00", "08:30:00"],
+  "health_model_timeout_seconds": 60,
+  "minimum_free_gib": 5.0,
+  "notification_title": "SHAQ Daily Oracle",
+  "parameter_bindings": {
+    "certification_repetitions": ["REF-GOOGLE-SRE-RELEASE-001", "DEC-RELEASE-CERTIFICATE-001", "EXP-RELIABLE-RUN-001"],
+    "daily_health_check_times_et": ["REF-GOOGLE-SRE-RELEASE-001", "DEC-DYNAMIC-HEALTH-001", "EXP-RELIABLE-RUN-001"],
+    "health_model_timeout_seconds": ["REF-OPENAI-CODEX-AUTH-001", "DEC-DYNAMIC-HEALTH-001", "EXP-RELIABLE-RUN-001"],
+    "minimum_free_gib": ["REF-GOOGLE-SRE-RELEASE-001", "DEC-DYNAMIC-HEALTH-001", "EXP-RELIABLE-RUN-001"],
+    "notification_title": ["REF-GOOGLE-SRE-POSTMORTEM-001", "DEC-FAILURE-VISIBILITY-001", "EXP-RELIABLE-RUN-001"]
+  }
+}

@@ -18,14 +18,34 @@ from zoneinfo import ZoneInfo
 from filelock import FileLock, Timeout
 
 from .app_paths import AppPaths
-from .campaign import CampaignConfig, run_campaign
+from .campaign import CampaignConfig, run_campaign, write_campaign_views
 from .market_calendar import market_session, next_market_session
+from .postmortem_runner import PostmortemRunner
 from .settings import SettingsStore, _atomic_json
 from .workflow import Workflow
 
 
 class ServiceError(RuntimeError):
     """The desktop watcher could not start or register safely."""
+
+
+def _notify(paths: AppPaths, *, title: str, message: str, category: str) -> None:
+    observed = datetime.now(ZoneInfo("America/New_York"))
+    token = observed.strftime("%Y%m%dT%H%M%S%f%z")
+    _atomic_json(paths.runtime_root / "notifications" / f"{token}.json", {
+        "schema_version": 1,
+        "recorded_at_et": observed.isoformat(),
+        "category": category,
+        "title": title,
+        "message": message,
+    })
+    if platform.system() == "Darwin":
+        escaped_title = title.replace("\\", "\\\\").replace('"', '\\"')
+        escaped_message = message.replace("\\", "\\\\").replace('"', '\\"')
+        subprocess.run(
+            ["osascript", "-e", f'display notification "{escaped_message}" with title "{escaped_title}"'],
+            capture_output=True, text=True, check=False,
+        )
 
 
 def _worker_command() -> list[str]:
@@ -50,10 +70,23 @@ def _has_completed_session(paths: AppPaths, session_date: str) -> bool:
 
 
 def _has_resumable_session(paths: AppPaths, session_date: str) -> bool:
-    return any(
-        (runtime / "workflow_identity.json").is_file()
-        for runtime in paths.runtime_root.glob(f"SHAQ-CANARY-{session_date}-*")
-    )
+    for runtime in paths.runtime_root.glob(f"SHAQ-CANARY-{session_date}-*"):
+        if not (runtime / "workflow_identity.json").is_file():
+            continue
+        corrections = []
+        for correction_path in runtime.glob("correction_*.json"):
+            try:
+                corrections.append(json.loads(correction_path.read_text(encoding="utf-8")))
+            except (OSError, json.JSONDecodeError):
+                return False
+        if any(
+            correction.get("backfill_allowed") is False
+            or correction.get("excluded_from_professor_summary") is True
+            for correction in corrections
+        ):
+            continue
+        return True
+    return False
 
 
 def run_worker(
@@ -69,6 +102,7 @@ def run_worker(
         return 0
     store = SettingsStore(paths)
     attempted_sessions: set[str] = set()
+    notified_health_failure = False
     try:
         while True:
             settings = store.load()
@@ -112,6 +146,59 @@ def run_worker(
                     return 0
                 continue
             if _has_completed_session(paths, session.session_date.isoformat()):
+                matches = sorted(
+                    paths.runtime_root.glob(
+                        f"SHAQ-CANARY-{session.session_date.isoformat()}-*"
+                    )
+                )
+                runtime = matches[-1]
+                provisional = runtime / "postmortem/postmortem_provisional.json"
+                postmortem_config = json.loads(
+                    (paths.package_root / "config/postmortem.json").read_text(encoding="utf-8")
+                )
+                review_at = datetime.combine(
+                    session.session_date,
+                    clock_time.fromisoformat(
+                        str(postmortem_config["provisional_capture_after_et"])
+                    ),
+                    ZoneInfo("America/New_York"),
+                )
+                if not provisional.is_file() and now_et >= review_at:
+                    try:
+                        PostmortemRunner(
+                            package_root=paths.package_root,
+                            runtime_root=paths.runtime_root,
+                            host=str(settings["opend_host"]),
+                            port=int(settings["opend_port"]),
+                        ).run(session_date=session.session_date, phase="provisional")
+                        campaign_path = paths.data_root / "campaign.json"
+                        if campaign_path.is_file():
+                            write_campaign_views(CampaignConfig.load(campaign_path))
+                        _write_status(paths, {
+                            "state": "postmortem_complete",
+                            "session": session.session_date.isoformat(),
+                        })
+                    except Exception as exc:
+                        _write_status(paths, {
+                            "state": "postmortem_failed",
+                            "session": session.session_date.isoformat(),
+                            "error_type": type(exc).__name__, "message": str(exc),
+                            "formal_prediction_effect": "none",
+                        })
+                    if once:
+                        return 0
+                    time.sleep(300)
+                    continue
+                if not provisional.is_file() and now_et < review_at:
+                    _write_status(paths, {
+                        "state": "waiting_for_postmortem",
+                        "session": session.session_date.isoformat(),
+                        "next_start_et": review_at.isoformat(),
+                    })
+                    if once:
+                        return 0
+                    time.sleep(min(300, max(30, int((review_at - now_et).total_seconds()))))
+                    continue
                 _write_status(paths, {"state": "session_already_recorded"})
                 if once:
                     return 0
@@ -154,6 +241,10 @@ def run_worker(
             if campaign_path.is_file():
                 campaign = CampaignConfig.load(campaign_path)
                 if session.session_date in campaign.session_dates:
+                    reliability = json.loads(
+                        (paths.package_root / "config/reliability.json").read_text(encoding="utf-8")
+                    )
+                    notification_title = str(reliability["notification_title"])
                     companion_error: list[Exception] = []
                     companion_thread = None
                     if research_companion is not None:
@@ -162,6 +253,21 @@ def run_worker(
                                 research_companion()
                             except Exception as exc:
                                 companion_error.append(exc)
+                                observed = datetime.now(ZoneInfo("America/New_York"))
+                                _atomic_json(paths.runtime_root / "shadow_failure_latest.json", {
+                                    "schema_version": 1,
+                                    "recorded_at_et": observed.isoformat(),
+                                    "session": session.session_date.isoformat(),
+                                    "error_type": type(exc).__name__,
+                                    "message": str(exc),
+                                    "formal_prediction_effect": "none",
+                                    "orders_submitted": False,
+                                })
+                                _notify(
+                                    paths, title=notification_title,
+                                    message="研究Shadow失败；正式版不受影响。",
+                                    category="shadow_failed",
+                                )
 
                         companion_thread = threading.Thread(
                             target=run_companion,
@@ -170,8 +276,33 @@ def run_worker(
                         )
                         companion_thread.start()
                     campaign_failed = False
+
+                    def observe_preflight(preflight: dict[str, Any]) -> None:
+                        nonlocal notified_health_failure
+                        failed = [
+                            name for name, passed in preflight.get("checks", {}).items()
+                            if not passed
+                        ]
+                        if failed and not notified_health_failure:
+                            notified_health_failure = True
+                            _notify(
+                                paths, title=notification_title,
+                                message="盘前检查失败：" + "、".join(failed) + "；尚未下单。",
+                                category="health_gate_failed",
+                            )
+                        elif not failed and notified_health_failure:
+                            notified_health_failure = False
+                            _notify(
+                                paths, title=notification_title,
+                                message="盘前检查已恢复，正式流程可以继续。",
+                                category="health_gate_recovered",
+                            )
                     try:
-                        result = run_campaign(package_root=paths.package_root, config=campaign)
+                        result = run_campaign(
+                            package_root=paths.package_root,
+                            config=campaign,
+                            preflight_observer=observe_preflight,
+                        )
                         if result != 0:
                             raise ServiceError(f"campaign returned fail-closed status {result}")
                         _write_status(paths, {
@@ -179,10 +310,25 @@ def run_worker(
                         })
                     except Exception as exc:
                         campaign_failed = True
+                        incident_path = paths.runtime_root / "campaign_failure_latest.json"
+                        incident = (
+                            json.loads(incident_path.read_text(encoding="utf-8"))
+                            if incident_path.is_file() else {}
+                        )
+                        failed_stage = str(incident.get("stage") or type(exc).__name__)
                         _write_status(paths, {
                             "state": "workflow_failed", "error_type": type(exc).__name__,
                             "message": str(exc), "session": session.session_date.isoformat(),
+                            "stage": failed_stage,
+                            "orders_submitted": bool(
+                                incident.get("impact", {}).get("orders_submitted", False)
+                            ),
                         })
+                        _notify(
+                            paths, title=notification_title,
+                            message=f"正式流程在{failed_stage}失败；请查看仪表盘，系统不会补票。",
+                            category="formal_workflow_failed",
+                        )
                     if companion_thread is not None:
                         companion_thread.join(timeout=5)
                     if companion_error:

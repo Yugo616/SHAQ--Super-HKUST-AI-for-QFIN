@@ -555,6 +555,30 @@ def _inference_call(
     raise SandboxedCodexError(f"unsupported AI backend: {backend}")
 
 
+def probe_ai_backend(
+    *, config: dict[str, Any], workspace_root: Path, timeout_seconds: int,
+) -> dict[str, Any]:
+    """Make one minimal, tool-free model call before the prediction window."""
+
+    probe_config = dict(_load_config(config))
+    probe_config["timeout_seconds"] = int(timeout_seconds)
+    schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["status"],
+        "properties": {"status": {"type": "string", "const": "ready"}},
+    }
+    result, audit = _inference_call(
+        prompt='Return exactly the structured status {"status":"ready"}.',
+        schema=schema,
+        config=probe_config,
+        workspace_root=workspace_root,
+    )
+    if result != {"status": "ready"}:
+        raise SandboxedCodexError("AI health probe returned an unexpected result")
+    return audit
+
+
 def _load_config(config: dict[str, Any]) -> dict[str, Any]:
     required = (
         "backend", "model", "reasoning_effort", "timeout_seconds",

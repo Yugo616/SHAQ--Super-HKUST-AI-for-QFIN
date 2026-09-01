@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,7 @@ from .labels import LABEL_DOCUMENT_KEYS, LabelError, validate_label_document
 from .price_history import PriceHistoryError, build_price_history_analysis
 from .readiness import ReadinessError, build_prospective_evaluations
 from .sec_view import SecViewError, build_sec_analysis_text
+from .reliability import ReliabilityError, verify_release_certificate
 
 
 class AuditError(ValueError):
@@ -366,6 +368,26 @@ def audit_runtime(runtime: str | Path, stage: str) -> dict[str, Any]:
         or tests.get("plugin_validator_passed") is False
     ):
         raise AuditError("test report is not green")
+    if int(tests.get("schema_version", 6)) >= 7:
+        if tests.get("release_certificate_valid") is not True:
+            raise AuditError("runtime lacks a valid release certificate receipt")
+        certificate_path = Path(str(tests.get("release_certificate_path", "")))
+        ai_config_path = Path(
+            os.environ.get(
+                "DAILY_ORACLE_AI_CONFIG",
+                str(Path(__file__).resolve().parents[2] / "config/ai-backend.json"),
+            )
+        ).expanduser().resolve()
+        try:
+            verify_release_certificate(
+                package_root=Path(__file__).resolve().parents[2],
+                ai_config_path=ai_config_path,
+                certificate_path=certificate_path,
+            )
+        except ReliabilityError as exc:
+            raise AuditError(f"release certificate verification failed: {exc}") from exc
+        if sha256_file(certificate_path) != tests.get("release_certificate_sha256"):
+            raise AuditError("runtime release receipt differs from its certificate")
     if len(placeholders.get("labels", [])) != len(predictions):
         raise AuditError("label placeholder count differs from forecast count")
     external = set(intents.get("external_positions", []))
@@ -380,7 +402,7 @@ def audit_runtime(runtime: str | Path, stage: str) -> dict[str, Any]:
     checked = [
         "frozen_hash", "candidate_intake_binding", "integration_policy_binding", "effective_universe_lineage", "six_domain_reports", "non_voting_adversary",
         "probability_null", "raw_evidence_rehash", "formal_ai_isolation", "simulate_only", "broker_snapshot_binding", "external_position_isolation",
-        "configured_share_cap", "label_placeholders", "public_and_legacy_tests",
+        "configured_share_cap", "label_placeholders", "certified_release",
     ]
     if stage == "complete":
         journal = _read(root, "broker_journal.json")
