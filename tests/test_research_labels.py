@@ -98,7 +98,7 @@ class ResearchLabelTests(unittest.TestCase):
         runner = ResearchBatchRunner(
             batches_root=root / "batches", cache_root=root / "cache",
             registry=registry,
-            integration_policy=json.loads((PACKAGE_ROOT / "config/integration.json").read_text()),
+                integration_policy=json.loads((PACKAGE_ROOT / "config/integration.json").read_text(encoding="utf-8")),
         )
         result = runner.run(
             evidence=evidence, variants=[main], profile=profile,
@@ -117,7 +117,7 @@ class ResearchLabelTests(unittest.TestCase):
                 market_provider=LabelMarket(),
             )
             label_path = root / "batches" / batch_id / "labels.json"
-            provisional = json.loads(label_path.read_text())["labels"]["AAPL"]
+            provisional = json.loads(label_path.read_text(encoding="utf-8"))["labels"]["AAPL"]
             dashboard = ResearchDashboardIndex(
                 batches_root=root / "batches", database=root / "index.sqlite3"
             )
@@ -127,7 +127,7 @@ class ResearchLabelTests(unittest.TestCase):
                 observed_at=datetime(2026, 9, 6, 9, tzinfo=ZoneInfo("America/New_York")),
                 market_provider=LabelMarket(),
             )
-            final = json.loads(label_path.read_text())["labels"]["AAPL"]
+            final = json.loads(label_path.read_text(encoding="utf-8"))["labels"]["AAPL"]
             after = dashboard.overview()
         self.assertEqual(first["refreshed_batches"], [batch_id])
         self.assertEqual(second["refreshed_batches"], [batch_id])

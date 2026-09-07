@@ -131,7 +131,7 @@ class ResearchBatchTests(unittest.TestCase):
         return LocalSkillRegistry(root=root / "registry", package_skills=PACKAGE_ROOT / "skills")
 
     def policy(self):
-        return json.loads((PACKAGE_ROOT / "config/integration.json").read_text())
+        return json.loads((PACKAGE_ROOT / "config/integration.json").read_text(encoding="utf-8"))
 
     def profile(self):
         return ModelProfile(
@@ -180,9 +180,9 @@ class ResearchBatchTests(unittest.TestCase):
             batch_root = Path(result["batch_root"])
             skill_snapshot_count = len(list((batch_root / "skills").glob("*.json")))
             model_call_count = len(list((batch_root / "model_calls").glob("*.json")))
-            call = json.loads(next((batch_root / "model_calls").glob("*.json")).read_text())
+            call = json.loads(next((batch_root / "model_calls").glob("*.json")).read_text(encoding="utf-8"))
             skill_snapshot = json.loads(
-                next((batch_root / "skills").glob("*.json")).read_text()
+                next((batch_root / "skills").glob("*.json")).read_text(encoding="utf-8")
             )
         self.assertTrue(result["status"]["all_variants_completed"])
         self.assertEqual(len(result["results"]), 3)
@@ -320,7 +320,7 @@ class ResearchBatchTests(unittest.TestCase):
                 profile=self.profile(), secret="secret", caller=FakeModel(),
             )
             call_path = next((Path(result["batch_root"]) / "model_calls").glob("*.json"))
-            call = json.loads(call_path.read_text())
+            call = json.loads(call_path.read_text(encoding="utf-8"))
             call["prompt"] += "\nTAMPERED"
             call_path.write_text(json.dumps(call), encoding="utf-8")
             dashboard = ResearchDashboardIndex(
@@ -346,7 +346,7 @@ class ResearchBatchTests(unittest.TestCase):
                 profile=self.profile(), secret="secret", caller=FakeModel(),
             )
             skill_path = next((Path(result["batch_root"]) / "skills").glob("*.json"))
-            skill = json.loads(skill_path.read_text())
+            skill = json.loads(skill_path.read_text(encoding="utf-8"))
             first_path = next(iter(skill["documents"]))
             skill["documents"][first_path] += "\nTAMPERED"
             skill_path.write_text(json.dumps(skill), encoding="utf-8")
