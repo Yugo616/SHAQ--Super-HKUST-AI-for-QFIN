@@ -5,6 +5,7 @@ import json
 import socket
 import sys
 import tempfile
+import webbrowser
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -13,6 +14,7 @@ from zoneinfo import ZoneInfo
 from .app_paths import app_paths, migrate_legacy_runtime
 from .dashboard import DashboardIndex
 from .execution import select_simulate_us_account
+from .lab_service import LabService
 from .market_calendar import market_session, next_market_session
 from .service import disable_future_runs, enable_autostart, run_worker, start_worker
 from .settings import SettingsError, SettingsStore, _atomic_json
@@ -35,6 +37,12 @@ class DesktopBridge:
         self.index = DashboardIndex(
             runtime_root=self.paths.runtime_root, database=self.paths.dashboard_db
         )
+        self.lab = LabService(self.paths)
+        self.operator_status = {
+            "platform_supported": sys.platform == "darwin",
+            "safety_ready": False,
+            "requires_separate_setup": True,
+        }
         self.window = None
 
     @staticmethod
@@ -63,6 +71,117 @@ class DesktopBridge:
 
     def get_run(self, run_id: str) -> dict[str, Any]:
         return self._result(self.index.run_detail, run_id)
+
+    def get_lab_state(self) -> dict[str, Any]:
+        def state() -> dict[str, Any]:
+            value = self.lab.state()
+            value["operator_mode"] = dict(self.operator_status)
+            return value
+        return self._result(state)
+
+    def check_operator_mode(self) -> dict[str, Any]:
+        def check() -> dict[str, Any]:
+            if sys.platform != "darwin":
+                return {"platform_supported": False, "safety_ready": False}
+            checks = self._doctor_checks()
+            ready = all(checks.get(name) is True for name in (
+                "ai_model_ready", "ai_isolation_ready", "opend_reachable",
+                "simulate_account_ready", "universe_available",
+            ))
+            result = {
+                "platform_supported": True, "safety_ready": ready,
+                "requires_separate_setup": True, "checks": checks,
+            }
+            self.operator_status = result
+            return result
+        return self._result(check)
+
+    def save_lab_model_profile(
+        self, profile: dict[str, Any], secret: str, probe: bool = True
+    ) -> dict[str, Any]:
+        return self._result(
+            self.lab.save_model_profile, profile, secret=secret, probe=probe
+        )
+
+    def save_lab_setup(self, submitted: dict[str, Any]) -> dict[str, Any]:
+        return self._result(self.lab.save_setup, submitted)
+
+    def check_research_environment(self) -> dict[str, Any]:
+        return self._result(self.lab.check_research_environment)
+
+    def begin_github_login(self) -> dict[str, Any]:
+        return self._result(self.lab.begin_github_login)
+
+    def complete_github_login(self, device_code: str) -> dict[str, Any]:
+        return self._result(self.lab.complete_github_login, device_code)
+
+    def open_external_url(self, url: str) -> dict[str, Any]:
+        def open_safe() -> dict[str, Any]:
+            from urllib.parse import urlparse
+
+            parsed = urlparse(url)
+            if parsed.scheme != "https" or parsed.netloc not in {
+                "github.com", "www.github.com"
+            }:
+                raise SettingsError("只允许打开GitHub登录页面")
+            return {"opened": bool(webbrowser.open(url))}
+        return self._result(open_safe)
+
+    def check_team_updates(self) -> dict[str, Any]:
+        return self._result(self.lab.check_team_updates)
+
+    def install_team_version(
+        self, branch: str, author: str, version_id: str
+    ) -> dict[str, Any]:
+        return self._result(
+            self.lab.install_team_version,
+            branch=branch, author=author, version_id=version_id,
+        )
+
+    def get_skill_document(
+        self, version_id: str, author: str, skill_name: str
+    ) -> dict[str, Any]:
+        return self._result(
+            self.lab.skill_document,
+            version_id=version_id, author=author, skill_name=skill_name,
+        )
+
+    def save_skill_draft(
+        self, skill_name: str, content: str, draft_id: str
+    ) -> dict[str, Any]:
+        return self._result(
+            self.lab.save_skill_draft,
+            skill_name=skill_name, content=content, draft_id=draft_id,
+        )
+
+    def upload_skill_draft(self, draft_id: str, description: str) -> dict[str, Any]:
+        return self._result(
+            self.lab.upload_skill_draft,
+            draft_id=draft_id, description=description,
+        )
+
+    def estimate_shadow_batch(
+        self, selections: list[dict[str, str]], model_profile_id: str = ""
+    ) -> dict[str, Any]:
+        return self._result(
+            self.lab.estimate_batch,
+            selections,
+            model_profile_id=model_profile_id,
+        )
+
+    def start_shadow_batch(
+        self, selections: list[dict[str, str]], model_profile_id: str = ""
+    ) -> dict[str, Any]:
+        return self._result(
+            self.lab.start_batch,
+            selections=selections, model_profile_id=model_profile_id,
+        )
+
+    def get_shadow_batch(self, batch_id: str) -> dict[str, Any]:
+        return self._result(self.lab.batch_detail, batch_id)
+
+    def export_lab_report(self) -> dict[str, Any]:
+        return self._result(self.lab.export_professor_report)
 
     def save_setup(self, submitted: dict[str, Any]) -> dict[str, Any]:
         def save_and_check() -> dict[str, Any]:
@@ -217,7 +336,7 @@ def launch_desktop() -> int:
     if not page.is_file():
         raise FileNotFoundError("desktop interface asset is missing")
     window = webview.create_window(
-        "SHAQ Daily Oracle",
+        "SHAQ Daily Oracle Lab",
         page.as_uri(),
         js_api=bridge,
         width=1320,
@@ -241,6 +360,8 @@ def main(argv: list[str] | None = None) -> int:
         checks = {
             "desktop_asset": (Path(__file__).with_name("desktop") / "index.html").is_file(),
             "runtime_config": (paths.package_root / "config/runtime.json").is_file(),
+            "research_universe": (paths.package_root / "config/research-universe.csv").is_file(),
+            "team_repository": (paths.package_root / "config/team-repository.json").is_file(),
             "skills": len(list((paths.package_root / "skills").glob("*/SKILL.md"))) == 8,
         }
         print(json.dumps({"status": "passed" if all(checks.values()) else "failed", "checks": checks}))

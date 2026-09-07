@@ -1,139 +1,154 @@
-# SHAQ Daily Oracle
+# SHAQ Daily Oracle Lab
 
-SHAQ Daily Oracle is a reference-grounded workflow for forecasting the absolute direction of US stocks from the official regular-session open to close. Six professional domain skills analyze frozen evidence, a non-voting adversary checks the result, and deterministic code enforces time, provenance, independence and paper-trading safety.
+SHAQ Daily Oracle Lab is a Windows and macOS research workbench for comparing
+governed premarket-analysis Skills. The application freezes one point-in-time
+evidence set, gives the same candidates and evidence to every selected Skill
+version, and compares their 0–3 open-to-close forecasts locally.
 
-## Architecture
+The research mode never imports broker modules and can never submit an order.
+The existing Futu simulation operator remains a separate, Mac-only path with a
+different setup, runtime directory, system identity and score history.
+
+## What a team member does
 
 ```text
-cutoff-safe evidence
-        |
-        +-- market common shock
-        +-- company relationships
-        +-- primary company event
-        +-- capital and order flow
-        +-- options and derivatives
-        +-- price-volume structure
-        |
-        v
-evidence-lineage integrator --> non-voting adversary --> 0-3 forecasts
-                                                        |
-                                                        v
-                                              Futu SIMULATE canary
+Install the app
+→ sign in to the team repository in a browser
+→ add an OpenAI, Anthropic or compatible API profile
+→ enter the SEC research identity and verify the PIT universe/local storage
+→ check team updates
+→ select main and one or more Shadow versions
+→ run one shared-evidence comparison
+→ inspect the local dashboard
 ```
 
-The system does not count Agents or reports as votes. Every raw observation keeps its own provenance root. A derived item carries the set of all ancestor roots without merging them; copies of the same raw file or event still count once.
+Python, Git, Codex, WorkBuddy and a Futu account are not required for research
+mode. The internal test release provides three installers:
 
-## Skills
+- Windows 10/11 x64
+- macOS Apple Silicon
+- macOS Intel
 
-| Skill | Responsibility |
+The first launch stores model and GitHub credentials in macOS Keychain or
+Windows Credential Manager. Credentials, model calls, market evidence and daily
+results never enter GitHub. Expiring GitHub App credentials are renewed with the
+device-flow refresh token before repository access; the refresh token remains in
+the operating-system credential store.
+
+## Research architecture
+
+```text
+versioned PIT universe + replaceable data providers
+                         │
+                         ▼
+              one cutoff-safe evidence snapshot
+                         │
+         ┌───────────────┼────────────────┐
+         ▼               ▼                ▼
+       main          member Shadow    member Shadow
+         │               │                │
+         └──── same candidates, model profile and schema ────┘
+                         │
+                         ▼
+ six blind domain analyses → non-voting adversary → deterministic gate
+                         │
+                         ▼
+       local history, comparison, labels and professor export
+```
+
+Every batch remembers which data, model and Skill versions were used. Restarting
+the app reuses completed work and resumes only unfinished versions; it never
+reruns a successful call so that a user can choose a preferred answer. The
+technical checks remain available in one collapsed section and do not clutter
+the everyday dashboard.
+
+## Eight Skills
+
+| Skill | Role |
 |---|---|
-| `daily-oracle` | Freeze and orchestrate the complete workflow |
-| `market-common-shock` | Separate cash-flow, rate and risk-premium shocks |
-| `pit-peer-spillover` | Analyze point-in-time customer, supplier, competitor and complement links |
-| `primary-event-reasoner` | Separate new facts, prior expectations, publication time and price absorption |
-| `capital-order-flow` | Use liquidity-adjusted order-flow imbalance when the required semantics exist |
-| `derivatives-evidence` | Interpret implied distributions and semantically reliable option flow |
-| `price-volume-structure` | Classify nonlinear price paths, participation and liquidity states |
-| `thesis-adversary` | Detect duplicated evidence, unsupported facts and horizon mismatch without voting |
+| `daily-oracle` | Orchestrates the frozen research question |
+| `market-common-shock` | Separates broad market, rates, dollar, credit and volatility shocks |
+| `pit-peer-spillover` | Tests industry and economic relationship spillovers |
+| `primary-event-reasoner` | Separates new facts, prior expectations, publication time and price absorption |
+| `capital-order-flow` | Uses order-flow evidence only when aggressor and depth semantics exist |
+| `derivatives-evidence` | Reads implied distributions without mapping Put, Call or OI mechanically to direction |
+| `price-volume-structure` | Interprets residual gap, path, participation and liquidity states |
+| `thesis-adversary` | Finds leakage, duplicated evidence and horizon mismatch without voting |
 
-Each skill contains a concise `SKILL.md` and a one-level `references/foundations.md` file. The reference file states the research mechanism used by the skill; it does not copy an external paper's performance claim.
+Each Skill has a short `SKILL.md` and one `references/foundations.md`. A Shadow
+version may change only these Markdown or reference files. The application
+rejects Python, scripts, binaries, Actions, credentials, local paths and runtime
+data before upload. `main` is read-only; each member publishes immutable versions
+to `shadow/<github-login>` and every version stays bound to its original main
+commit.
 
-## Desktop application
+## Models
 
-The normal user flow is:
+The same `ModelBackend` contract supports:
 
-```text
-Download the installer → Open the app → Complete setup once → Enable daily paper trading
-```
+- OpenAI Responses API with native strict structured output, `store=false` and
+  no tools;
+- Anthropic Messages API with structured output and no tools;
+- OpenAI Chat Completions-compatible endpoints, either native strict schema or
+  local strict JSON Schema validation.
 
-Internal reviewers can download the matching macOS Apple Silicon or Windows x64
-installer from the repository [Releases](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases) page and verify it with the adjacent SHA-256 file.
+The app probes the exact endpoint, model, authentication style and output mode
+before saving a profile. It does not silently switch a model or endpoint after a
+401, 429, timeout or schema failure. Codex CLI is retained only as an advanced
+Mac development backend and is not needed by the research application.
 
-The native desktop window contains Today, Run History, Holdings and Fills, Portfolio Performance, System Health, and Settings and Export. It rebuilds its display index from immutable run files, so deleting the SQLite display cache cannot delete or change a forecast. Closing the window does not stop an enabled background watcher.
+## Data providers
 
-The default AI backend is the OpenAI Responses API. A local operator may explicitly select an authenticated Codex CLI backend; it becomes formal only after the macOS isolation probes pass, and it receives the same frozen evidence-only input. Futu OpenD is still installed and logged in separately under the user's simulated account.
+The default research profile uses:
 
-Internal test packages are built for macOS Apple Silicon and Windows x64. They use checksums and temporary or ad-hoc signing, so the operating system may request confirmation on first launch.
+- a versioned S&P 500 membership file for the point-in-time universe;
+- FinanceDatabase's public equities dataset for identity and current classification metadata only;
+- yfinance for unadjusted bars, premarket observations and basic option surfaces;
+- SEC EDGAR for primary filings and their publication times;
+- an optional OpenBB REST profile that can replace declared capabilities.
 
-## Developer installation
+FinanceDatabase cannot determine historical index membership. Missing order-book
+or aggressor semantics makes the capital domain unavailable. A basic option
+surface may describe implied move, skew and term structure but cannot invent a
+directional option-flow vote. Free data is explicitly marked research-only.
 
-No Codex installation is required to review the architecture. Start with `skills/daily-oracle/SKILL.md`, then inspect the six domain skills and their foundation files. The `src/` package contains the deterministic evidence, integration, evaluation and broker-safety controls.
+## Local dashboard and scientific labels
+
+The dashboard shows the timeline, selected versions, all candidates, six domain
+reports, support and counterarguments, unknowns, invalidation conditions,
+adversary result, deterministic gate and open-to-close results. File hashes and
+technical metadata are kept behind a collapsed verification section. It does not
+display or claim to reconstruct a model's hidden chain of thought.
+
+The research label is the official unadjusted US regular-session open-to-close
+return. The first observation is provisional; a later independent read must match
+before the label becomes final. Exact flat closes are neutral and count as wrong
+for a directional forecast.
+
+## Team repository setup
+
+The team administrator registers one GitHub App with Device Flow enabled and
+provides its public Client ID in `config/team-repository.json` or the first-launch
+screen. The app requests repository metadata read and the minimum contents access
+needed to read versions and, for members with write permission, append a version
+to their personal branch. Read-only members can install and run team versions but
+cannot upload.
+
+## Developer verification
 
 ```bash
-git clone https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN.git shaq-daily-oracle
-cd shaq-daily-oracle
 python3 -m venv .venv
 source .venv/bin/activate
 python3 -m pip install -e ".[desktop,futu,test]"
 python3 scripts/validate_release.py
 python3 -m unittest discover -s tests -v
+shaq-daily-oracle-desktop --smoke
 ```
 
-Set machine-specific inputs without editing the repository:
+The GitHub workflow builds and smoke-tests all three installers on native x64 or
+arm64 runners. Installers contain no account identifier, email address, API key,
+daily run record or development-machine path. Internal packages use SHA-256 files
+and ad-hoc or temporary signing, so the operating system may ask the reviewer to
+confirm the first launch.
 
-```bash
-export DAILY_ORACLE_UNIVERSE=/path/to/effective-universe.csv
-export DAILY_ORACLE_SEC_USER_AGENT="Research Team contact@example.edu"
-export OPENAI_API_KEY="your-key-from-a-secure-local-environment"
-```
-
-Open the desktop source build with:
-
-```bash
-shaq-daily-oracle-desktop
-```
-
-The developer command remains available and calls the same workflow service:
-
-```bash
-daily-oracle run --mode paper
-```
-
-Before a version can run, the same background environment must certify the exact code, configuration, Skills, Python runtime, dependencies and AI backend with three consecutive full test runs. That immutable certificate becomes invalid after any change. On each trading day, the watcher checks only conditions that can change—Codex, OpenD, SEC access, the stock universe, the NYSE calendar, the system clock, network and disk—at 07:45, 08:00, 08:15 and 08:30 ET. It freezes evidence at 08:50, freezes the forecast by 09:00, opens eligible one-share `SIMULATE` positions during 09:30–09:35, and exits during 15:55–15:58. Re-running the command resumes immutable stage files and broker idempotency keys.
-
-The frozen evidence is shared by three isolated paths: the formal path, a continuation/reversal research Shadow and a no-capital-flow Shadow. The formal path never waits for a Shadow, and a Shadow can never submit an order. If the evidence itself misses 08:50, all three paths stop. This follows release-artifact discipline from Google SRE and SLSA, and fault isolation from the Azure Bulkhead pattern.
-
-The command invokes the six skills internally. Reviewers consume `professor_report.html` and `agent_trace.html`; they do not need to know Skill names or write prompts. Only `daily-oracle` allows implicit Skill invocation. The domain skills and adversary are internal components.
-
-## Decision contract
-
-1. Freeze evidence available by the configured premarket cutoff.
-2. Verify source URI, first-publication time, capture time and actual SHA-256.
-3. Build a W3C PROV-style ancestry graph across raw files, upstream events and transformations.
-4. Route the raw inputs required by each domain while excluding ranks, labels and other Agent reports.
-5. Run all six domains and distinguish usable-neutral, not-applicable, no-data, entitlement and provider failures.
-6. Require two applicable aligned domains, two independent roots, one market/industry root and one stock-specific root, with no independent opposing root.
-7. Run the adversary once; it may veto an integrity failure but cannot add a vote or new evidence.
-8. Freeze zero to three predictions. A run created after cutoff is permanently marked `shadow`.
-
-The common domain output is:
-
-```text
-domain
-as_of_et
-horizon
-availability: available | no_data | not_entitled | provider_error
-verdict: bullish | bearish | neutral | not_applicable | unavailable
-component_type
-thesis
-antithesis
-unknowns
-invalidation
-evidence_ids
-lineage_root_ids
-```
-
-## Evaluation and paper trading
-
-- The scientific label is the official unadjusted US regular-session open-to-close return.
-- The execution ledger separately records actual arrival prices, fills, fees and implementation shortfall.
-- After each close, every frozen candidate is reviewed with the T-1 market and sector exposures that were available before the forecast. The result is split into market, sector and stock-specific components.
-- Close reviews may record sourced causal hypotheses, but the prediction process cannot read them. Daily outcomes cannot rewrite Skills, prompts, candidate filters or gates.
-- Research changes are considered only in scheduled batches. A drift detector may request inspection; it never retrains or changes the live system automatically.
-- Probability output is generated only from frozen prospective records after the configured proper-score and sample gates are satisfied.
-- Futu execution is locked to `SIMULATE`; external positions are excluded and real trading is not supported.
-- Broker ambiguity, stale inputs, duplicate intents or failed reconciliation add no new risk.
-
-## Repository scope
-
-The repository contains code, schemas, tests, Skill instructions and research references. It contains no broker credentials, runtime snapshots, redistributed market data, internal research logs or real-trading switch. No software license is granted in this review version.
+No software license is granted in this internal review version.

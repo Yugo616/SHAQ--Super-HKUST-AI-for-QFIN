@@ -18,9 +18,25 @@ class AppPaths:
     dashboard_db: Path
     settings_file: Path
     effective_ai_config: Path
+    research_root: Path | None = None
+    batches_root: Path | None = None
+    skill_registry_root: Path | None = None
+    research_database: Path | None = None
+    research_settings_file: Path | None = None
 
     def ensure(self) -> "AppPaths":
-        for path in (self.data_root, self.config_root, self.log_root, self.runtime_root):
+        optional = (
+            self.research_root,
+            self.batches_root,
+            self.skill_registry_root,
+        )
+        for path in (
+            self.data_root,
+            self.config_root,
+            self.log_root,
+            self.runtime_root,
+            *(item for item in optional if item is not None),
+        ):
             path.mkdir(parents=True, exist_ok=True)
         return self
 
@@ -37,6 +53,7 @@ def app_paths(*, package_root: Path | None = None) -> AppPaths:
     data = Path(user_data_dir("SHAQ Daily Oracle", "SHAQ Research")).resolve()
     config = Path(user_config_dir("SHAQ Daily Oracle", "SHAQ Research")).resolve()
     logs = Path(user_log_dir("SHAQ Daily Oracle", "SHAQ Research")).resolve()
+    research = data / "research"
     return AppPaths(
         package_root=package,
         data_root=data,
@@ -46,6 +63,11 @@ def app_paths(*, package_root: Path | None = None) -> AppPaths:
         dashboard_db=data / "dashboard.sqlite3",
         settings_file=config / "settings.json",
         effective_ai_config=config / "ai-backend.json",
+        research_root=research,
+        batches_root=research / "batches",
+        skill_registry_root=research / "skill_versions",
+        research_database=research / "research.sqlite3",
+        research_settings_file=config / "research-settings.json",
     )
 
 

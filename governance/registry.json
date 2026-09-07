@@ -29,6 +29,12 @@
     ,"REF-PROV-001": {"title": "W3C PROV Data Model", "url": "https://www.w3.org/TR/prov-dm/"}
     ,"REF-SELECTIVE-001": {"title": "Selective Classification via One-Sided Prediction", "url": "https://proceedings.mlr.press/v130/gangrade21a.html"}
     ,"REF-KOLM-OFI-001": {"title": "Deep Order Flow Imbalance: Extracting Alpha at Multiple Horizons from the Limit Order Book", "url": "https://doi.org/10.1111/mafi.12413"}
+    ,"REF-GITHUB-DEVICE-FLOW-001": {"title": "GitHub App Device Flow", "url": "https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-a-user-access-token-for-a-github-app"}
+    ,"REF-GITHUB-TOKEN-REFRESH-001": {"title": "Refreshing GitHub App User Access Tokens", "url": "https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/refreshing-user-access-tokens"}
+    ,"REF-GITHUB-CONTENTS-001": {"title": "GitHub App Repository Contents Permission", "url": "https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/choosing-permissions-for-a-github-app"}
+    ,"REF-OPENBB-PROVIDERS-001": {"title": "OpenBB Provider Extensions", "url": "https://docs.openbb.co/odp/python/extensions/providers"}
+    ,"REF-FINANCE-DATABASE-001": {"title": "FinanceDatabase Instrument Metadata", "url": "https://github.com/JerBouma/FinanceDatabase"}
+    ,"REF-YFINANCE-001": {"title": "yfinance Python API", "url": "https://ranaroussi.github.io/yfinance/reference/yfinance.functions.html"}
   },
   "decisions": {
     "DEC-CUTOFF-001": "All formal evidence must exist by the configured premarket cutoff.",
@@ -61,6 +67,10 @@
     ,"DEC-INTEGRATION-002": "Use PROV ancestor root sets, two applicable aligned domain reviews, a context root and a stock-specific root; neutral and not-applicable reviews never vote."
     ,"DEC-EVENT-DISCOVERY-001": "Discover qualifying PIT-universe filings before candidate selection from SEC latest-filings pages, then fetch only primary submissions; Futu earnings fields supplement timing and expectations."
     ,"DEC-CAPITAL-TIME-001": "Capture formal capital evidence in the governed final premarket window, report actual ticker and book timestamps, split event flow into contiguous time intervals, and restrict its standalone interpretation to the observed short horizon."
+    ,"DEC-TEAM-SKILL-SYNC-001": "Synchronize only allowlisted immutable Skill overlays through a least-privilege GitHub App; never execute teammate branch code or upload local run evidence."
+    ,"DEC-CROSS-PLATFORM-RESEARCH-001": "Run the same broker-free research workflow on macOS and Windows while keeping the Mac operator workflow and all broker interfaces in a separate profile."
+    ,"DEC-MODEL-ADAPTER-001": "Accept only configured tool-free model endpoints whose output passes native or local JSON Schema validation; never silently change endpoint or model."
+    ,"DEC-DATA-PROVIDERS-001": "Use capability-declared replaceable data providers; missing microstructure semantics produce unavailable evidence rather than a proxy direction."
   },
   "experiments": {
     "EXP-CANARY-001": "First one-share SHAQ Futu SIMULATE canary.",
@@ -71,6 +81,7 @@
     "EXP-CAPITAL-TIME-001": "Prospective capital-observation timing and contiguous-segmentation repair beginning 2026-08-31.",
     "EXP-DESKTOP-API-001": "Prospective desktop-run identity using the governed OpenAI Responses API boundary beginning 2026-08-31.",
     "EXP-DESKTOP-CODEX-001": "Prospective local paper-run identity using the governed Codex login and macOS isolation boundary beginning 2026-09-01.",
-    "EXP-RELIABLE-RUN-001": "Prospective certified and fault-isolated runtime identity beginning 2026-09-02."
+    "EXP-RELIABLE-RUN-001": "Prospective certified and fault-isolated runtime identity beginning 2026-09-02.",
+    "EXP-CROSS-PLATFORM-LAB-001": "Cross-platform broker-free Skill comparison workbench for macOS and Windows."
   }
 }

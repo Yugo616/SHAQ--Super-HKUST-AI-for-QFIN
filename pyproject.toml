@@ -4,11 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "shaq-daily-oracle"
-version = "0.2.0"
-description = "Reference-grounded six-domain premarket forecasting safety core"
+version = "0.4.0"
+description = "Cross-platform multi-model research workbench for governed premarket Skill experiments"
 requires-python = ">=3.11"
 dependencies = [
   "openai>=1.100",
+  "httpx>=0.28",
+  "jsonschema>=4.21",
   "pandas-market-calendars>=5.1",
   "platformdirs>=4.3",
   "filelock>=3.16",
@@ -22,9 +24,11 @@ shaq-daily-oracle-desktop = "shaq_daily_oracle.desktop:main"
 futu = ["futu-api>=10.10"]
 test = ["jsonschema>=4.21"]
 desktop = [
+  "pandas>=2.2,<3.0",
   "keyring>=25.6",
   "pywebview>=6.0",
   "pyinstaller>=6.16",
+  "yfinance>=0.2.65",
 ]
 
 [tool.setuptools]

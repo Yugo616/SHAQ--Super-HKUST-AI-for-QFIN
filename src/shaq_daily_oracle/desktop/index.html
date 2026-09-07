@@ -3,49 +3,64 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>SHAQ Daily Oracle</title>
+  <title>SHAQ Daily Oracle Lab</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <aside class="sidebar">
-    <div class="brand"><div class="mark">S</div><div><strong>SHAQ</strong><span>Daily Oracle</span></div></div>
+    <div class="brand"><div class="mark">S</div><div><strong>SHAQ</strong><span>DAILY ORACLE LAB</span></div></div>
     <nav>
-      <button class="nav active" data-page="today">今天</button>
-      <button class="nav" data-page="history">历史回放</button>
-      <button class="nav" data-page="holdings">持仓与成交</button>
-      <button class="nav" data-page="performance">组合表现</button>
-      <button class="nav" data-page="health">系统健康</button>
-      <button class="nav" data-page="settings">设置与导出</button>
+      <button class="nav active" data-page="run">运行今日 Shadow</button>
+      <button class="nav" data-page="editor">编辑当前 Skill</button>
+      <button class="nav" data-page="upload">上传 Shadow 版本</button>
+      <button class="nav" data-page="updates">检查团队更新</button>
+      <button class="nav" data-page="history">历史与比较</button>
+      <button class="nav" data-page="settings">系统设置</button>
+      <button class="nav hidden" id="operator-nav" data-page="operator">Mac 操作员</button>
     </nav>
-    <div class="sidebar-foot"><span id="service-dot" class="dot"></span><span id="service-text">正在读取状态</span></div>
+    <div class="sidebar-foot"><span id="service-dot" class="dot"></span><span id="service-text">正在读取本地记录</span></div>
   </aside>
   <main>
-    <header><div><p class="eyebrow">RESEARCH-GROUNDED PAPER TRADING</p><h1 id="page-title">今天</h1></div>
-      <div class="header-actions"><button class="secondary" id="doctor-button">系统检查</button><button class="primary" id="run-button">开始 / 恢复今日模拟</button></div>
+    <header>
+      <div><p class="eyebrow">CROSS-PLATFORM RESEARCH WORKBENCH</p><h1 id="page-title">运行今日 Shadow</h1></div>
+      <div class="header-actions"><span class="mode-badge">研究模式 · 永不下单</span><button class="secondary" id="refresh-button">刷新</button></div>
     </header>
     <section id="notice" class="notice hidden"></section>
-    <section id="today" class="page active"></section>
+    <section id="run" class="page active"></section>
+    <section id="editor" class="page"></section>
+    <section id="upload" class="page"></section>
+    <section id="updates" class="page"></section>
     <section id="history" class="page"></section>
-    <section id="holdings" class="page"></section>
-    <section id="performance" class="page"></section>
-    <section id="health" class="page"></section>
     <section id="settings" class="page"></section>
+    <section id="operator" class="page"></section>
   </main>
-  <div id="setup" class="modal hidden"><form id="setup-form" class="setup-card">
-    <div class="step-label">首次设置 · 只需一次</div><h2>把研究系统连接到你的电脑</h2>
-    <p>密钥保存在系统凭据管理器，不会写入运行记录或报告。</p>
-    <div class="form-grid">
-      <label>AI 后端<select name="ai_backend"><option value="openai-responses">OpenAI API（推荐）</option><option value="codex-cli">Codex CLI（开发）</option></select></label>
-      <label>模型<input name="model" value="gpt-5.6" required></label>
-      <label class="wide">OpenAI API Key<input name="openai_api_key" type="password" placeholder="sk-…"></label>
-      <label class="wide">SEC 研究身份<input name="sec_identity" placeholder="Research Team contact@example.edu" required></label>
-      <label>OpenD 地址<input name="opend_host" value="127.0.0.1" required></label>
-      <label>OpenD 端口<input name="opend_port" type="number" value="11111" required></label>
-      <label class="wide">股票池文件<div class="file-row"><input name="universe_file" placeholder="选择有效股票池 CSV" required><button id="choose-universe" class="secondary" type="button">选择文件</button></div></label>
-      <label>每日启动时间（ET）<input name="automatic_start_et" type="time" step="1" value="07:45:00" required></label>
+
+  <div id="setup" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="setup-title">
+    <div class="setup-card">
+      <p class="step-label">首次设置 · Windows 与 Mac 相同</p>
+      <h2 id="setup-title">连接团队、模型和公开数据</h2>
+      <p>不需要安装 Python、Git、Codex、WorkBuddy 或富途。密钥只进入系统凭据管理器。</p>
+      <div class="setup-steps">
+        <section><b>1</b><div><h3>GitHub 团队仓库</h3><p>使用浏览器设备登录；软件只同步允许的 Skill Markdown 和引用。</p><div id="github-setup"></div></div></section>
+        <section><b>2</b><div><h3>模型 API</h3><form id="model-form" class="form-grid">
+          <label>配置名称<input name="profile_id" value="primary-model" required></label>
+          <label>接口类型<select name="protocol"><option value="openai-responses">OpenAI Responses</option><option value="anthropic-messages">Anthropic Messages</option><option value="openai-chat-completions">兼容中转接口</option></select></label>
+          <label class="wide">接口地址<input name="base_url" value="https://api.openai.com/v1" required></label>
+          <label>模型名称<input name="model" placeholder="例如 gpt-5.6" required></label>
+          <label>输出保证<select name="output_mode"><option value="strict">服务商原生结构化输出</option><option value="local_validated">程序严格校验</option></select></label>
+          <label>认证方式<select name="auth_style"><option value="bearer">Bearer</option><option value="x-api-key">x-api-key</option></select></label>
+          <label>同时调用数<input name="max_concurrency" type="number" min="1" max="8" value="2" required></label>
+          <label>每分钟最多请求<input name="rate_limit_per_minute" type="number" min="1" value="30" required></label>
+          <label>输入单价（每百万Token，可选）<input name="input_price_per_million" type="number" min="0" step="any" placeholder="留空则不估算费用"></label>
+          <label>输出单价（每百万Token，可选）<input name="output_price_per_million" type="number" min="0" step="any" placeholder="留空则不估算费用"></label>
+          <label>API 密钥<input name="secret" type="password" required></label>
+          <button class="primary wide" type="submit">测试并保存模型</button>
+        </form><p id="model-status" class="inline-status"></p></div></section>
+        <section><b>3</b><div><h3>SEC 研究身份</h3><form id="research-form" class="form-grid"><label class="wide">团队名称与联系邮箱<input name="sec_identity" placeholder="Research Team contact@example.edu" required></label><button class="primary wide" type="submit">保存身份</button></form><p id="research-status" class="inline-status"></p></div></section>
+        <section><b>4</b><div><h3>数据与本地空间</h3><p>检查版本化股票池、数据配置和本机研究目录是否可写。</p><button class="secondary" id="check-research-environment">检查并进入工作台</button><p id="environment-status" class="inline-status"></p></div></section>
+      </div>
     </div>
-    <div class="modal-actions"><span id="setup-error"></span><button class="primary" type="submit">保存并进入系统</button></div>
-  </form></div>
+  </div>
   <script src="app.js"></script>
 </body>
 </html>
