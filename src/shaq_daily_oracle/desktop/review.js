@@ -13,8 +13,8 @@ window.showCandidate = function(batchId, key, symbol) {
 };
 
 const batchBeforeReview = renderBatch;
-renderBatch = function(batch, key) {
-  batchBeforeReview(batch, key);
+renderBatch = function(batch, key, symbol) {
+  batchBeforeReview(batch, key, symbol);
   const selected = key && batch.variants?.[key] ? key : Object.keys(batch.variants || {})[0];
   const selector = q('#compare-version');
   if (!selector) return;

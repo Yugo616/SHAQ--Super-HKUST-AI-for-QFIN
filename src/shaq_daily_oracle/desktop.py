@@ -407,6 +407,33 @@ def desktop_api(bridge):
                               if not name.startswith('_') and callable(getattr(bridge, name))})
 
 
+def _bind_gui_smoke_fixture(bridge, fixture_state, fixture_detail):
+    from types import MethodType
+
+    def fixture_state_api(self):
+        return {"ok": True, "value": fixture_state}
+
+    def fixture_batch_api(self, batch_id):
+        return {"ok": True, "value": fixture_detail}
+
+    def fixture_refresh_api(self):
+        fixture_detail["labels"]["labels"]["MSFT"] = {
+            "status": "final", "official_unadjusted_open": 200.0,
+            "official_unadjusted_close": 202.0, "actual_direction": "bullish",
+            "confirmed_by_independent_reobservation": True,
+            "last_checked_at_et": "2026-09-10T09:00:00-04:00",
+        }
+        fixture_state["result_refresh"] = {
+            "status": "complete", "completed_at": "2026-09-10T09:00:00-04:00",
+            "failure_count": 0,
+        }
+        return {"ok": True, "value": fixture_state["result_refresh"]}
+
+    bridge.get_lab_state = MethodType(fixture_state_api, bridge)
+    bridge.get_shadow_batch = MethodType(fixture_batch_api, bridge)
+    bridge.refresh_prices_and_results = MethodType(fixture_refresh_api, bridge)
+
+
 def launch_desktop(*, smoke_output: Path | None = None) -> int:
     try:
         import webview  # type: ignore
@@ -431,22 +458,7 @@ def launch_desktop(*, smoke_output: Path | None = None) -> int:
         for variant in fixture_detail["variants"].values():
             variant["candidate_intake"]["candidates"].append(dict(second_candidate))
         fixture_state["result_refresh"] = {"status": "idle"}
-        bridge.get_lab_state = lambda: {"ok": True, "value": fixture_state}
-        bridge.get_shadow_batch = lambda batch_id: {
-            "ok": True, "value": fixture_detail}
-        def fixture_refresh():
-            fixture_detail["labels"]["labels"]["MSFT"] = {
-                "status": "final", "official_unadjusted_open": 200.0,
-                "official_unadjusted_close": 202.0, "actual_direction": "bullish",
-                "confirmed_by_independent_reobservation": True,
-                "last_checked_at_et": "2026-09-10T09:00:00-04:00",
-            }
-            fixture_state["result_refresh"] = {
-                "status": "complete", "completed_at": "2026-09-10T09:00:00-04:00",
-                "failure_count": 0,
-            }
-            return {"ok": True, "value": fixture_state["result_refresh"]}
-        bridge.refresh_prices_and_results = fixture_refresh
+        _bind_gui_smoke_fixture(bridge, fixture_state, fixture_detail)
     page = Path(__file__).with_name("desktop") / "index.html"
     if not page.is_file():
         raise FileNotFoundError("desktop interface asset is missing")

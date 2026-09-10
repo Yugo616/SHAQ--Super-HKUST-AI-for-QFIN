@@ -12,6 +12,7 @@ import unittest
 import zipfile
 import base64
 import io
+import inspect
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -507,6 +508,29 @@ class NativePackagingTests(unittest.TestCase):
         api = desktop.desktop_api(Bridge())
         self.assertEqual(api.get_state(), {'ok': True})
         self.assertFalse(hasattr(api, 'paths'))
+
+    def test_gui_smoke_fixture_overrides_remain_bound_api_methods(self):
+        from shaq_daily_oracle import desktop
+
+        class Bridge:
+            def get_lab_state(self):
+                raise AssertionError
+            def get_shadow_batch(self, batch_id):
+                raise AssertionError
+            def refresh_prices_and_results(self):
+                raise AssertionError
+
+        bridge = Bridge()
+        state = {"result_refresh": {"status": "idle"}}
+        detail = {"labels": {"labels": {}}}
+        desktop._bind_gui_smoke_fixture(bridge, state, detail)
+        api = desktop.desktop_api(bridge)
+        for name in ("get_lab_state", "get_shadow_batch", "refresh_prices_and_results"):
+            self.assertTrue(inspect.ismethod(getattr(bridge, name)))
+            self.assertTrue(inspect.ismethod(getattr(api, name)))
+        self.assertTrue(api.get_lab_state()["ok"])
+        self.assertTrue(api.get_shadow_batch("fixture")["ok"])
+        self.assertEqual(api.refresh_prices_and_results()["value"]["status"], "complete")
 
     def test_generated_native_metadata_maps_builder_paths_without_touching_notice(self):
         build = self.module('build_native')

@@ -98,28 +98,24 @@ vm.createContext(ctx);vm.runInContext(batchFn,ctx);vm.runInContext(loadFn,ctx);
     def test_assembled_renderer_wrapper_chain_forwards_nondefault_candidate(self):
         root = Path(__file__).resolve().parents[1]
         script = r'''
-const fs=require('fs'),vm=require('vm'),assert=require('assert/strict');
-const app=fs.readFileSync('src/shaq_daily_oracle/desktop/app.js','utf8');
-const workbench=fs.readFileSync('src/shaq_daily_oracle/desktop/workbench.js','utf8');
-const appWrapper=app.slice(app.indexOf('const renderBatchWithDefaultCandidate'),app.indexOf('function renderSettings'));
+const fs=require('fs'),path=require('path'),vm=require('vm'),assert=require('assert/strict');
+const desktop='src/shaq_daily_oracle/desktop';
+const html=fs.readFileSync(path.join(desktop,'index.html'),'utf8');
+const scripts=[...html.matchAll(/<script src="([^"]+)"/g)].map(row=>row[1]);
+assert.deepEqual(scripts,['app.js','today_progress.js','workbench.js','accounts.js','review.js']);
 const cls={add(){},remove(){},toggle(){}};
 const element=()=>new Proxy({classList:cls,dataset:{},parentElement:{prepend(){}},children:[],
  append(){},prepend(){},before(){},insertBefore(){},insertAdjacentHTML(){},insertAdjacentElement(){},
  addEventListener(){},remove(){},closest(){return null},scrollIntoView(){},focus(){}},
  {get:(o,k)=>k in o?o[k]:'',set:(o,k,v)=>(o[k]=v,true)});
-const ctx={console,window:{showCandidate(batchId,key,symbol){ctx.state.replay={batchId,key,symbol}}},
+const ctx={console,window:{addEventListener(){},scrollY:0,scrollTo(){}},
  document:{createElement:element,querySelector:element,querySelectorAll:()=>[]},
- state:{data:{versions:[],jobs:[],clock:{},dashboard:{daily_results:[]},settings:{model_profiles:[]},skill_explanations:{}},page:'history',replay:null},
  q:element,qa:()=>[],esc:String,dir:String,money:String,api:async()=>({}),notice(){},
- renderBatch(batch,key){ctx.window.showCandidate(batch.batch_id,key,'AAA')},
- renderEditor(){},renderHistory(){},renderRun(){},renderPage(){},showPage(){},loadSkill:async()=>{},
- saveDraft:async()=>{},estimate:async()=>{},selectedVersions:()=>[],versionKey:v=>v.version_id,
- renderUpload(){},renderUpdates(){},renderData(){},renderSettings(){},renderOperator(){},
- setInterval(){},setTimeout(){},SHAQProgress:{progressHtml:()=>'',scheduleText:()=>''},
- SHAQAccounts:{historyIdentity:r=>({filter_key:r.variant_key||'',series_key:r.series_key||'',method_name:r.label||'',status_badge:''})}};
-vm.createContext(ctx);vm.runInContext(appWrapper,ctx);vm.runInContext(workbench,ctx);
-const batch={batch_id:'fixture',evidence:{candidates:[{symbol:'AAA'},{symbol:'BBB'}]},variants:{v:{candidate_intake:{candidates:[{symbol:'AAA'},{symbol:'BBB'}]},reports_by_symbol:{},integration_audit:{},predictions:[]}}};
+ setInterval(){},setTimeout(){},Intl,Date};
+vm.createContext(ctx);
+for(const file of scripts)vm.runInContext(fs.readFileSync(path.join(desktop,file),'utf8'),ctx,{filename:file});
+const batch={batch_id:'fixture',evidence:{cutoff_status:'on_time',candidates:[{symbol:'AAA'},{symbol:'BBB'}],catalog:[]},labels:{labels:{}},replay_summaries:{},virtual_accounts:{results:[]},variants:{v:{variant:{label:'Fixture'},candidate_intake:{candidates:[{symbol:'AAA'},{symbol:'BBB'}]},reports_by_symbol:{},adversary_by_symbol:{},integration_audit:{},predictions:[]}}};
 ctx.renderBatch(batch,'v','BBB');
-assert.equal(ctx.state.replay.symbol,'BBB');
+assert.equal(vm.runInContext('state.replay.symbol',ctx),'BBB');
 '''
         subprocess.run(['node', '-'], input=script, text=True, cwd=root, check=True)

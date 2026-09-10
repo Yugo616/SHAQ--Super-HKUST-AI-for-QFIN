@@ -215,9 +215,9 @@ if (typeof document !== 'undefined') {
   };
 
   const previousBatch = renderBatch;
-  renderBatch = function(batch,key) {
+  renderBatch = function(batch,key,symbol) {
     const selected=key&&batch.variants?.[key]?key:Object.keys(batch.variants||{})[0];
-    previousBatch(batch,selected);
+    previousBatch(batch,selected,symbol);
     const rows=batch.virtual_accounts?.results.filter(row=>row.variant_key===selected)||[];
     if (!rows.length) return;
     const section=document.createElement('section'); section.className='sheet';
