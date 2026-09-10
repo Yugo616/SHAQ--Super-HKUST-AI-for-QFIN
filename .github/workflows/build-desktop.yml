@@ -1,109 +1,38 @@
-name: Build SHAQ Daily Oracle Lab
+name: Inspect existing Windows payload
 on:
   workflow_dispatch:
-    inputs:
-      target:
-        description: Complete acceptance for Windows, macOS, or all platforms at this commit
-        type: choice
-        options: [windows, macos, all]
-        default: windows
-  push:
-    paths:
-      - ".github/workflows/build-desktop.yml"
-      - "packaging/**"
-      - "src/**"
-      - "tests/**"
-      - "bundled_versions/**"
-      - "config/**"
-      - "skills/**"
-      - "decision/**"
-      - "pyproject.toml"
-      - ".gitattributes"
 permissions:
   contents: read
+  actions: read
 jobs:
-  native:
-    strategy:
-      fail-fast: false
-      matrix:
-        include: ${{ fromJSON(inputs.target == 'windows' && '[{"runner":"windows-latest","platform":"Windows-x64"}]' || inputs.target == 'macos' && '[{"runner":"macos-15","platform":"macOS-Apple-Silicon","arch":"arm64"},{"runner":"macos-15-intel","platform":"macOS-Intel","arch":"x86_64"}]' || '[{"runner":"windows-latest","platform":"Windows-x64"},{"runner":"macos-15","platform":"macOS-Apple-Silicon","arch":"arm64"},{"runner":"macos-15-intel","platform":"macOS-Intel","arch":"x86_64"}]') }}
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 60
+  inspect:
+    runs-on: windows-latest
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/download-artifact@v4
         with:
-          node-version: '22'
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.13'
-      - name: Validate source privacy and eight Skills before building
-        id: source-check
-        run: python scripts/validate_release.py
-      - name: Inspect Inno and provision verified Microsoft WebView2 only if missing
-        if: runner.os == 'Windows'
-        run: python packaging/windows_delivery.py --preflight-only
-      - uses: ilammy/msvc-dev-cmd@v1
-        if: runner.os == 'Windows'
-        with:
-          arch: x64
-      - uses: msys2/setup-msys2@v2
-        id: msys2
-        if: runner.os == 'Windows'
-        with:
-          install: mingw-w64-x86_64-gcc
-          update: false
-      - name: Enable MinGW-W64 for the upstream QuickJS CPython 3.13 source build
-        if: runner.os == 'Windows'
+          name: SHAQ-Daily-Oracle-Lab-Windows-x64
+          run-id: 34480684368
+          github-token: ${{ github.token }}
+          path: prior
+      - name: Inspect existing installer without rebuilding
         shell: pwsh
-        env:
-          MSYS2_LOCATION: ${{ steps.msys2.outputs.msys2-location }}
         run: |
-          $prefix = Join-Path $env:MSYS2_LOCATION 'mingw64'
-          "SHAQ_MINGW_PREFIX=$prefix" | Out-File -FilePath $env:GITHUB_ENV -Append
-      - name: Verify actual macOS architecture
-        if: runner.os == 'macOS'
-        run: test "$(uname -m)" = "${{ matrix.arch }}"
-      - name: Build native no-LZO dependencies then install locked application
-        run: python packaging/build_native.py
-      - name: Validate all application tests
-        run: python -m unittest discover -s tests -v
-      - name: Collect complete Windows delivery acceptance, then fail on any unsuccessful stage
-        if: ${{ !cancelled() && runner.os == 'Windows' && steps.source-check.outcome == 'success' }}
-        shell: pwsh
-        run: .\packaging\build_windows.ps1 ${{ job.status != 'success' && '-UpstreamFailed' || '' }}
-      - name: Build macOS disk image
-        if: runner.os == 'macOS'
-        run: zsh packaging/build_macos.sh
-      - name: Install from DMG, settle both methods, reopen and inspect native window
-        if: runner.os == 'macOS'
-        run: |
-          MOUNT_POINT="$RUNNER_TEMP/shaq-dmg"
-          INSTALL_ROOT="$RUNNER_TEMP/shaq-applications"
-          mkdir -p "$MOUNT_POINT" "$INSTALL_ROOT"
-          hdiutil attach -nobrowse -mountpoint "$MOUNT_POINT" "dist/SHAQ-Daily-Oracle-Lab-${{ matrix.platform }}.dmg"
-          ditto "$MOUNT_POINT/SHAQ Daily Oracle Lab.app" "$INSTALL_ROOT/SHAQ Daily Oracle Lab.app"
-          hdiutil detach "$MOUNT_POINT"
-          "$INSTALL_ROOT/SHAQ Daily Oracle Lab.app/Contents/MacOS/SHAQ Daily Oracle Lab" --smoke --smoke-output "$PWD/dist/installed-smoke.json"
-          python -c 'import subprocess,sys; subprocess.run(sys.argv[1:],check=True,timeout=60)' "$INSTALL_ROOT/SHAQ Daily Oracle Lab.app/Contents/MacOS/SHAQ Daily Oracle Lab" --gui-smoke "$PWD/dist/installed-gui.json"
-          codesign --verify --deep --strict "$INSTALL_ROOT/SHAQ Daily Oracle Lab.app"
-          python packaging/audit_payload.py "$INSTALL_ROOT/SHAQ Daily Oracle Lab.app" --output dist/installed-native-audit.json
-          find "$INSTALL_ROOT/SHAQ Daily Oracle Lab.app" -depth -delete
-          test ! -e "$INSTALL_ROOT/SHAQ Daily Oracle Lab.app"
-      - name: Retain installers, checksums, provenance, native sources and acceptance evidence
+          $exe = Get-ChildItem prior -Recurse -Filter '*Setup.exe' | Select-Object -First 1
+          if (!$exe) { throw 'Missing diagnostic installer' }
+          $root = Join-Path $env:RUNNER_TEMP 'shaq-inspect'
+          try {
+            $p = Start-Process $exe.FullName -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/DIR=`"$root`"") -Wait -PassThru
+            if ($p.ExitCode -ne 0) { throw "Install failed $($p.ExitCode)" }
+            python packaging/inspect_existing_payload.py "$root" inventory.json
+            if ($LASTEXITCODE -ne 0) { throw 'Inventory failed' }
+          } finally {
+            $uninstaller = Join-Path $root 'unins000.exe'
+            if (Test-Path $uninstaller) { Start-Process $uninstaller -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait }
+          }
+      - uses: actions/upload-artifact@v4
         if: always()
-        uses: actions/upload-artifact@v4
         with:
-          name: SHAQ-Daily-Oracle-Lab-${{ matrix.platform }}
-          path: |
-            dist/*.dmg
-            dist/*Setup.exe
-            dist/*.sha256
-            dist/*.json
-            dist/native/*.json
-            dist/diagnostic/**
-            build/third-party/**
-            build/license-sources/*.tar.gz
-            build/native-dependencies/sources/*.tar.gz
-            build/native-dependencies/wheel-sha256.json
-            build/native-dependencies/wheels/*.whl
+          name: existing-windows-inventory
+          path: inventory.json
