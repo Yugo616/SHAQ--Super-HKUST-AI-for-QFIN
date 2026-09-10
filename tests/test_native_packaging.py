@@ -7,6 +7,8 @@ import sys
 import tempfile
 import threading
 import unittest
+import zipfile
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -30,6 +32,80 @@ class NativePackagingTests(unittest.TestCase):
         self.assertIn('zipline', args)
         # Zipline imports iso4217, which reads table.xml at import time.
         self.assertIn('iso4217', args)
+
+    def test_macos_loader_binary_uses_repaired_bytes_at_upstream_search_name(self):
+        build = self.module('build_desktop')
+        self.assertTrue(hasattr(build, 'stage_macos_blosc2'))
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            tables = root / 'tables'
+            (tables / '.dylibs').mkdir(parents=True)
+            library = tables / '.dylibs/libblosc2.7.dylib'
+            library.write_bytes(b'repaired native bytes')
+            staged = build.stage_macos_blosc2(tables, root / 'stage')
+            self.assertEqual(staged.name, 'libblosc2.dylib')
+            self.assertEqual(staged.read_bytes(), library.read_bytes())
+            args = build.pyinstaller_args(ROOT, root / 'dist', 'Test', blosc2_library=staged)
+            index = args.index(f'{staged}:tables')
+            self.assertEqual(args[index - 1], '--add-binary')
+            library.unlink()
+            with self.assertRaises(RuntimeError):
+                build.stage_macos_blosc2(tables, root / 'stage')
+
+    def test_bcolz_build_uses_separate_pinned_environment(self):
+        from packaging.requirements import Requirement
+        build = self.module('build_native')
+        lock = ROOT / 'packaging/bcolz-build.lock.txt'
+        self.assertTrue(lock.is_file())
+        versions = {}
+        for line in lock.read_text().splitlines():
+            if line and not line.startswith('#'):
+                req = Requirement(line)
+                versions[req.name.lower().replace('_', '-')] = next(iter(req.specifier)).version
+        # Build-system requirements from the pinned upstream bcolz 1.13.0 sdist.
+        for requirement in ('setuptools>=45', 'setuptools_scm[toml]>=6.2', 'wheel',
+                            'Cython>=0.22,<3.2.0', 'toml', 'numpy>=2.0.0rc1'):
+            req = Requirement(requirement)
+            self.assertIn(versions[req.name.lower().replace('_', '-')], req.specifier)
+        with tempfile.TemporaryDirectory() as name, patch.object(build, 'run') as run:
+            output = Path(name)
+            build.build_bcolz(ROOT, output / 'source', output / 'wheels', output / 'env')
+            commands = [tuple(str(arg) for arg in call.args) for call in run.call_args_list]
+            self.assertEqual(commands[0], (sys.executable, '-m', 'venv', str(output / 'env')))
+            self.assertTrue(all(command[0] != sys.executable for command in commands[1:]))
+            self.assertIn(str(lock), commands[1])
+            self.assertIn('--no-build-isolation', commands[2])
+            self.assertIn(str(output / 'source'), commands[2])
+
+    def test_windows_repaired_wheel_retains_blosc2_loader_name(self):
+        build = self.module('build_native')
+        self.assertTrue(hasattr(build, 'verify_windows_blosc2'))
+        with tempfile.TemporaryDirectory() as name:
+            wheel = Path(name) / 'tables.whl'
+            for entry in ('tables/libblosc2.dll', 'tables.libs/libblosc2.dll'):
+                with zipfile.ZipFile(wheel, 'w') as archive:
+                    archive.writestr(entry, b'vendored DLL')
+                build.verify_windows_blosc2(wheel)
+            with zipfile.ZipFile(wheel, 'w') as archive:
+                archive.writestr('tables.libs/libblosc2-hashed.dll', b'vendored DLL')
+            with self.assertRaises(RuntimeError):
+                build.verify_windows_blosc2(wheel)
+
+    def test_frozen_blosc2_guard_rejects_external_fallback(self):
+        hook = ROOT / 'packaging/frozen_native.py'
+        self.assertTrue(hook.is_file())
+        with tempfile.TemporaryDirectory() as name:
+            code = ('import runpy,sys; sys.frozen=True; sys._MEIPASS=sys.argv[2]; '
+                    'runpy.run_path(sys.argv[1]); sys.audit("ctypes.dlopen",sys.argv[3])')
+            root = Path(name)
+            for library, expected in ((root / 'tables/libblosc2.dylib', 0),
+                                      (root / 'tables.libs/libblosc2.dll', 0),
+                                      (root.parent / 'kernel32.dll', 0),
+                                      (root.parent / 'libblosc2.dylib', 1),
+                                      (Path('libblosc2.dll'), 1)):
+                result = subprocess.run([sys.executable, '-c', code, str(hook), name, str(library)],
+                                        capture_output=True, text=True)
+                self.assertEqual(result.returncode, expected, result.stderr)
 
     def test_audit_allows_unsupported_lzo_stub_but_rejects_actual_library(self):
         audit = self.module('audit_payload')

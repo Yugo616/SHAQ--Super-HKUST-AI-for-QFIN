@@ -9,7 +9,9 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import tempfile
 import urllib.request
+import zipfile
 
 
 def run(*args, **kwargs):
@@ -35,6 +37,22 @@ def reset_wheel_directories(output):
             shutil.rmtree(path)
         path.mkdir()
     return paths
+
+
+def build_bcolz(root, source, wheels, environment):
+    # bcolz's Cython<3.2 build requirement conflicts with the PyTables toolchain.
+    # Keep all upstream build requirements in a separate CPython 3.13 environment.
+    run(sys.executable, '-m', 'venv', environment)
+    python = environment / ('Scripts/python.exe' if sys.platform == 'win32' else 'bin/python')
+    run(python, '-m', 'pip', 'install', '--no-cache-dir', '-r', root / 'packaging/bcolz-build.lock.txt')
+    run(python, '-m', 'pip', 'wheel', '--no-deps', '--no-build-isolation', '--no-cache-dir', '-w', wheels, source)
+
+
+def verify_windows_blosc2(wheel):
+    with zipfile.ZipFile(wheel) as archive:
+        names = {name.lower() for name in archive.namelist()}
+    if not names & {'tables/libblosc2.dll', 'tables.libs/libblosc2.dll'}:
+        raise RuntimeError('Repaired PyTables wheel lacks the Blosc2 filename its loader requires')
 
 
 def main():
@@ -93,13 +111,18 @@ def main():
     run(*pip, 'wheel', '--no-deps', '--no-build-isolation', '--no-cache-dir', '-w', raw, sources['tables'], env=env)
     if sys.platform == 'win32':
         # bcolz uses MSVC; QuickJS upstream requires 64-bit MinGW-W64 and static pthread.
-        run(*pip, 'wheel', '--no-deps', '--no-build-isolation', '-w', raw, sources['bcolz-zipline'])
+        with tempfile.TemporaryDirectory(prefix='bcolz-build-', dir=output) as environment:
+            build_bcolz(root, sources['bcolz-zipline'], raw, Path(environment))
         run(sys.executable, 'setup.py', 'build', '--compiler=mingw32', 'bdist_wheel', '--dist-dir', raw, cwd=sources['quickjs'])
         import blosc2
         library_dirs = [prefix / 'bin', Path(blosc2.__file__).parent / 'lib', Path(blosc2.__file__).parent / 'bin']
         for wheel in raw.glob('*.whl'):
             run(sys.executable, '-m', 'delvewheel', 'repair', '--add-path',
-                os.pathsep.join(str(p) for p in library_dirs if p.is_dir()), '-w', repaired, wheel)
+                os.pathsep.join(str(p) for p in library_dirs if p.is_dir()),
+                *(['--no-mangle', 'libblosc2.dll'] if wheel.name.startswith('tables-') else []),
+                '-w', repaired, wheel)
+        for wheel in repaired.glob('tables-*.whl'):
+            verify_windows_blosc2(wheel)
     else:
         for wheel in raw.glob('*.whl'):
             run(sys.executable, '-m', 'wheel', 'tags', '--remove', '--platform-tag',

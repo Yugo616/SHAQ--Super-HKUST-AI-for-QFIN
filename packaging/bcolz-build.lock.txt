@@ -1,0 +1,10 @@
+# Build-only CPython 3.13 environment for bcolz-zipline 1.13.0.
+# Upstream pyproject.toml requires setuptools_scm[toml], toml and Cython<3.2.
+# Do not apply this lock to the PyTables/runtime environment.
+Cython==3.1.8
+numpy==2.3.5
+packaging==26.3
+setuptools==84.0.0
+setuptools-scm[toml]==9.2.2
+toml==0.10.2
+wheel==0.48.0

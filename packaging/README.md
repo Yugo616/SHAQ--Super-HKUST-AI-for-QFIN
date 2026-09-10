@@ -28,6 +28,14 @@ Windows also genuinely builds bcolz-zipline 1.13.0 and QuickJS 1.19.4 for CPytho
 No assumption of Windows 3.13 wheel existence substitutes for compilation acceptance.
 Original source archives, wheel hashes, notices and provenance remain in build artifacts.
 
+bcolz's build-only environment uses `bcolz-build.lock.txt` (Cython 3.1.8,
+setuptools-scm 9.2.2 and toml 0.10.2), matching its upstream Cython<3.2 requirement.
+PyTables keeps Cython 3.2.4 in the main build environment. On Windows only Blosc2's
+DLL filename is exempted from delvewheel mangling so PyTables can find it in the wheel.
+On macOS the repaired Blosc2 library is also provided as `tables/libblosc2.dylib`,
+the filename searched by the unchanged upstream loader; PyInstaller handles its
+relocation/signing. A frozen runtime hook rejects external Blosc2 ctypes fallbacks.
+
 NumPy 2.3.5 with pandas 2.3.3 is intentional: NumPy 2.5.3 caused a generic timedelta
 deprecation inside pandas and the upstream market calendar. The pinned pair passes
 that reproducer without filtering warnings; the minute rules remain unchanged.

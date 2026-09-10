@@ -59,12 +59,26 @@ def source_notices(destination, name, version=None, source=None):
     return notices, source
 
 
-def pyinstaller_args(root, output, name):
+def stage_macos_blosc2(tables_package, destination):
+    """Give the repaired library PyTables' loader filename before binary analysis."""
+    libraries = sorted((tables_package / '.dylibs').glob('libblosc2.*.dylib'))
+    if len(libraries) != 1:
+        raise RuntimeError(f'Expected one repaired Blosc2 library, found {len(libraries)}')
+    destination.mkdir(parents=True, exist_ok=True)
+    target = destination / 'libblosc2.dylib'
+    shutil.copy2(libraries[0], target)
+    return target
+
+
+def pyinstaller_args(root, output, name, blosc2_library=None):
     args = ['--noconfirm', '--clean', '--windowed', '--onedir', '--name', name,
             '--paths', str(root / 'src'), '--distpath', str(output),
+            '--runtime-hook', str(root / 'packaging/frozen_native.py'),
             '--workpath', str(root / 'build/desktop-native'), '--specpath', str(root / 'build')]
     if sys.platform == 'darwin':
         args += ['--strip']
+    if blosc2_library is not None:
+        args += ['--add-binary', f'{blosc2_library}:tables']
     args += ['--collect-submodules', 'scipy._external']
     for package in ('webview', 'zipline', 'tables', 'bcolz', 'pandas_market_calendars',
                     'exchange_calendars', 'yfinance', 'keyring'):
@@ -149,9 +163,11 @@ def main():
     if tables.which_lib_version('lzo') is not None:
         raise RuntimeError('Use the no-LZO source build before packaging')
     root = Path(__file__).resolve().parents[1]
+    blosc2_library = (stage_macos_blosc2(Path(tables.__file__).parent, root / 'build/native-loader')
+                      if sys.platform == 'darwin' else None)
     collect_notices(root)
     env = dict(os.environ, PYINSTALLER_CONFIG_DIR=str(root / 'build/pyinstaller-cache'))
-    subprocess.run([sys.executable, '-m', 'PyInstaller', *pyinstaller_args(root, args.output.resolve(), args.name)], check=True, env=env)
+    subprocess.run([sys.executable, '-m', 'PyInstaller', *pyinstaller_args(root, args.output.resolve(), args.name, blosc2_library)], check=True, env=env)
     # pip's local installation URL is not runtime metadata. Public provenance is
     # retained in third-party/source-manifest.json and the wheel/source artifacts.
     for payload in (args.output / args.name, args.output / (args.name + '.app')):
