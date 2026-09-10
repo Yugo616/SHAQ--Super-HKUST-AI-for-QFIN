@@ -190,7 +190,7 @@ class NativePackagingTests(unittest.TestCase):
                 private.parent.mkdir()
                 private.write_text('{}')
                 self.assertEqual(audit.forbidden_paths(root), [
-                    str(private.parent.relative_to(root)), str(private.relative_to(root))])
+                    private.parent.relative_to(root).as_posix(), private.relative_to(root).as_posix()])
 
     def test_uninstall_waits_for_delayed_self_cleanup(self):
         verify = self.module('verify_uninstall')

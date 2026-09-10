@@ -25,7 +25,7 @@ def forbidden_paths(root):
         private_runtime = payload[:1] == ('runtime',) or payload[:2] == ('shaq_daily_oracle', 'runtime')
         name = path.name.lower()
         if private_runtime or parts & {'backtrader', '.git', '.env'} or 'liblzo' in name or name.startswith('lzo2.'):
-            found.append(str(path.relative_to(root)))
+            found.append(path.relative_to(root).as_posix())
     return found
 
 
@@ -41,7 +41,7 @@ def verify_methods(root):
     failures = []
     for manifest in manifests:
         package = manifest.parent.parent
-        metadata = json.loads(manifest.read_text())
+        metadata = json.loads(manifest.read_text(encoding="utf-8"))
         methods = metadata['methods']
         for name, digest in methods.items():
             path = package / 'bundled_versions' / name
@@ -88,31 +88,31 @@ def audit(root):
         data = path.read_bytes()
         if contains_private_path(data, home, checkout, hosted_runner):
             # User names in debug/source paths are private, even if linking is relocatable.
-            failures.append(f'private macOS user path: {path.relative_to(root)}')
+            failures.append(f'private macOS user path: {path.relative_to(root).as_posix()}')
         elif b'/Users/' in data:
-            upstream_paths.append(str(path.relative_to(root)))
+            upstream_paths.append(path.relative_to(root).as_posix())
         if sys.platform == 'darwin' and magic in (b'\xcf\xfa\xed\xfe', b'\xca\xfe\xba\xbe', b'\xfe\xed\xfa\xcf'):
             output = subprocess.check_output(['otool', '-L', str(path)], text=True)
             links = [line.strip().split(' (')[0] for line in output.splitlines()[1:] if line.startswith('\t')]
             architecture = subprocess.check_output(['lipo', '-archs', str(path)], text=True).strip()
             if platform.machine() not in architecture.split():
-                failures.append(f'wrong architecture: {path.relative_to(root)}: {architecture}')
+                failures.append(f'wrong architecture: {path.relative_to(root).as_posix()}: {architecture}')
             load_commands = subprocess.check_output(['otool', '-l', str(path)], text=True)
             minimum = re.findall(r'\bminos\s+(\S+)|LC_VERSION_MIN_MACOSX\s+cmdsize\s+\d+\s+version\s+(\S+)', load_commands)
-            failures.extend(f'{path.relative_to(root)} -> {link}' for link in bad_macos_links(links))
-            native.append({'path': str(path.relative_to(root)), 'links': links, 'architecture': architecture,
+            failures.extend(f'{path.relative_to(root).as_posix()} -> {link}' for link in bad_macos_links(links))
+            native.append({'path': path.relative_to(root).as_posix(), 'links': links, 'architecture': architecture,
                            'minimum_versions': [a or b for a, b in minimum]})
         elif sys.platform == 'win32' and magic[:2] == b'MZ':
             import pefile
             pe = pefile.PE(str(path))
             links = [entry.dll.decode() for entry in getattr(pe, 'DIRECTORY_ENTRY_IMPORT', [])]
-            failures.extend(f'{path.relative_to(root)} -> {link}' for link in links if 'lzo' in link.lower())
-            native.append({'path': str(path.relative_to(root)), 'links': links})
+            failures.extend(f'{path.relative_to(root).as_posix()} -> {link}' for link in links if 'lzo' in link.lower())
+            native.append({'path': path.relative_to(root).as_posix(), 'links': links})
             pe.close()
         if path.suffix.lower() in {'.json', '.toml', '.yaml', '.yml', '.ini', '.env'}:
-            content = path.read_text(errors='replace')
+            content = path.read_text(encoding='utf-8', errors='replace')
             if re.search(r'sk-proj-[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{30,}', content):
-                failures.append(f'private material: {path.relative_to(root)}')
+                failures.append(f'private material: {path.relative_to(root).as_posix()}')
     if not native:
         failures.append('no native payload inspected')
     return {'status': 'failed' if failures else 'passed', 'native_count': len(native), 'failures': failures,

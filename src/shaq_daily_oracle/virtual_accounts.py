@@ -183,7 +183,7 @@ class AccountStore:
         with FileLock(str(self.root / '.lock')):
             path = self.root / 'activation.json'
             if path.exists():
-                prior = json.loads(path.read_text())
+                prior = json.loads(path.read_text(encoding="utf-8"))
                 if prior['rules'] == asdict(rules):
                     return prior
                 if activated_at and _time(activated_at) <= _time(prior['activated_at']):
@@ -199,8 +199,8 @@ class AccountStore:
         path = self.root / 'activation.json'
         if not path.exists():
             return dict(accounts=[], results=[], rules=None, legacy=self.read_legacy())
-        current = json.loads(path.read_text())
-        policies = sorted([json.loads(p.read_text()) for p in (self.root / 'policies').glob('*.json')],
+        current = json.loads(path.read_text(encoding="utf-8"))
+        policies = sorted([json.loads(p.read_text(encoding="utf-8")) for p in (self.root / 'policies').glob('*.json')],
                           key=lambda p: _time(p['activated_at']))
         result = self._refresh_policy(rows, current)
         for i, policy in enumerate(policies):
@@ -228,13 +228,13 @@ class AccountStore:
     def view(self, rows):
         """Read cached aggregation only. Background reconciliation owns engine work."""
         path = self.root / 'summary.json'
-        cached = json.loads(path.read_text()) if path.exists() else {}
+        cached = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
         if cached:
             unsigned = {k: v for k, v in cached.items() if k != 'summary_sha256'}
             if sha256_payload(unsigned) != cached.get('summary_sha256'):
                 raise ValueError('Account summary hash mismatch')
         activation_path = self.root / 'activation.json'
-        policy = json.loads(activation_path.read_text()) if activation_path.exists() else {}
+        policy = json.loads(activation_path.read_text(encoding="utf-8")) if activation_path.exists() else {}
         if cached and cached.get('result', {}).get('rules_hash') != sha256_payload(policy):
             cached = {}
         result = cached.get('result', dict(accounts=[], results=[], rules=policy.get('rules'),
@@ -323,7 +323,7 @@ class AccountStore:
                     dest = self.root / 'settlements' / (document_hash + '.json')
                     if not dest.exists():
                         _atomic_json(dest, document)
-                    elif json.loads(dest.read_text()) != document:
+                    elif json.loads(dest.read_text(encoding="utf-8")) != document:
                         raise ValueError('Settlement revision was modified')
                     entry['settlement_hash'] = document_hash
                     receipt_path = self.root / 'processing' / (document_hash + '.json')
@@ -331,7 +331,7 @@ class AccountStore:
                         _atomic_json(receipt_path, dict(settlement_hash=document_hash,
                             processing_started_at_et=processing_started,
                             processed_at_et=datetime.now(ET).isoformat()))
-                    receipt = json.loads(receipt_path.read_text())
+                    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
                     if receipt.get('settlement_hash') != document_hash:
                         raise ValueError('Settlement processing receipt identity mismatch')
                     _time(receipt['processing_started_at_et'])
@@ -346,7 +346,7 @@ class AccountStore:
         """Read saved v1 outputs only; missing legacy settlement is not replayed."""
         documents = []
         for path in sorted((self.legacy_root / 'settlements').glob('*.json')):
-            value = json.loads(path.read_text())
+            value = json.loads(path.read_text(encoding="utf-8"))
             if sha256_payload(value) != path.stem:
                 raise ValueError('Legacy settlement hash mismatch')
             documents.append(dict(value, settlement_hash=path.stem, legacy=True,

@@ -78,7 +78,7 @@ class BundledVersionTests(unittest.TestCase):
                 ("independent-gate.json", BASELINE_ID),
                 ("cross-domain-synthesis.json", SHADOW_ID),
             ):
-                embedded = json.loads((package / "bundled_versions" / filename).read_text())
+                embedded = json.loads((package / "bundled_versions" / filename).read_text(encoding="utf-8"))
                 effective = registry.effective_skills(version_id, "team")
                 self.assertEqual(effective, embedded["files"])
                 target = registry.root / "team" / version_id
@@ -94,7 +94,7 @@ class BundledVersionTests(unittest.TestCase):
         from shaq_daily_oracle.skill_versions import SkillVersionManifest
 
         package = json.loads(
-            (PACKAGE_ROOT / "bundled_versions/independent-gate.json").read_text()
+            (PACKAGE_ROOT / "bundled_versions/independent-gate.json").read_text(encoding="utf-8")
         )
         manifest = SkillVersionManifest.from_dict(package["manifest"])
         with self.assertRaisesRegex(SkillVersionError, "complete method"):
@@ -166,13 +166,13 @@ class BundledVersionTests(unittest.TestCase):
         from shaq_daily_oracle.module_rules import MODULES, default_rule
 
         baseline = json.loads(
-            (PACKAGE_ROOT / "bundled_versions/independent-gate.json").read_text()
+            (PACKAGE_ROOT / "bundled_versions/independent-gate.json").read_text(encoding="utf-8")
         )["files"]
         shadow = json.loads(
-            (PACKAGE_ROOT / "bundled_versions/cross-domain-synthesis.json").read_text()
+            (PACKAGE_ROOT / "bundled_versions/cross-domain-synthesis.json").read_text(encoding="utf-8")
         )["files"]
         legacy_synthesis = json.loads(
-            (PACKAGE_ROOT / "bundled_versions/synthesis.json").read_text()
+            (PACKAGE_ROOT / "bundled_versions/synthesis.json").read_text(encoding="utf-8")
         )["files"]
 
         for relative_path, content in baseline.items():

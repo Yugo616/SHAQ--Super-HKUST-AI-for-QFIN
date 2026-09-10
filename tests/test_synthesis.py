@@ -100,7 +100,7 @@ class SynthesisTests(unittest.TestCase):
                 registry=registry, integration_policy=fixtures.policy()).run(
                     evidence=fixtures.evidence(root / "evidence-staging"), variants=variants, profile=fixtures.profile(), secret="", caller=Model())
             stored = list((Path(result["batch_root"]) / "variants").glob("*/variant_result.json"))
-            rows = [json.loads(p.read_text()) for p in stored]
+            rows = [json.loads(p.read_text(encoding="utf-8")) for p in stored]
             shadow = next(r for r in rows if r["variant"]["version_id"] == "cross-domain-synthesis-1")
             self.assertEqual(shadow["synthesis"]["decisions"][0]["resolution"], "个股机制占优")
             self.assertEqual(shadow["predictions"][0]["symbol"], "AAPL")
@@ -112,7 +112,7 @@ class SynthesisTests(unittest.TestCase):
             from shaq_daily_oracle.research_dashboard import ResearchDashboardIndex
             detail = ResearchDashboardIndex(batches_root=root / "batches", database=root / "index.sqlite3").batch_detail(Path(result["batch_root"]).name)
             embedded = json.loads(
-                (Path(__file__).parents[1] / "bundled_versions/cross-domain-synthesis.json").read_text()
+                (Path(__file__).parents[1] / "bundled_versions/cross-domain-synthesis.json").read_text(encoding="utf-8")
             )
             self.assertEqual(
                 detail["skill_snapshots"]["team/cross-domain-synthesis-1"]["documents"]["decision/decision.js"],

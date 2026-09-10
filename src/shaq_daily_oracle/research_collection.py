@@ -255,7 +255,7 @@ def collect_research_evidence(
         openbb if profile.market_provider == "openbb-rest" else YFinanceProvider(profile)
     )
     public_config_path = package_root / "config/public-data.json"
-    public_config = json.loads(public_config_path.read_text()) if public_config_path.exists() else None
+    public_config = json.loads(public_config_path.read_text(encoding="utf-8")) if public_config_path.exists() else None
     if history_cache_root is not None and public_config:
         from .public_data import DailyBarCache
         market = DailyBarCache(market, history_cache_root / profile.identity(), overlap_days=public_config["history_overlap_days"])

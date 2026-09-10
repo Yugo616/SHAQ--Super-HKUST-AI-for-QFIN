@@ -21,7 +21,7 @@ SERVICE_LABEL = "org.shaq.daily-oracle.research"
 
 def schedule_status(paths):
     path = paths.research_root / "schedule.json"
-    value = json.loads(path.read_text()) if path.exists() else {
+    value = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {
         "enabled": False, "start_et": "08:35:00", "selections": [], "model_profile_id": "",
     }
     now = datetime.now(ET)
@@ -34,7 +34,7 @@ def schedule_status(paths):
         target = datetime.combine(session.session_date, clock_time.fromisoformat(value["start_et"]), ET)
     value["local_start"] = "下次启动：" + target.astimezone().strftime("%Y-%m-%d %H:%M %Z")
     status_path = paths.research_root / "schedule_status.json"
-    status = json.loads(status_path.read_text()) if status_path.exists() else {}
+    status = json.loads(status_path.read_text(encoding="utf-8")) if status_path.exists() else {}
     value["status_message"] = status.get("message", "")
     return value
 
@@ -112,7 +112,7 @@ def run_research_worker(paths):
         ledger = paths.research_root / "automatic_runs" / f"{now.date()}.json"
         if state in {"waiting", "closed"}:
             return 0
-        saved = json.loads(ledger.read_text()) if ledger.exists() else {}
+        saved = json.loads(ledger.read_text(encoding="utf-8")) if ledger.exists() else {}
         if saved.get("status") in {"complete", "partial_failure", "missed", "failed"}:
             return 0
         if state == "missed":

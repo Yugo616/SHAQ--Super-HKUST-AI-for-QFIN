@@ -624,7 +624,7 @@ def run_variant(
     screening_path = evidence.root / "raw/screening.json"
     if screening_path.is_file():
         from .module_rules import default_rule
-        packet = json.loads(screening_path.read_text())
+        packet = json.loads(screening_path.read_text(encoding="utf-8"))
         script = documents.get("modules/screening/compute.js", default_rule("screening"))
         symbols = packet["candidate_sets"].get(sha256_payload(script))
         if symbols is None:
@@ -902,7 +902,7 @@ class ResearchBatchRunner:
         }
         previous_status = root / 'batch_status.json'
         if previous_status.exists():
-            previous = json.loads(previous_status.read_text())
+            previous = json.loads(previous_status.read_text(encoding="utf-8"))
             _write_json_same_or_once(root / 'attempts' / (sha256_payload(previous) + '.json'), previous)
         _write_json_same_or_once(root / 'attempts' / (sha256_payload(status) + '.json'), status)
         _atomic_json(previous_status, status)

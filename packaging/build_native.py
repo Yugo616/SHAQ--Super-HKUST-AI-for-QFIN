@@ -63,7 +63,7 @@ def main():
     source_dir = output / 'sources'
     source_dir.mkdir(parents=True, exist_ok=True)
     sources = {}
-    specification = json.loads((root / 'packaging/native-sources.json').read_text())
+    specification = json.loads((root / 'packaging/native-sources.json').read_text(encoding="utf-8"))
     for name, item in specification.items():
         archive = source_dir / item['url'].rsplit('/', 1)[-1]
         if not archive.exists():

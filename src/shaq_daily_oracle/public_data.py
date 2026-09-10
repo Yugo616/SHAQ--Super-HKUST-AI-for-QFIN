@@ -25,7 +25,7 @@ class DailyBarCache:
         output, groups = {}, {}
         for symbol in symbols:
             path = self.root / (sha256_payload(symbol) + ".json")
-            cached = json.loads(path.read_text()) if path.exists() else {}
+            cached = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
             rows = cached.get("rows", [])
             recent = max((str(r.get("timestamp", ""))[:10] for r in rows), default="")
             beginning = start

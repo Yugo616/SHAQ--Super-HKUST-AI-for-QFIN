@@ -127,7 +127,7 @@ def collect_notices(root):
         if not notices:
             notices, sources[name] = source_notices(destination, name, dist.version)
         distributions.append({'name': name, 'version': dist.version, 'notices': notices})
-    for name, source in json.loads((root / 'packaging/native-sources.json').read_text()).items():
+    for name, source in json.loads((root / 'packaging/native-sources.json').read_text(encoding="utf-8")).items():
         _, sources[name] = source_notices(destination, name, source=source)
     if sys.platform == 'win32':
         compiler = shutil.which('gcc')

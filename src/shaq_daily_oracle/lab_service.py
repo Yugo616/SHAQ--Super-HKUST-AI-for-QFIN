@@ -158,7 +158,7 @@ class LabService:
             return
         try:
             receipt = self.paths.research_root / 'label_refresh_status.json'
-            prior = json.loads(receipt.read_text()) if receipt.exists() else {}
+            prior = json.loads(receipt.read_text(encoding="utf-8")) if receipt.exists() else {}
             now = datetime.now(ET)
             if prior.get('attempted_at') and now - datetime.fromisoformat(prior['attempted_at']) < timedelta(minutes=15):
                 return
@@ -772,7 +772,7 @@ class LabService:
             task_lock.acquire(timeout=0)
         except LockTimeout:
             saved = lock_root / (job_id + '.json')
-            return json.loads(saved.read_text()) if saved.exists() else {
+            return json.loads(saved.read_text(encoding="utf-8")) if saved.exists() else {
                 'job_id': job_id, 'status': 'running', 'message': '已有任务正在运行',
             }
         with self.jobs_lock:

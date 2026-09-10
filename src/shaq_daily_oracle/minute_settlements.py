@@ -74,7 +74,7 @@ class MinuteStore:
         destination = self.root / collection / 'observations' / (digest + '.json')
         self.root.mkdir(parents=True, exist_ok=True)
         with FileLock(str(self.root / '.lock')):
-            if destination.exists() and json.loads(destination.read_text()) != document:
+            if destination.exists() and json.loads(destination.read_text(encoding="utf-8")) != document:
                 raise ValueError('Minute observation was modified')
             if not destination.exists():
                 _atomic_json(destination, document)
@@ -88,7 +88,7 @@ class MinuteStore:
                         correction=False, execution_sha256=sha256_payload({}), captured_at_et=None)
         observations = []
         for path in self.root.glob('*/observations/*.json'):
-            document = json.loads(path.read_text())
+            document = json.loads(path.read_text(encoding="utf-8"))
             unsigned = {k: v for k, v in document.items() if k != 'observation_sha256'}
             if sha256_payload(unsigned) != path.stem or document.get('observation_sha256') != path.stem:
                 raise ValueError('Minute observation hash mismatch')
