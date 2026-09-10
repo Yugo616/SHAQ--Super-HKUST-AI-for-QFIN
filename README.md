@@ -2,12 +2,14 @@
 
 ## 下载与开始
 
-0.6.0 Zipline 升级安装包尚未发布。Windows x64、Mac Apple Silicon 和 Mac Intel 必须通过同一源码版本的实际安装验收后，才会提供两个独立发布页和下载链接；构建定义或本机测试不等于远程平台通过。
-内部测试版未进行商业签名；安装和模型连接的实测范围以该发布页说明为准。
+**[下载 Windows 版](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.6.0-windows)** · **[下载 Mac 版](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.6.0-macos)**
+
+Windows 下载 x64 安装程序；Mac 在同一发布页选择 Apple Silicon（M 系列）或 Intel 的一个 DMG，要求 macOS 15 或以上。三个安装包使用同一源码提交，内置相同的两个方法包。
+内部测试版未进行商业签名；实际安装、模型连接测试范围和校验值见各平台发布说明。
 
 1. 安装并打开软件，在「连接设置」连接 Codex、Claude Code 或模型 API。
 2. 登录团队 GitHub；软件已配置本仓库，无需填写 Client ID。
-3. 在「开始运行」勾选原版基准和综合判断版，点击运行。
+3. 在「开始运行」勾选「独立证据门禁版 · 正式基准」和「跨域综合研判版 · Shadow」，点击运行。
 4. 在「查看结果」比较方法、股票判断和虚拟账户；点击记录展开分析与简短复盘。
 
 Codex、Claude Code 登录方式要求本机安装对应工具；API 方式不需要。Claude 网页登录不等同 Claude Code。
@@ -65,8 +67,8 @@ login, OpenAI, Anthropic, or an OpenAI-compatible relay API.
 Platform-specific installation validation is recorded in each release:
 
 - Windows 10/11 x64
-- macOS Apple Silicon
-- macOS Intel
+- macOS 15+ Apple Silicon
+- macOS 15+ Intel
 
 The first launch stores model and GitHub credentials in macOS Keychain or
 Windows Credential Manager. Credentials, model calls, market evidence and daily
@@ -92,7 +94,7 @@ versioned PIT universe + replaceable data providers
  six blind domain analyses → non-voting adversary → sandboxed decision rule
                          │
                          ▼
-       local history, comparison, labels and professor export
+       local history, method comparison, labels and virtual accounts
 ```
 
 Every batch remembers which data, model and Skill versions were used. Restarting
@@ -122,9 +124,10 @@ the adversary result, and verified evidence roots. It cannot access files,
 network, system commands, credentials, broker code, or post-close labels.
 
 The application rejects arbitrary Python, binaries, Actions, credentials, local
-paths and runtime data before upload. `main` is read-only; each member publishes
-immutable versions to `shadow/<github-login>` and every version stays bound to
-its original main commit.
+paths and runtime data before upload. Software `main` is read-only from the app;
+members publish immutable packages to `versions:shadow_versions/<author>/<version-id>/`.
+Every version stays bound to its original base. Existing personal-branch versions
+remain readable for compatibility.
 
 ## Models
 
@@ -173,12 +176,11 @@ for a directional forecast.
 
 ## Team repository setup
 
-The team administrator registers one GitHub App with Device Flow enabled and
-provides its public Client ID in `config/team-repository.json` or the first-launch
-screen. The app requests repository metadata read and the minimum contents access
-needed to read versions and, for members with write permission, append a version
-to their personal branch. Read-only members can install and run team versions but
-cannot upload.
+The team GitHub App's public Device Flow configuration is bundled; members only
+click sign in and confirm in their browser, without entering a Client ID.
+The app requests repository metadata and contents access needed to read versions
+and, for members with write permission, append a package to the shared version
+branch. Read-only members can install and run team versions but cannot upload.
 
 ## Developer verification
 
