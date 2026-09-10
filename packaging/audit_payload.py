@@ -57,7 +57,7 @@ def verify_methods(root):
     return failures
 
 
-def contains_private_path(data, home, checkout, hosted_runner=False):
+def contains_private_path(data, home, checkout, hosted_runner=False, verified_upstream=False):
     # CMake and native compilers use both Windows slash spellings.
     data = data.replace(b'\\', b'/')
     home, checkout = home.replace('\\', '/'), checkout.replace('\\', '/')
@@ -85,7 +85,9 @@ def contains_private_path(data, home, checkout, hosted_runner=False):
             settings = (b'summary of the hdf5 configuration' in data and
                         data[:match.start()].endswith(b'module directory: ') and
                         re.match(rb'/appdata/local/temp/tmp[a-z0-9_]+/mod\r?\n', suffix))
-            upstream = source or settings or (cargo and b'/../' not in suffix.split(b'\x00', 1)[0])
+            proven_build_source = (verified_upstream and suffix.startswith(b'/appdata/local/temp/') and
+                                   b'/../' not in suffix.split(b'\x00', 1)[0])
+            upstream = source or settings or proven_build_source or (cargo and b'/../' not in suffix.split(b'\x00', 1)[0])
         if not upstream:
             return True
     return False
@@ -95,6 +97,11 @@ def audit(root):
     failures = forbidden_paths(root) + verify_methods(root)
     native = []
     upstream_paths = []
+    proven_files = {}
+    for manifest in root.rglob('third-party/upstream-path-provenance.json'):
+        for proof in json.loads(manifest.read_text(encoding='utf-8')):
+            for name, digest in proof['files'].items():
+                proven_files.setdefault(Path(name).name, set()).add(digest)
     home, checkout = str(Path.home()), str(Path(__file__).resolve().parents[1])
     hosted_runner = os.environ.get('GITHUB_ACTIONS') == 'true' and os.environ.get('RUNNER_ENVIRONMENT') == 'github-hosted'
     for path in root.rglob('*'):
@@ -103,10 +110,11 @@ def audit(root):
         with path.open('rb') as stream:
             magic = stream.read(4)
         data = path.read_bytes()
-        if contains_private_path(data, home, checkout, hosted_runner):
+        verified_upstream = hashlib.sha256(data).hexdigest() in proven_files.get(path.name, set())
+        if contains_private_path(data, home, checkout, hosted_runner, verified_upstream):
             # User names in debug/source paths are private, even if linking is relocatable.
             failures.append(f'private build/user path: {path.relative_to(root).as_posix()}')
-        elif b'/Users/' in data or b'C:\\Users\\runneradmin' in data:
+        elif verified_upstream or b'/Users/' in data or b'C:\\Users\\runneradmin' in data:
             upstream_paths.append(path.relative_to(root).as_posix())
         if sys.platform == 'darwin' and magic in (b'\xcf\xfa\xed\xfe', b'\xca\xfe\xba\xbe', b'\xfe\xed\xfa\xcf'):
             output = subprocess.check_output(['otool', '-L', str(path)], text=True)

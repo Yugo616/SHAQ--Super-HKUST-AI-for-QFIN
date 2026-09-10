@@ -1,6 +1,8 @@
 """One payload recipe for the release and preview, on the actual host architecture."""
 from pathlib import Path
 import argparse
+import base64
+import csv
 import hashlib
 import importlib.metadata as metadata
 import json
@@ -11,6 +13,70 @@ import subprocess
 import sys
 import tarfile
 import urllib.request
+import zipfile
+
+
+def verified_wheel_files(archive, expected_sha256, installed):
+    """Prove unchanged installed files against a published archive and its RECORD."""
+    if hashlib.sha256(archive.read_bytes()).hexdigest() != expected_sha256:
+        raise ValueError(f'Upstream wheel archive digest mismatch: {archive.name}')
+    verified = {}
+    with zipfile.ZipFile(archive) as wheel:
+        record = next(name for name in wheel.namelist() if name.endswith('.dist-info/RECORD'))
+        for name, recorded, size in csv.reader(wheel.read(record).decode('utf-8').splitlines()):
+            if name not in installed or not recorded.startswith('sha256='):
+                continue
+            data = wheel.read(name)
+            digest = hashlib.sha256(data).digest()
+            if (recorded != 'sha256=' + base64.urlsafe_b64encode(digest).decode().rstrip('=') or
+                    size != str(len(data))):
+                raise ValueError(f'Upstream wheel RECORD mismatch: {name}')
+            if data == installed[name]:
+                verified[name] = digest.hex()
+    return verified
+
+
+def collect_upstream_path_provenance(destination):
+    """Only hosted Windows source strings need extra original-wheel evidence."""
+    proofs = []
+    if (sys.platform == 'win32' and os.environ.get('GITHUB_ACTIONS') == 'true' and
+            os.environ.get('RUNNER_ENVIRONMENT') == 'github-hosted'):
+        from packaging.utils import parse_wheel_filename
+        cache = destination.parent / 'upstream-wheels'
+        cache.mkdir(exist_ok=True)
+        home = str(Path.home()).replace('\\', '/').lower().encode()
+        for dist in metadata.distributions():
+            # Locally rebuilt/repaired components cannot inherit an upstream exemption.
+            if dist.read_text('direct_url.json') or dist.metadata['Name'].lower() == 'shaq-daily-oracle':
+                continue
+            installed = {}
+            for item in dist.files or []:
+                if item.suffix.lower() not in ('.pyd', '.dll', '.c', '.h'):
+                    continue
+                path = Path(dist.locate_file(item))
+                if path.is_file():
+                    data = path.read_bytes()
+                    if home in data.replace(b'\\', b'/').lower():
+                        installed[item.as_posix()] = data
+            if not installed:
+                continue
+            tags = {line[5:] for line in (dist.read_text('WHEEL') or '').splitlines() if line.startswith('Tag: ')}
+            with urllib.request.urlopen(f'https://pypi.org/pypi/{dist.metadata["Name"]}/{dist.version}/json', timeout=60) as response:
+                releases = json.load(response)['urls']
+            candidates = [release for release in releases if release['packagetype'] == 'bdist_wheel' and
+                          tags & {str(tag) for tag in parse_wheel_filename(release['filename'])[3]}]
+            if len(candidates) != 1:
+                raise ValueError(f'Ambiguous original wheel for {dist.metadata["Name"]} {dist.version}')
+            release = candidates[0]
+            archive = cache / release['filename']
+            if not archive.is_file():
+                with urllib.request.urlopen(release['url'], timeout=60) as response, archive.open('wb') as output:
+                    shutil.copyfileobj(response, output)
+            sha = release['digests']['sha256']
+            files = verified_wheel_files(archive, sha, installed)
+            proofs.append({'distribution': dist.metadata['Name'], 'version': dist.version,
+                           'wheel_url': release['url'], 'wheel_sha256': sha, 'files': files})
+    (destination / 'upstream-path-provenance.json').write_text(json.dumps(proofs, indent=2), encoding='utf-8')
 
 
 def source_notices(destination, name, version=None, source=None):
@@ -101,6 +167,7 @@ def collect_notices(root):
     if destination.is_dir():
         shutil.rmtree(destination)
     destination.mkdir(parents=True, exist_ok=True)
+    collect_upstream_path_provenance(destination)
     distributions = []
     sources = {}
     for dist in sorted(metadata.distributions(), key=lambda d: d.metadata['Name'].lower()):

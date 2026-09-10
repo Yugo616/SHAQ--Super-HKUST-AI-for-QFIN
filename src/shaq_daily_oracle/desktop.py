@@ -523,7 +523,7 @@ def main(argv: list[str] | None = None) -> int:
             })
         except Exception as exc:
             checks["whole_lab_fixture"] = False
-            print(str(exc), file=sys.stderr)
+            smoke["error"] = str(exc)
         import tables
         checks['no_lzo_runtime'] = tables.which_lib_version('lzo') is None
         serialized = json.dumps({
@@ -533,7 +533,13 @@ def main(argv: list[str] | None = None) -> int:
         }, ensure_ascii=False)
         if args.smoke_output:
             args.smoke_output.write_text(serialized, encoding='utf-8')
-        print(serialized)
+        if sys.stdout is not None:
+            # Redirected Windows streams may use cp1252, while windowed builds
+            # may have no console. The UTF-8 report above remains authoritative.
+            try:
+                print(json.dumps(json.loads(serialized), ensure_ascii=True))
+            except OSError:
+                pass  # A closed diagnostic pipe must not turn a result into a modal crash.
         return 0 if all(checks.values()) else 2
     if args.worker:
         return run_worker(paths=app_paths().ensure(), once=args.once)

@@ -10,12 +10,130 @@ import tempfile
 import threading
 import unittest
 import zipfile
+import base64
+import io
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 class NativePackagingTests(unittest.TestCase):
+    def test_upstream_proof_requires_archive_record_and_installed_bytes_to_agree(self):
+        build = self.module('build_desktop')
+        home = '/'.join(('C:', 'Users', 'runneradmin'))
+        data = (home + '/AppData/Local/Temp/build-env-abc/lib/numpy/source.pxd').encode()
+        digest = hashlib.sha256(data).digest()
+        with tempfile.TemporaryDirectory() as name:
+            wheel = Path(name) / 'upstream.whl'
+            with zipfile.ZipFile(wheel, 'w') as archive:
+                archive.writestr('vendor/core.pyd', data)
+                archive.writestr('vendor-1.dist-info/RECORD', 'vendor/core.pyd,sha256=' +
+                    base64.urlsafe_b64encode(digest).decode().rstrip('=') + ',' + str(len(data)) + '\n')
+            sha = hashlib.sha256(wheel.read_bytes()).hexdigest()
+            self.assertEqual(build.verified_wheel_files(wheel, sha, {'vendor/core.pyd': data}),
+                             {'vendor/core.pyd': digest.hex()})
+            self.assertEqual(build.verified_wheel_files(wheel, sha, {'vendor/core.pyd': data + b'changed'}), {})
+            with self.assertRaisesRegex(ValueError, 'archive'):
+                build.verified_wheel_files(wheel, '0' * 64, {'vendor/core.pyd': data})
+            with zipfile.ZipFile(wheel, 'w') as archive:
+                archive.writestr('vendor/core.pyd', data)
+                archive.writestr('vendor-1.dist-info/RECORD', 'vendor/core.pyd,sha256=invalid,' + str(len(data)) + '\n')
+            with self.assertRaisesRegex(ValueError, 'RECORD'):
+                build.verified_wheel_files(wheel, hashlib.sha256(wheel.read_bytes()).hexdigest(), {'vendor/core.pyd': data})
+
+    def test_collected_provenance_excludes_local_builds_and_keeps_public_wheel_proof(self):
+        build = self.module('build_desktop')
+        from importlib.metadata import PathDistribution
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            package = root / 'vendor'
+            package.mkdir()
+            home = '/'.join(('C:', 'Users', 'runneradmin'))
+            data = (home + '/AppData/Local/Temp/build-env-abc/numpy/source.pxd').encode()
+            (package / 'core.pyd').write_bytes(data)
+            dist_info = root / 'vendor-1.0.dist-info'
+            dist_info.mkdir()
+            (dist_info / 'METADATA').write_text('Name: vendor\nVersion: 1.0\n', encoding='utf-8')
+            (dist_info / 'WHEEL').write_text('Tag: cp313-cp313-win_amd64\n', encoding='utf-8')
+            digest = hashlib.sha256(data).digest()
+            record = 'vendor/core.pyd,sha256=' + base64.urlsafe_b64encode(digest).decode().rstrip('=') + ',' + str(len(data)) + '\n'
+            (dist_info / 'RECORD').write_text(record, encoding='utf-8')
+            wheel = io.BytesIO()
+            with zipfile.ZipFile(wheel, 'w') as archive:
+                archive.writestr('vendor/core.pyd', data)
+                archive.writestr('vendor-1.0.dist-info/RECORD', record)
+            wheel_bytes = wheel.getvalue()
+            release = {'filename': 'vendor-1.0-cp313-cp313-win_amd64.whl', 'packagetype': 'bdist_wheel',
+                       'url': 'https://files.pythonhosted.org/vendor.whl',
+                       'digests': {'sha256': hashlib.sha256(wheel_bytes).hexdigest()}}
+            def response(url, **kwargs):
+                return io.BytesIO(wheel_bytes if url == release['url'] else json.dumps({'urls': [release]}).encode())
+            destination = root / 'notices'
+            destination.mkdir()
+            with patch.object(build.sys, 'platform', 'win32'), patch.dict(os.environ, {'GITHUB_ACTIONS': 'true', 'RUNNER_ENVIRONMENT': 'github-hosted'}), patch.object(build.Path, 'home', return_value=Path(home)), patch.object(build.metadata, 'distributions', return_value=[PathDistribution(dist_info)]), patch.object(build.urllib.request, 'urlopen', side_effect=response):
+                build.collect_upstream_path_provenance(destination)
+                proofs = json.loads((destination / 'upstream-path-provenance.json').read_text(encoding='utf-8'))
+                self.assertEqual(proofs[0]['files'], {'vendor/core.pyd': digest.hex()})
+                self.assertEqual(proofs[0]['wheel_sha256'], release['digests']['sha256'])
+                self.assertEqual(proofs[0]['wheel_url'], release['url'])
+                (dist_info / 'direct_url.json').write_text('{"url":"file:///local.whl"}', encoding='utf-8')
+                build.collect_upstream_path_provenance(destination)
+                self.assertEqual(json.loads((destination / 'upstream-path-provenance.json').read_text(encoding='utf-8')), [])
+
+    def test_windows_common_notice_recipe_emits_upstream_provenance(self):
+        build = self.module('build_desktop')
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            for file in ('packaging/native-sources.json', 'build/native-dependencies/mingw-toolchain.json',
+                         'build/native-dependencies/hdf5-diagnostic-map.json', 'docs/third-party-notices.md'):
+                target = root / file
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text('{}', encoding='utf-8')
+            (root / 'build/third-party/hdf5').mkdir(parents=True)
+            def collect_mingw(destination, provenance):
+                (destination / 'hdf5').mkdir()
+            with patch.object(build.sys, 'platform', 'win32'), patch.object(build.metadata, 'distributions', return_value=[]), patch.object(build, 'collect_mingw_notices', side_effect=collect_mingw), patch.object(build.subprocess, 'check_output', side_effect=['source-sha', '']):
+                build.collect_notices(root)
+            self.assertEqual(json.loads((root / 'build/third-party/upstream-path-provenance.json').read_text(encoding='utf-8')), [])
+
+    def test_verified_wheel_class_does_not_exempt_checkout_or_personal_paths(self):
+        audit = self.module('audit_payload')
+        home, checkout = '/'.join(('C:', 'Users', 'runneradmin')), 'D:/a/our-project/our-project'
+        data = (home + '/AppData/Local/Temp/build-env-abc/lib/site-packages/numpy/source.pxd').encode()
+        for value in (data, data.replace(b'/', b'\\').upper()):
+            self.assertTrue(audit.contains_private_path(value, home, checkout, True))
+            self.assertFalse(audit.contains_private_path(value, home, checkout, True, verified_upstream=True))
+            self.assertTrue(audit.contains_private_path(value + checkout.encode(), home, checkout, True, verified_upstream=True))
+        self.assertTrue(audit.contains_private_path(data, home, checkout, False, verified_upstream=True))
+        for suffix in ('/.ssh/id_rsa', '/AppData/Local/Temp/my-private-file'):
+            personal = '/'.join(('C:', 'Users', 'personal'))
+            self.assertTrue(audit.contains_private_path((personal + suffix).encode(), personal, checkout, True, verified_upstream=True))
+        self.assertTrue(audit.contains_private_path((home + '/.ssh/id_rsa').encode(), home, checkout, True, verified_upstream=True))
+
+    def test_payload_proof_requires_matching_filename_and_unchanged_digest(self):
+        audit = self.module('audit_payload')
+        home = '/'.join(('C:', 'Users', 'runneradmin'))
+        data = (home + '/AppData/Local/Temp/build-env-abc/numpy/source.pxd').encode()
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            target = root / 'vendor/core.pyd'
+            target.parent.mkdir()
+            target.write_bytes(data)
+            manifest = root / 'third-party/upstream-path-provenance.json'
+            manifest.parent.mkdir()
+            proof = [{'files': {'vendor/core.pyd': hashlib.sha256(data).hexdigest()}}]
+            with patch.object(audit.Path, 'home', return_value=Path(home)), patch.object(audit.sys, 'platform', 'test'), patch.dict(os.environ, {'GITHUB_ACTIONS': 'true', 'RUNNER_ENVIRONMENT': 'github-hosted'}):
+                def private_failures():
+                    return [failure for failure in audit.audit(root)['failures'] if failure.startswith('private build/user path:')]
+                self.assertEqual(private_failures(), ['private build/user path: vendor/core.pyd'])
+                manifest.write_text(json.dumps(proof), encoding='utf-8')
+                self.assertEqual(private_failures(), [])
+                target.write_bytes(data + b'changed')
+                self.assertEqual(private_failures(), ['private build/user path: vendor/core.pyd'])
+                target.write_bytes(data)
+                target.rename(root / 'vendor/renamed.pyd')
+                self.assertEqual(private_failures(), ['private build/user path: vendor/renamed.pyd'])
+
     def mingw_fixture(self, root):
         prefix = root / 'action-location/mingw64'
         compiler = prefix / 'bin/gcc.exe'

@@ -6,12 +6,26 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 
 
 class LabSmokeTests(unittest.TestCase):
+    def test_windowed_smoke_without_stdout_preserves_chinese_failure_report(self) -> None:
+        from shaq_daily_oracle import desktop
+
+        with tempfile.TemporaryDirectory() as name:
+            report = Path(name) / 'smoke.json'
+            with patch.object(sys, 'stdout', None), patch('shaq_daily_oracle.lab_smoke.run_lab_smoke',
+                    side_effect=RuntimeError('中文诊断失败')):
+                code = desktop.main(['--smoke', '--smoke-output', str(report)])
+            value = json.loads(report.read_text(encoding='utf-8'))
+        self.assertEqual(code, 2)
+        self.assertEqual(value['status'], 'failed')
+        self.assertEqual(value['error'], '中文诊断失败')
+
     def test_two_method_fixture_runs_zipline_settlement_and_reopens(self) -> None:
         from shaq_daily_oracle.lab_smoke import run_lab_smoke
 
@@ -89,10 +103,16 @@ class LabSmokeTests(unittest.TestCase):
         from contextlib import redirect_stdout
         from shaq_daily_oracle import desktop
 
-        output = io.StringIO()
-        with redirect_stdout(output):
-            code = desktop.main(["--smoke"])
-        value = json.loads(output.getvalue())
+        output = io.BytesIO()
+        console = io.TextIOWrapper(output, encoding='cp1252')
+        with tempfile.TemporaryDirectory() as name:
+            report = Path(name) / 'smoke.json'
+            with redirect_stdout(console):
+                code = desktop.main(["--smoke", "--smoke-output", str(report)])
+            console.flush()
+            value = json.loads(output.getvalue().decode('cp1252'))
+            self.assertEqual(value, json.loads(report.read_text(encoding='utf-8')))
+            self.assertIn('独立证据门禁版', report.read_text(encoding='utf-8'))
 
         self.assertEqual(code, 0)
         self.assertEqual(value["status"], "passed")
