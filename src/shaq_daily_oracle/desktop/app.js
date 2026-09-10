@@ -1,4 +1,4 @@
-const state={data:null,page:'run',selectedBatch:null,editorDocument:null,githubDevice:null,runSelections:null,replay:null};
+const state={data:null,page:'run',selectedBatch:null,editorDocument:null,githubDevice:null,runSelections:null,replay:null,replayGeneration:0};
 const q=s=>document.querySelector(s),qa=s=>[...document.querySelectorAll(s)];
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const api=async(name,...args)=>{const fn=window.pywebview?.api?.[name];if(!fn)throw new Error('桌面服务尚未连接');const r=await fn(...args);if(!r?.ok)throw new Error(r?.error||'操作失败');return r.value};
@@ -31,8 +31,11 @@ function renderData(){const d=state.data.data_status||{},labels={fresh:'本次�
 async function loadBatch(id,key,symbol){
   const modal=q('#replay-modal'),target=q('#batch-detail');
   const request=(loadBatch.request||0)+1;loadBatch.request=request;
+  state.replay=null;state.replayGeneration=(state.replayGeneration||0)+1;
   target.innerHTML='<p class="card">正在加载分析详情…</p>';target.scrollTop=0;
-  q('#replay-close').onclick=()=>{loadBatch.request=(loadBatch.request||0)+1;state.replay=null;modal.close()};
+  const invalidateReplay=()=>{loadBatch.request=(loadBatch.request||0)+1;state.replay=null;state.replayGeneration=(state.replayGeneration||0)+1};
+  modal.oncancel=invalidateReplay;modal.onclose=invalidateReplay;
+  q('#replay-close').onclick=()=>{invalidateReplay();modal.close()};
   if(!modal.open)modal.showModal();
   try{
     const batch=await api('get_shadow_batch',id);
@@ -66,5 +69,5 @@ function bindSetup(){renderGithubSetup();const modelForm=q('#model-form'),resear
 function showPage(page){state.page=page;qa('.page,.nav').forEach(e=>e.classList.remove('active'));q('#'+page).classList.add('active');q(`.nav[data-page="${page}"]`).classList.add('active');q('#page-title').textContent={run:'运行今日 Shadow',editor:'编辑当前 Skill',upload:'上传 Shadow 版本',updates:'检查团队更新',history:'历史与比较',data:'数据状态',settings:'系统设置',operator:'Mac 操作员'}[page];renderPage()}
 function renderPage(){({run:renderRun,editor:renderEditor,upload:renderUpload,updates:renderUpdates,history:renderHistory,data:renderData,settings:renderSettings,operator:renderOperator}[state.page]||renderRun)()}
 function render(){q('#operator-nav').classList.toggle('hidden',!state.data.operator_mode.safety_ready);q('#service-text').textContent=state.data.settings.setup_complete?'本地研究工作台已连接':'等待首次设置';q('#service-dot').className='dot '+(state.data.settings.setup_complete?'ok':'');const status=state.data.result_refresh||{};q('#refresh-status').textContent=refreshStatusText(status);q('#refresh-button').disabled=['running','already_running'].includes(status.status);renderPage();bindSetup();if(!state.data.settings.setup_complete)q('#setup').classList.remove('hidden')}
-async function load(showError=true){const request=(load.request||0)+1;load.request=request;const replay=q('#replay-modal')?.open?state.replay:null,detailScroll=q('#batch-detail')?.scrollTop||0,pageScroll=window.scrollY||0;try{const value=await api('get_lab_state');if(load.request!==request)return;state.data=value;render();if(replay&&state.replay===replay&&q('#replay-modal')?.open){await loadBatch(replay.batchId,replay.key,replay.symbol);q('#batch-detail').scrollTop=detailScroll}window.scrollTo?.(0,pageScroll)}catch(e){if(showError&&load.request===request)notice(e.message,true)}}
+async function load(showError=true){const request=(load.request||0)+1;load.request=request;const replay=q('#replay-modal')?.open?state.replay:null,replayGeneration=state.replayGeneration||0,detailScroll=q('#batch-detail')?.scrollTop||0,pageScroll=window.scrollY||0;try{const value=await api('get_lab_state');if(load.request!==request)return;state.data=value;render();if(replay&&state.replay===replay&&state.replayGeneration===replayGeneration&&q('#replay-modal')?.open){await loadBatch(replay.batchId,replay.key,replay.symbol);q('#batch-detail').scrollTop=detailScroll}window.scrollTo?.(0,pageScroll)}catch(e){if(showError&&load.request===request)notice(e.message,true)}}
 qa('.nav').forEach(b=>b.onclick=()=>showPage(b.dataset.page));q('#refresh-button').onclick=async()=>{try{const value=await api('refresh_prices_and_results');state.data.result_refresh=value;render();await load(false)}catch(e){notice(e.message,true)}};window.addEventListener('pywebviewready',()=>load());setInterval(()=>{if(state.data&&((state.data.jobs||[]).some(job=>['queued','running'].includes(job.status))||['running','already_running'].includes(state.data.result_refresh?.status)))load(false)},10000);setInterval(()=>load(false),15*60*1000);

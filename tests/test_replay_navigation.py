@@ -62,6 +62,39 @@ vm.createContext(ctx);vm.runInContext(fn,ctx);
 '''
         subprocess.run(['node', '-'], input=script, text=True, cwd=root, check=True)
 
+    def test_escape_then_pending_reopen_blocks_old_workspace_restore(self):
+        root = Path(__file__).resolve().parents[1]
+        script = r'''
+const fs=require('fs'),vm=require('vm'),assert=require('assert/strict');
+const source=fs.readFileSync('src/shaq_daily_oracle/desktop/app.js','utf8');
+const batchFn=source.slice(source.indexOf('async function loadBatch('),source.indexOf('function screeningReason('));
+const loadStart=source.indexOf('async function load(showError');
+const loadFn=source.slice(loadStart,source.indexOf("qa('.nav')",loadStart));
+const requests=[],renders=[],back={};
+const modal={open:true,showModal(){this.open=true},close(){this.open=false;this.onclose?.()}};
+const detail={innerHTML:'',scrollTop:0};
+const ctx={state:{replay:null,replayGeneration:0},
+ q:s=>s==='#replay-modal'?modal:s==='#batch-detail'?detail:s==='#replay-close'?back:detail,
+ window:{scrollY:0,scrollTo(){}},render(){},notice(){},esc:String,
+ renderBatch:(batch,key,symbol)=>{renders.push([batch.id,key,symbol]);ctx.state.replay={batchId:batch.id,key,symbol}},
+ api:name=>new Promise((resolve,reject)=>requests.push({name,resolve,reject}))};
+vm.createContext(ctx);vm.runInContext(batchFn,ctx);vm.runInContext(loadFn,ctx);
+(async()=>{
+ const initial=ctx.loadBatch('old','v','AAA');
+ requests.find(r=>r.name==='get_shadow_batch').resolve({id:'old'});await initial;
+ assert.equal(typeof modal.oncancel,'function');
+ const workspace=ctx.load(false);
+ modal.open=false;modal.oncancel?.({preventDefault(){}});
+ const pendingNew=ctx.loadBatch('new','v2','BBB');
+ requests.find(r=>r.name==='get_lab_state').resolve({});await Promise.resolve();await Promise.resolve();
+ assert.equal(requests.filter(r=>r.name==='get_shadow_batch').length,2,'old workspace replay was restored');
+ requests.filter(r=>r.name==='get_shadow_batch')[1].resolve({id:'new'});await pendingNew;
+ await workspace;
+ assert.deepEqual(renders,[['old','v','AAA'],['new','v2','BBB']]);
+})().catch(e=>{console.error(e);process.exitCode=1});
+'''
+        subprocess.run(['node', '-'], input=script, text=True, cwd=root, check=True)
+
     def test_assembled_renderer_wrapper_chain_forwards_nondefault_candidate(self):
         root = Path(__file__).resolve().parents[1]
         script = r'''

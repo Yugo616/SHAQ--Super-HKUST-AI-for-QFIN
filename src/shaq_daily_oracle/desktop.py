@@ -435,6 +435,12 @@ def launch_desktop(*, smoke_output: Path | None = None) -> int:
         bridge.get_shadow_batch = lambda batch_id: {
             "ok": True, "value": fixture_detail}
         def fixture_refresh():
+            fixture_detail["labels"]["labels"]["MSFT"] = {
+                "status": "final", "official_unadjusted_open": 200.0,
+                "official_unadjusted_close": 202.0, "actual_direction": "bullish",
+                "confirmed_by_independent_reobservation": True,
+                "last_checked_at_et": "2026-09-10T09:00:00-04:00",
+            }
             fixture_state["result_refresh"] = {
                 "status": "complete", "completed_at": "2026-09-10T09:00:00-04:00",
                 "failure_count": 0,
@@ -493,12 +499,16 @@ def launch_desktop(*, smoke_output: Path | None = None) -> int:
             window.evaluate_js("document.querySelector('#refresh-button').click()")
             refresh_deadline = time.monotonic() + 5
             while time.monotonic() < refresh_deadline:
-                if window.evaluate_js("document.querySelector('#refresh-status').textContent.includes('完成')"):
+                if window.evaluate_js(
+                    "document.querySelector('#refresh-status').textContent.includes('完成') && "
+                    "document.querySelector('.candidate-button.active')?.dataset.symbol === 'MSFT' && "
+                    "document.querySelector('#candidate-analysis').textContent.includes('$200.00')"):
                     break
                 time.sleep(0.1)
             else:
-                raise RuntimeError('Fixture refresh did not complete')
+                raise RuntimeError('Fixture refresh did not render updated replay detail')
             result['refresh_completed'] = True
+            result['refresh_detail_marker'] = True
             result['refresh_preserved_modal'] = bool(window.evaluate_js(
                 "document.querySelector('#replay-modal').open"))
             result['refresh_preserved_candidate'] = bool(window.evaluate_js(
@@ -519,6 +529,7 @@ def launch_desktop(*, smoke_output: Path | None = None) -> int:
                 raise RuntimeError('Reopened fixture replay content failed to load')
             result['modal_close_reopen'] = bool(closed and reopened)
             if not all(result[key] for key in (
+                'refresh_completed', 'refresh_detail_marker',
                 'refresh_preserved_modal', 'refresh_preserved_candidate',
                 'modal_close_reopen',
             )):
