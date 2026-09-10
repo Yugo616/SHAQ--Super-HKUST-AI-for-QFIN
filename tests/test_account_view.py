@@ -31,6 +31,40 @@ class AccountViewTests(unittest.TestCase):
         self.assertNotIn('<tbody><tr>', empty)
         self.assertNotIn('<tbody><tr>', failed)
 
+    def test_partially_unavailable_day_shows_backend_fills_costs_and_unfilled_rows(self):
+        from test_virtual_accounts import VirtualAccountTests
+        from shaq_daily_oracle.virtual_accounts import replay_day, AccountRules
+        fixture = VirtualAccountTests()
+        minute = fixture.minute(); minute['records']['AAA'] = []
+        entry = replay_day('2026-09-09', fixture.predictions(), fixture.labels(), AccountRules(), minute=minute)
+        self.assertEqual(entry['status'], 'unavailable')
+        html = self.render('dayHtml', entry)
+        for text in ['AAA', 'BBB', '0 股整数数量', '9 股整数数量', 'unavailable_entry', 'closed',
+                     '$99.95', '$90.05', '$88.29', '$0.85', 'trade-detail', 'Completed', '开仓', '平仓']:
+            self.assertIn(text, html)
+        self.assertNotIn('资料不可用 · 未成交', html)
+        self.assertIn('部分', html)
+        self.assertIn('尚未计入持续账户净值', html)
+        self.assertNotIn('最终确认', html)
+
+    def test_entirely_unavailable_day_has_no_fabricated_fills(self):
+        html = self.render('dayHtml', {'status':'unavailable', 'scope':'forward', 'orders':[],
+            'trades':[{'symbol':'AAA', 'quantity':0, 'status':'unavailable_entry'}]})
+        self.assertIn('AAA', html)
+        self.assertIn('0 股整数数量', html)
+        self.assertIn('无模拟订单', html)
+        self.assertIn('尚未计入持续账户净值', html)
+        self.assertNotIn('Completed', html)
+
+    def test_final_execution_keeps_confirmation_but_shows_failed_refresh_receipt(self):
+        html = self.render('dayHtml', {'status':'final', 'scope':'forward', 'orders':[], 'trades':[],
+            'latest_refresh':{'status':'unavailable', 'captured_at_et':'2026-09-21T09:00:00-04:00',
+                              'missing_targets':{'AAA':['entry', 'exit']}}})
+        self.assertIn('最终确认', html)
+        self.assertIn('刷新', html)
+        self.assertIn('2026-09-21', html)
+        self.assertIn('AAA', html)
+
     def test_old_saved_aliases_normalize_to_visible_canonical_methods(self):
         versions = [
             {'author':'team','version_id':'independent-gate-1','method_name':'独立证据门禁版',

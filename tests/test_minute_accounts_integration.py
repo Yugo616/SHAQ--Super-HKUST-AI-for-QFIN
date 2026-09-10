@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 import test_virtual_accounts as fixtures
 from shaq_daily_oracle.virtual_accounts import AccountStore, AccountRules
-from shaq_daily_oracle.minute_settlements import MinuteStore, refresh_minute_observations
+from shaq_daily_oracle.minute_settlements import MINUTE_NAMESPACE, MinuteStore, refresh_minute_observations
 from shaq_daily_oracle.data_providers import DataProfile
 from shaq_daily_oracle.hashing import sha256_payload
 
@@ -66,6 +66,85 @@ class MinuteAccountIntegrationTests(unittest.TestCase):
         self.assertAlmostEqual(corrected['accounts'][0]['equity'], 10442.7101125)
         self.assertEqual(self.store.refresh([row, duplicate, next_row]), corrected)
         self.assertTrue(all((self.store.root/'settlements'/name).read_bytes() == contents for name, contents in prior_files.items()))
+
+    def test_empty_and_partial_historical_refresh_preserve_accounts_and_raw_receipts(self):
+        minute_store = MinuteStore(self.root / MINUTE_NAMESPACE)
+        row = self.fixture.row()
+        data = copy.deepcopy(row['minute']['records'])
+        for at in ['2026-09-09T16:10:00-04:00', '2026-09-10T09:00:00-04:00']:
+            row['minute'] = minute_store.observe(row['trade_date'], ['AAA', 'BBB'], data,
+                provider='yfinance', observed_at=datetime.fromisoformat(at))
+        other = self.fixture.row('other', series_key='other:model')
+        other['minute'] = copy.deepcopy(row['minute'])
+        confirmed = self.store.refresh([row, other])
+        final_execution = row['minute']['execution_sha256']
+        next_row = self.fixture.row('next', '2026-09-10T08:00:00-04:00', trade_date='2026-09-10')
+        next_data = copy.deepcopy(next_row['minute']['records'])
+        for at in ['2026-09-10T16:10:00-04:00', '2026-09-11T09:00:00-04:00']:
+            minute_store.observe(next_row['trade_date'], ['AAA', 'BBB'], next_data,
+                provider='yfinance', observed_at=datetime.fromisoformat(at))
+        prior_files = {p: p.read_bytes() for p in self.root.rglob('*.json')
+                       if p.name != 'summary.json'}
+        rows = [row, next_row, other]
+        fixture = self.fixture
+        class Provider:
+            response = {'AAA': [], 'BBB': []}
+            def history(self, symbols, *, start, **kwargs):
+                return self.response if start.isoformat() == '2026-09-09' else fixture.minute(start.isoformat())['records']
+        provider = Provider()
+        # Omitted symbol, empty symbol, and missing exit are unavailable retrievals,
+        # not authoritative disappearance of previously confirmed bars.
+        for offset, response in enumerate([
+            {'AAA': [], 'BBB': []}, {'BBB': data['BBB']},
+            {'AAA': data['AAA'][:1], 'BBB': data['BBB']},
+        ]):
+            provider.response = response
+            at = datetime.fromisoformat(f'2026-09-21T09:0{offset}:00-04:00')
+            receipt = refresh_minute_observations(research_root=self.root, rows=rows,
+                profile=DataProfile('test', 'test.csv'), observed_at=at, market_provider=provider)
+            self.assertTrue(receipt['failures'], 'Missing target retrieval must be reported, not counted as a successful observation')
+            self.assertEqual(receipt['failures'][0]['trade_date'], '2026-09-09')
+            self.assertEqual(receipt['failures'][0]['error_type'], 'UnavailableMinuteTargets')
+            row['minute'] = MinuteStore(minute_store.root).snapshot(row['trade_date'], ['AAA', 'BBB'])
+            other['minute'] = copy.deepcopy(row['minute'])
+            next_row['minute'] = minute_store.snapshot(next_row['trade_date'], ['AAA', 'BBB'])
+            self.assertEqual(row['minute']['status'], 'final')
+            self.assertEqual(row['minute']['execution_sha256'], final_execution)
+            self.assertFalse(row['minute']['correction'])
+            result = AccountStore(self.root / 'virtual_accounts').refresh(rows)
+            account = next(a for a in result['accounts'] if a['series_key'] == 'skill:model')
+            self.assertEqual(account['sessions'], 2)
+            self.assertAlmostEqual(account['equity'], 10352.80009)
+            self.assertFalse(account['blocked'])
+            independent = next(a for a in result['accounts'] if a['series_key'] == 'other:model')
+            self.assertEqual(independent, next(a for a in confirmed['accounts'] if a['series_key'] == 'other:model'))
+            entry = next(r for r in result['results'] if r['batch_id'] == 'zzz-first')
+            self.assertEqual(entry['latest_refresh']['captured_at_et'], at.isoformat())
+            self.assertEqual(entry['execution_sha256'], final_execution)
+            self.assertEqual(entry['status'], 'final')
+            self.assertAlmostEqual(entry['account_equity'], 10176.400045)
+            raw = json.loads(next(minute_store.root.rglob(
+                row['minute']['latest_refresh']['observation_sha256'] + '.json')).read_text())
+            self.assertEqual(raw['records'], response)
+            self.assertEqual(raw['captured_at_et'], at.isoformat())
+            self.assertTrue(all(p.read_bytes() == contents for p, contents in prior_files.items()))
+            refresh_minute_observations(research_root=self.root, rows=rows,
+                profile=DataProfile('test', 'test.csv'), observed_at=at, market_provider=provider)
+            row['minute'] = MinuteStore(minute_store.root).snapshot(row['trade_date'], ['AAA', 'BBB'])
+            self.assertEqual(AccountStore(self.root / 'virtual_accounts').refresh(rows), result)
+
+    def test_initial_missing_refresh_stays_unavailable_and_blocks_only_its_account(self):
+        row = self.fixture.row()
+        row['minute'] = MinuteStore(self.root / 'minutes').observe(row['trade_date'], ['AAA', 'BBB'],
+            {'AAA': [], 'BBB': []}, provider='yfinance',
+            observed_at=datetime.fromisoformat('2026-09-10T09:00:00-04:00'))
+        result = self.store.refresh([row, self.fixture.row('other', series_key='other:model')])
+        entry = next(r for r in result['results'] if r['batch_id'] == 'zzz-first')
+        self.assertEqual(entry['status'], 'unavailable')
+        self.assertEqual(entry['orders'], [])
+        self.assertEqual([trade['quantity'] for trade in entry['trades']], [0, 0])
+        self.assertEqual(next(a for a in result['accounts'] if a['series_key'] == 'skill:model')['sessions'], 0)
+        self.assertEqual(next(a for a in result['accounts'] if a['series_key'] == 'other:model')['sessions'], 1)
 
     def test_legacy_activation_and_saved_outputs_are_read_only_and_never_replayed(self):
         legacy_root = self.root / 'old'

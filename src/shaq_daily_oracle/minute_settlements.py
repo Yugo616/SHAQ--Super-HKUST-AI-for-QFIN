@@ -67,7 +67,7 @@ class MinuteStore:
             interval='1m', price_adjustment='unadjusted', session_scope='US_regular_session',
             timestamp_semantics='bar_start', captured_at_et=now.isoformat(), symbols=symbols,
             source='Yahoo Finance via YFinanceProvider.history' if provider == 'yfinance' else provider,
-            records={symbol: records.get(symbol, []) for symbol in symbols})
+            records=records)
         digest = sha256_payload(document)
         document['observation_sha256'] = digest
         collection = sha256_payload([trade_date, provider, symbols])
@@ -102,27 +102,52 @@ class MinuteStore:
         if not observations:
             return dict(base, status='pending', targets={}, records={}, correction=False,
                         execution_sha256=None, captured_at_et=None)
-        current = observations[-1]
-        targets = target_bars(trade_date, current['records'], symbols)
-        execution_hash = sha256_payload(targets)
-        # Confirmation survives identical reads. A correction starts a new stable
-        # sequence; observations before that revision cannot confirm the new value.
-        stable = [current]
+        # Receipts retain the actual response. Missing targets are unavailable
+        # retrievals, not revisions, and never re-date or confirm earlier evidence.
+        evidence = {symbol: dict(entry=None, exit=None) for symbol in symbols}
         correction = False
-        for prior in reversed(observations[:-1]):
-            if target_bars(trade_date, prior['records'], symbols) != targets:
-                correction = True
-                break
-            stable.append(prior)
-        earliest = _stamp(stable[-1]['captured_at_et']).astimezone(ET).date()
-        confirmed = any((_stamp(row['captured_at_et']).astimezone(ET).date() > earliest
-                         and _stamp(row['captured_at_et']).date() > date.fromisoformat(trade_date)
-                         and market_session(_stamp(row['captured_at_et']).astimezone(ET).date()) is not None)
-                        for row in stable)
+        for observation in observations:
+            observed_targets = target_bars(trade_date, observation['records'], symbols)
+            captured = observation['captured_at_et']
+            captured_day = _stamp(captured).astimezone(ET).date()
+            for symbol, phases in observed_targets.items():
+                for phase, target in phases.items():
+                    if target is None:
+                        continue
+                    prior = evidence[symbol][phase]
+                    if prior is None or prior['target'] != target:
+                        correction = correction or prior is not None
+                        prior = dict(target=target, first_captured_at_et=captured, confirmed=False)
+                    elif (captured_day > _stamp(prior['first_captured_at_et']).astimezone(ET).date()
+                          and captured_day > date.fromisoformat(trade_date)
+                          and market_session(captured_day) is not None):
+                        prior['confirmed'] = True
+                    prior.update(captured_at_et=captured,
+                                 observation_sha256=observation['observation_sha256'])
+                    evidence[symbol][phase] = prior
+        targets = {symbol: {phase: value['target'] if value else None
+                           for phase, value in phases.items()} for symbol, phases in evidence.items()}
+        used = [value for phases in evidence.values() for value in phases.values() if value]
+        confirmed = len(used) == len(symbols) * 2 and all(value['confirmed'] for value in used)
+        current = observations[-1]
+        missing = {symbol: [phase for phase, value in phases.items() if value is None]
+                   for symbol, phases in observed_targets.items() if any(value is None for value in phases.values())}
+        refresh = dict(status='unavailable' if sum(map(len, missing.values())) == len(symbols) * 2
+                       else 'partial_unavailable' if missing else 'available',
+                       captured_at_et=current['captured_at_et'],
+                       observation_sha256=current['observation_sha256'], missing_targets=missing)
+        # This is a derived execution view, never a newly captured observation.
+        # Each retained target explicitly points at its own actual source receipt.
+        records = {symbol: [dict(timestamp=value['target']['timestamp'], open=value['target']['open'],
+                                volume=1 if value['target']['usable_volume'] else 0)
+                            for value in phases.values() if value] for symbol, phases in evidence.items()}
         return dict(base, status='final' if confirmed else 'provisional', targets=targets,
-                    records={symbol: current['records'][symbol] for symbol in symbols},
-                    execution_sha256=execution_hash, correction=correction,
-                    captured_at_et=current['captured_at_et'],
+                    records=records, execution_sha256=sha256_payload(targets), correction=correction,
+                    captured_at_et=max((value['captured_at_et'] for value in used), key=_stamp) if used else None,
+                    latest_refresh=refresh,
+                    target_observations={symbol: {phase: {key: item for key, item in value.items() if key != 'target'}
+                                                 if value else None for phase, value in phases.items()}
+                                         for symbol, phases in evidence.items()},
                     source=current['source'], confirmed_by_independent_reobservation=confirmed)
 
 
@@ -147,8 +172,14 @@ def refresh_minute_observations(*, research_root, rows, profile, observed_at=Non
         try:
             data = provider.history(sorted(symbols), start=day, end=day + timedelta(days=1),
                                     interval='1m', prepost=False)
-            store.observe(day.isoformat(), sorted(symbols), data, provider='yfinance', observed_at=now)
-            refreshed.append(day.isoformat())
+            snapshot = store.observe(day.isoformat(), sorted(symbols), data, provider='yfinance', observed_at=now)
+            receipt = snapshot['latest_refresh']
+            if receipt['status'] != 'available':
+                failures.append(dict(trade_date=day.isoformat(), error_type='UnavailableMinuteTargets',
+                    message='Refresh target minutes unavailable; earlier evidence is not a new observation.',
+                    **receipt))
+            else:
+                refreshed.append(day.isoformat())
         except Exception as exc:
             failures.append(dict(trade_date=day.isoformat(), error_type=type(exc).__name__, message=str(exc)))
     return {'refreshed_dates': refreshed, 'failures': failures}

@@ -142,6 +142,7 @@ def replay_day(trade_date, predictions, labels, rules: AccountRules, *, cash=Non
         observation_hashes=minute.get('observation_hashes', []),
         execution_sha256=minute.get('execution_sha256'), correction=minute.get('correction', False),
         captured_at_et=minute.get('captured_at_et'),
+        latest_refresh=minute.get('latest_refresh'), target_observations=minute.get('target_observations', {}),
         source=minute.get('source', 'dedicated minute observations'), unfilled=engine['unfilled'])
     return result
 

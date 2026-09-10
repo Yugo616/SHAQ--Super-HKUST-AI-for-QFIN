@@ -15,7 +15,7 @@ const SHAQAccounts = (() => {
     settled:'旧版已保存结算', saved_only:'saved-only · 只读',
     empty:'最终确认 · 空榜无模拟交易', pending:'等待收盘后的分钟资料',
     provisional:'暂定 · 等待下一交易日独立复核', final:'最终确认',
-    unavailable:'资料不可用 · 未成交', incomplete:'未完成 · 退出分钟缺失',
+    unavailable:'资料不可用 · 尚未确认', incomplete:'未完成 · 退出分钟缺失',
     blocked_previous:'等待前一交易日未完成回放', error:'回放失败',
     duplicate:'重复记录 · 不重复入账',
   }[status] || status || '状态未知');
@@ -110,11 +110,14 @@ const SHAQAccounts = (() => {
       <p class="account-note">只使用冻结预测做券商无关的分钟回放；不是盘中实际提交的订单。官方 O→C 方向成绩与交易净盈亏分别计算。</p>`;
     const stateNotes = {
       pending:'尚未生成模拟成交；预测、六领域分析与决策记录保持不变。',
-      unavailable:'目标分钟资料不可用，没有替代其他分钟或日线价格。',
       blocked_previous:'同一账户前一日仍未完成，因此本日未继续累计。',
       error:row.error || '分钟回放失败；没有写入最终账户净值。',
     };
     if (stateNotes[row.status]) return intro + `<p>${e(stateNotes[row.status])}</p>`;
+    const unavailable = row.status === 'unavailable'
+      ? `<p class="provisional-note">${(row.trades || []).some(trade => trade.quantity > 0) ? '部分目标分钟资料不可用；已有模拟成交与未成交逐股列示。' : '目标分钟资料不可用；没有模拟成交。'}没有替代其他分钟或日线价格；尚未计入持续账户净值，同一账户后续交易日等待本日解决。</p>` : '';
+    const refresh = row.latest_refresh && row.latest_refresh.status !== 'available'
+      ? `<p class="account-note">最近刷新 ${localTime(row.latest_refresh.captured_at_et)}：目标分钟不可用 ${e(JSON.stringify(row.latest_refresh.missing_targets || {}))}。保留此前目标分钟证据；本次缺失不构成新的独立确认。原始读取记录 ${e(row.latest_refresh.observation_sha256 || '')}</p>` : '';
     const provisional = row.status === 'provisional'
       ? '<p class="provisional-note">暂定模拟成交尚未计入持续账户净值；需下一交易日独立读取相同目标分钟后才可确认。</p>' : '';
     const incomplete = row.status === 'incomplete'
@@ -122,7 +125,7 @@ const SHAQAccounts = (() => {
     const summary = row.status === 'empty' ? '<p>本日空榜，没有模拟交易或成本。</p>' :
       `<p>零成本盈亏 ${usd(row.gross_pnl)} − 手续费 ${usd(row.fees)} − 滑点影响 ${usd(row.slippage_cost)} = 净盈亏 <b>${usd(row.net_pnl)}</b>${row.status === 'final' ? ` · 最终账户余额 ${usd(row.closing_cash)}` : ''}</p>`;
     const rows = tradeRows(row.trades, row);
-    return intro + provisional + incomplete + summary + (rows ? `
+    return intro + unavailable + refresh + provisional + incomplete + summary + (rows ? `
       <div class="account-scroll"><table class="table trade-detail"><thead><tr><th>股票</th><th>方向 / 数量</th><th>分钟参考</th><th>Zipline 模拟成交</th><th>官方 O→C 方向成绩</th><th>成本 / 净盈亏</th></tr></thead><tbody>${rows}</tbody></table></div>` : '') + `
       <p><small>资料读取 ${localTime(row.captured_at_et)} · 引擎处理开始 ${localTime(row.processing_started_at_et)} · 完成 ${localTime(row.processed_at_et)}</small></p>
       <details><summary>Zipline 模拟订单记录</summary>${(row.orders || []).map(order => `<p>${e(order.symbol)} · ${order.phase === 'open' ? '开仓' : '平仓'} · 参考分钟 ${localTime(order.reference_at_et)} · 引擎处理 ${localTime(order.executed_at_et)} · ${e(order.size)} 股 · ${usd(order.price)} · ${e(order.status)}</p>`).join('') || '<p>无模拟订单</p>'}</details>`;

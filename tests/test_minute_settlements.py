@@ -56,6 +56,44 @@ class MinuteStoreTests(unittest.TestCase):
         data = records(); data['AAA'][0]['volume'] = 0
         self.assertEqual(self.observe(at='2026-09-10T09:00:00-04:00', data=data)['status'], 'provisional')
 
+    def test_missing_refresh_is_not_independent_confirmation_or_a_price_revision(self):
+        first = self.observe()
+        missing = self.observe(at='2026-09-10T09:00:00-04:00', data={'AAA': []})
+        self.assertEqual(missing['execution_sha256'], first['execution_sha256'])
+        self.assertEqual(missing['status'], 'provisional')
+        self.assertFalse(missing['confirmed_by_independent_reobservation'])
+        self.assertFalse(missing['correction'])
+        self.assertEqual(missing['captured_at_et'], first['captured_at_et'])
+        self.assertEqual(missing['latest_refresh']['status'], 'unavailable')
+        self.assertEqual(missing['latest_refresh']['captured_at_et'], '2026-09-10T09:00:00-04:00')
+        initial = self.store.observe('2026-09-10', ['AAA'], {}, provider='yfinance',
+                                    observed_at=datetime.fromisoformat('2026-09-11T09:00:00-04:00'))
+        self.assertEqual(initial['status'], 'provisional')
+        self.assertIsNone(initial['targets']['AAA']['entry'])
+        self.assertFalse(initial['confirmed_by_independent_reobservation'])
+
+    def test_partial_target_refresh_preserves_provenance_and_reconfirms_real_revisions(self):
+        for field, value in [('open', 120), ('volume', 0)]:
+            with self.subTest(field=field):
+                self.store = type(self.store)(Path(self.tmp.name) / field)
+                self.observe()
+                final = self.observe(at='2026-09-10T09:00:00-04:00')
+                # The entry is absent; the exit is a genuine provider revision.
+                data = records(); data['AAA'].pop(0); data['AAA'][0][field] = value
+                revised = self.observe(at='2026-09-10T10:00:00-04:00', data=data)
+                self.assertEqual(revised['status'], 'provisional')
+                self.assertTrue(revised['correction'])
+                self.assertEqual(revised['targets']['AAA']['entry'], final['targets']['AAA']['entry'])
+                provenance = revised['target_observations']['AAA']
+                self.assertEqual(provenance['entry']['captured_at_et'], '2026-09-10T09:00:00-04:00')
+                self.assertEqual(provenance['exit']['captured_at_et'], '2026-09-10T10:00:00-04:00')
+                self.assertEqual(revised['latest_refresh']['status'], 'partial_unavailable')
+                empty = self.observe(at='2026-09-11T09:00:00-04:00', data={'AAA': []})
+                self.assertEqual(empty['status'], 'provisional')
+                confirmed = self.observe(at='2026-09-11T10:00:00-04:00', data=data)
+                self.assertEqual(confirmed['status'], 'final')
+                self.assertEqual(confirmed['targets']['AAA']['exit']['usable_volume'], field != 'volume')
+
     def test_duplicate_timestamp_ambiguous_target_is_unavailable(self):
         data = records(); data['AAA'].append(dict(data['AAA'][0]))
         result = self.observe(data=data)
