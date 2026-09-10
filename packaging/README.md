@@ -5,6 +5,19 @@ worktree history or ignored build/runtime directories. The workflow is dispatcha
 an acceptance branch and has read-only repository permissions; it does not publish releases.
 Version 0.6.0 is reserved for lab-v0.6.0-windows and lab-v0.6.0-macos, after acceptance.
 
+The workflow's `target` selector accepts `windows`, `macos`, or `all`. Run Windows
+acceptance first, then both macOS jobs at that identical commit. Windows delivery uses
+one fresh staging/install directory on a disposable GitHub-hosted runner. It records
+each reachable build, smoke, audit, installer, installed smoke/reopen, three-page GUI,
+and uninstall check under `dist/diagnostic/`, continuing independent checks after errors.
+Only complete acceptance creates the release-named installer/checksum in `dist/`.
+Files inside `dist/diagnostic/` are evidence, not releases. `-Diagnostic` on the Windows
+wrapper uses the identical path but never promotes an installer, even on success.
+Windows installation acceptance scripts intentionally refuse ordinary user machines.
+Early CI preflight detects Inno and WebView2; missing WebView2 is provisioned only on
+the disposable runner, after verifying the official download's Microsoft Authenticode
+signature. The distributed app installer still requires the end user's WebView2 runtime.
+
 ## Build
 
 Use native CPython 3.13, CMake, and the native C compiler. On Windows activate MSVC x64

@@ -1,4 +1,4 @@
-"""Build unchanged CPython 3.13 native sources; retain archives and repaired wheels."""
+"""Build pinned CPython 3.13 native sources; retain archives and repaired wheels."""
 from pathlib import Path
 import hashlib
 import json
@@ -24,7 +24,23 @@ def map_build_metadata(path, prefixes):
     for prefix in prefixes:
         content = content.replace(prefix.replace('\\', '\\\\'), '/shaq-build')
         content = content.replace(prefix, '/shaq-build')
+        content = content.replace(prefix.replace('\\', '/'), '/shaq-build')
     path.write_text(content, encoding='utf-8')
+
+
+def map_hdf_source_locations(source_root):
+    """Map diagnostic names in extracted build copies using standard C #line."""
+    mapped = []
+    for path in sorted(source_root.rglob('*')):
+        if path.suffix not in ('.c', '.h') or not path.is_file():
+            continue
+        relative = path.relative_to(source_root).as_posix()
+        directive = f'#line 1 {json.dumps(relative)}\n'.encode('utf-8')
+        content = path.read_bytes()
+        if not content.startswith(directive):
+            path.write_bytes(directive + content)
+        mapped.append(relative)
+    return mapped
 
 
 def reset_wheel_directories(output):
@@ -79,6 +95,12 @@ def main():
             if not (source_dir / top).is_dir():
                 tar.extractall(source_dir, filter='data')
         sources[name] = source_dir / top
+    if sys.platform == 'win32':
+        mapped = map_hdf_source_locations(sources['hdf5'])
+        receipt = {'source_sha256': specification['hdf5']['sha256'],
+                   'transformation': 'Prepend #line 1 with source-relative filename to extracted .c/.h build copies; original following bytes unchanged.',
+                   'recipe': 'packaging/build_native.py:map_hdf_source_locations', 'files': mapped}
+        (output / 'hdf5-diagnostic-map.json').write_text(json.dumps(receipt, indent=2), encoding='utf-8')
     pip = [sys.executable, '-m', 'pip']
     lock = root / 'packaging/requirements.lock.txt'
     run(*pip, 'install', '--no-cache-dir', '-c', lock, 'setuptools', 'wheel', 'numpy', 'Cython',

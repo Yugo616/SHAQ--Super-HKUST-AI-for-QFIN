@@ -132,6 +132,7 @@ def collect_notices(root):
     if sys.platform == 'win32':
         provenance = json.loads((root / 'build/native-dependencies/mingw-toolchain.json').read_text(encoding='utf-8'))
         collect_mingw_notices(destination, provenance)
+        shutil.copy2(root / 'build/native-dependencies/hdf5-diagnostic-map.json', destination / 'hdf5/diagnostic-map.json')
     (destination / 'source-manifest.json').write_text(json.dumps(sources, indent=2), encoding='utf-8')
     python_license = Path(sys.base_prefix) / 'Resources/Python.app/Contents/Resources/English.lproj/Documentation/License.html'
     candidates = [python_license, Path(sys.base_prefix) / 'LICENSE.txt', Path(sys.base_prefix) / 'lib/python3.13/LICENSE.txt']

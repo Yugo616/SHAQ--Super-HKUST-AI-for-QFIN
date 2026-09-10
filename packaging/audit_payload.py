@@ -58,6 +58,11 @@ def verify_methods(root):
 
 
 def contains_private_path(data, home, checkout, hosted_runner=False):
+    # CMake and native compilers use both Windows slash spellings.
+    data = data.replace(b'\\', b'/')
+    home, checkout = home.replace('\\', '/'), checkout.replace('\\', '/')
+    if re.match(r'^[A-Za-z]:/', home):
+        data, home, checkout = data.lower(), home.lower(), checkout.lower()
     if checkout.encode() in data:
         return True
     home_bytes = home.encode()
@@ -69,6 +74,18 @@ def contains_private_path(data, home, checkout, hosted_runner=False):
         upstream = (hosted_runner and home.split('/') == ['', 'Users', 'runner'] and
                     (re.match(rb'/work/([^/\x00\r\n]+)/\1/', suffix) or
                      suffix.startswith(b'/.cargo/registry/src/')))
+        if hosted_runner and home == 'c:/users/runneradmin':
+            # Verified locked-wheel source locations, not arbitrary Temp contents.
+            cargo = re.match(rb'/\.cargo/registry/src/index\.crates\.io-[a-f0-9]+/', suffix)
+            source = re.match(
+                rb'/appdata/local/temp/tmp[a-z0-9_]+/'
+                rb'(?:hdf5-hdf5_[0-9][0-9._-]*/src/|build/_deps/blosc2-src/'
+                rb'(?:blosc/|include/|plugins/(?:codecs|filters)/))'
+                rb'(?:[a-z0-9_-]+/)*[a-z0-9_.-]+\.[ch](?=[\x00\r\n]|$)', suffix)
+            settings = (b'summary of the hdf5 configuration' in data and
+                        data[:match.start()].endswith(b'module directory: ') and
+                        re.match(rb'/appdata/local/temp/tmp[a-z0-9_]+/mod\r?\n', suffix))
+            upstream = source or settings or (cargo and b'/../' not in suffix.split(b'\x00', 1)[0])
         if not upstream:
             return True
     return False
@@ -88,8 +105,8 @@ def audit(root):
         data = path.read_bytes()
         if contains_private_path(data, home, checkout, hosted_runner):
             # User names in debug/source paths are private, even if linking is relocatable.
-            failures.append(f'private macOS user path: {path.relative_to(root).as_posix()}')
-        elif b'/Users/' in data:
+            failures.append(f'private build/user path: {path.relative_to(root).as_posix()}')
+        elif b'/Users/' in data or b'C:\\Users\\runneradmin' in data:
             upstream_paths.append(path.relative_to(root).as_posix())
         if sys.platform == 'darwin' and magic in (b'\xcf\xfa\xed\xfe', b'\xca\xfe\xba\xbe', b'\xfe\xed\xfa\xcf'):
             output = subprocess.check_output(['otool', '-L', str(path)], text=True)

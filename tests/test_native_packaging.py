@@ -3,6 +3,7 @@ import importlib.util
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -209,6 +210,67 @@ class NativePackagingTests(unittest.TestCase):
             dependency = Requirement(text)
             if dependency.name == 'pefile':
                 self.assertIn(version, dependency.specifier)
+
+    def test_windows_hosted_vendor_paths_preserve_private_and_checkout_rejection(self):
+        audit = self.module('audit_payload')
+        home = '\\'.join(('C:', 'Users', 'runneradmin'))
+        checkout = r'D:\a\current\current'
+        # Actual path contexts from the locked Windows wheels (three Rust modules,
+        # upstream h5py/HDF5, and the byte-identical Blosc2 runtime).
+        vendor = [r'\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\pyo3-0.29.0\src\instance.rs',
+                  r'\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\url-2.5.8\src\parser.rs',
+                  r'\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\lexical-parse-float-1.0.6\src\bigint.rs',
+                  r'\AppData\Local\Temp\tmp453k4de2\hdf5-hdf5_2.0.0\src\H5.c',
+                  r'\AppData\Local\Temp\tmpto43qb23\build\_deps\blosc2-src\plugins\codecs\ndlz\ndlz.c']
+        for suffix in vendor:
+            data = (home + suffix + '\0').encode()
+            self.assertFalse(audit.contains_private_path(data, home, checkout, hosted_runner=True), suffix)
+            self.assertTrue(audit.contains_private_path(data, home, checkout, hosted_runner=False))
+            personal = home.replace('runneradmin', 'personal-user')
+            self.assertTrue(audit.contains_private_path((personal + suffix).encode(), personal, checkout, hosted_runner=True))
+        settings = ('SUMMARY OF THE HDF5 CONFIGURATION\nModule Directory: ' +
+                    home.replace('\\', '/') + '/AppData/Local/Temp/tmpp83d3cae/mod\n').encode()
+        self.assertFalse(audit.contains_private_path(settings, home, checkout, hosted_runner=True))
+        for path in (checkout + r'\build\native-dependencies\sources\hdf5-1.14.6\src\H5.c',
+                     checkout.replace('\\', '/') + '/build/native-dependencies/hdf5',
+                     home + r'\.ssh\id_ed25519', home + r'\.cargo\credentials.toml',
+                     home + r'\AppData\Local\Temp\secret.json',
+                     home + r'\AppData\Local\Temp\tmpp83d3cae\mod',
+                     home + r'\AppData\Local\Temp\tmp123\hdf5-hdf5_2.0.0\src\secret.json',
+                     home + r'\AppData\Local\Temp\tmp123\build\_deps\blosc2-src\..\secret.c'):
+            self.assertTrue(audit.contains_private_path(path.encode(), home, checkout, hosted_runner=True), path)
+
+    def test_windows_hdf_diagnostic_mapping_preserves_line_numbers_and_source(self):
+        build = self.module('build_native')
+        self.assertTrue(hasattr(build, 'map_hdf_source_locations'))
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            source = root / 'hdf5/src/probe.c'
+            source.parent.mkdir(parents=True)
+            original = b'/* Copyright retained */\n#include <stdio.h>\nconst char *file = __FILE__;\nint main(void) { printf("%s:%d", file, __LINE__); }\n'
+            source.write_bytes(original)
+            self.assertEqual(build.map_hdf_source_locations(root / 'hdf5'), ['src/probe.c'])
+            self.assertEqual(source.read_bytes(), b'#line 1 "src/probe.c"\n' + original)
+            build.map_hdf_source_locations(root / 'hdf5')
+            self.assertEqual(source.read_bytes().count(b'#line'), 1)
+            # Exercise the standard C directive, not just generated source text.
+            compiler = shutil.which('cl') if sys.platform == 'win32' else (shutil.which('cc') or shutil.which('gcc'))
+            if compiler is not None:
+                binary = root / ('probe.exe' if sys.platform == 'win32' else 'probe')
+                args = ([compiler, '/nologo', str(source), '/Fe:' + str(binary), '/Fo:' + str(root / 'probe.obj')]
+                        if sys.platform == 'win32' else [compiler, str(source), '-o', str(binary)])
+                subprocess.run(args, check=True, cwd=root)
+                self.assertEqual(subprocess.check_output([str(binary)], text=True), 'src/probe.c:4')
+
+    def test_generated_windows_hdf_metadata_maps_both_path_spellings(self):
+        build = self.module('build_native')
+        with tempfile.TemporaryDirectory() as name:
+            path = Path(name) / 'H5build_settings.c'
+            prefix = r'D:\a\current\current'
+            path.write_text('Copyright retained\n' + prefix + '\n' + prefix.replace('\\', '/') + '\n' +
+                            prefix.replace('\\', '\\\\'), encoding='utf-8')
+            build.map_build_metadata(path, [prefix])
+            self.assertEqual(path.read_text(encoding='utf-8'), 'Copyright retained\n/shaq-build\n/shaq-build\n/shaq-build')
 
     def test_x64_sqlalchemy_runtime_dependencies_are_pinned(self):
         from importlib.metadata import requires

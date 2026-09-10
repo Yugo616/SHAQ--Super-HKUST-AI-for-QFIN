@@ -1,6 +1,12 @@
 name: Build SHAQ Daily Oracle Lab
 on:
   workflow_dispatch:
+    inputs:
+      target:
+        description: Complete acceptance for Windows, macOS, or all platforms at this commit
+        type: choice
+        options: [windows, macos, all]
+        default: windows
   push:
     paths:
       - ".github/workflows/build-desktop.yml"
@@ -20,15 +26,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - runner: windows-latest
-            platform: Windows-x64
-          - runner: macos-15
-            platform: macOS-Apple-Silicon
-            arch: arm64
-          - runner: macos-15-intel
-            platform: macOS-Intel
-            arch: x86_64
+        include: ${{ fromJSON(inputs.target == 'windows' && '[{"runner":"windows-latest","platform":"Windows-x64"}]' || inputs.target == 'macos' && '[{"runner":"macos-15","platform":"macOS-Apple-Silicon","arch":"arm64"},{"runner":"macos-15-intel","platform":"macOS-Intel","arch":"x86_64"}]' || '[{"runner":"windows-latest","platform":"Windows-x64"},{"runner":"macos-15","platform":"macOS-Apple-Silicon","arch":"arm64"},{"runner":"macos-15-intel","platform":"macOS-Intel","arch":"x86_64"}]') }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     steps:
@@ -39,6 +37,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
+      - name: Validate source privacy and eight Skills before building
+        id: source-check
+        run: python scripts/validate_release.py
+      - name: Inspect Inno and provision verified Microsoft WebView2 only if missing
+        if: runner.os == 'Windows'
+        run: python packaging/windows_delivery.py --preflight-only
       - uses: ilammy/msvc-dev-cmd@v1
         if: runner.os == 'Windows'
         with:
@@ -62,35 +66,12 @@ jobs:
         run: test "$(uname -m)" = "${{ matrix.arch }}"
       - name: Build native no-LZO dependencies then install locked application
         run: python packaging/build_native.py
-      - name: Validate eight Skills and all application tests
-        run: |
-          python scripts/validate_release.py
-          python -m unittest discover -s tests -v
-      - name: Build Windows installer
-        if: runner.os == 'Windows'
+      - name: Validate all application tests
+        run: python -m unittest discover -s tests -v
+      - name: Collect complete Windows delivery acceptance, then fail on any unsuccessful stage
+        if: ${{ !cancelled() && runner.os == 'Windows' && steps.source-check.outcome == 'success' }}
         shell: pwsh
-        run: .\packaging\build_windows.ps1
-      - name: Install, settle both methods, reopen, inspect native window and uninstall
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $InstallDir = Join-Path $env:RUNNER_TEMP "SHAQ-Lab-Acceptance"
-          $Setup = Join-Path $PWD "dist\SHAQ-Daily-Oracle-Lab-Windows-x64-Setup.exe"
-          $Process = Start-Process $Setup -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/DIR=$InstallDir" -Wait -PassThru
-          if ($Process.ExitCode -ne 0) { throw "Installer failed; verify WebView2 Evergreen runtime" }
-          $Executable = Join-Path $InstallDir "SHAQ Daily Oracle Lab.exe"
-          $Report = Join-Path $PWD "dist\installed-smoke.json"
-          $Process = Start-Process $Executable -ArgumentList "--smoke", "--smoke-output", $Report -Wait -PassThru
-          if ($Process.ExitCode -ne 0) { throw "Installed settlement/history/reopen failed" }
-          $GuiReport = Join-Path $PWD "dist\installed-gui.json"
-          $Process = Start-Process $Executable -ArgumentList "--gui-smoke", $GuiReport -PassThru
-          if (-not $Process.WaitForExit(60000)) { $Process.Kill(); throw "Native GUI timed out" }
-          if ($Process.ExitCode -ne 0) { throw "Native GUI failed" }
-          python packaging/audit_payload.py $InstallDir --output dist/installed-native-audit.json
-          if ($LASTEXITCODE -ne 0) { throw "Installed payload audit failed" }
-          $Process = Start-Process (Join-Path $InstallDir "unins000.exe") -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART" -Wait -PassThru
-          python packaging/verify_uninstall.py $InstallDir --timeout-seconds 30 --output dist/uninstall-report.json
-          if ($Process.ExitCode -ne 0 -or $LASTEXITCODE -ne 0) { throw "Uninstall failed; see uninstall-report.json for remaining paths" }
+        run: .\packaging\build_windows.ps1 ${{ job.status != 'success' && '-UpstreamFailed' || '' }}
       - name: Build macOS disk image
         if: runner.os == 'macOS'
         run: zsh packaging/build_macos.sh
@@ -120,6 +101,7 @@ jobs:
             dist/*.sha256
             dist/*.json
             dist/native/*.json
+            dist/diagnostic/**
             build/third-party/**
             build/license-sources/*.tar.gz
             build/native-dependencies/sources/*.tar.gz

@@ -2,6 +2,12 @@
 #ifndef AppVersion
   #error "AppVersion must be supplied by build_windows.ps1"
 #endif
+#ifndef PayloadRoot
+  #error "PayloadRoot must be supplied by windows_delivery.py"
+#endif
+#ifndef InstallerOutput
+  #error "InstallerOutput must be supplied by windows_delivery.py"
+#endif
 
 [Setup]
 AppId={{15CDBE33-6E10-466F-B4F4-45022818B498}
@@ -9,7 +15,7 @@ AppName={#AppName}
 AppVersion={#AppVersion}
 DefaultDirName={autopf}\SHAQ Daily Oracle Lab
 DefaultGroupName=SHAQ Daily Oracle Lab
-OutputDir={#ProjectRoot}\dist
+OutputDir={#InstallerOutput}
 OutputBaseFilename=SHAQ-Daily-Oracle-Lab-Windows-x64-Setup
 Compression=lzma2
 SolidCompression=yes
@@ -19,7 +25,7 @@ PrivilegesRequired=lowest
 UninstallDisplayIcon={app}\SHAQ Daily Oracle Lab.exe
 
 [Files]
-Source: "{#ProjectRoot}\dist\desktop-windows\SHAQ Daily Oracle Lab\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#PayloadRoot}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{autoprograms}\SHAQ Daily Oracle Lab"; Filename: "{app}\SHAQ Daily Oracle Lab.exe"

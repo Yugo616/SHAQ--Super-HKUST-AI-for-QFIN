@@ -11,6 +11,13 @@ absence and an audit of every native payload's library links; no LZO-linked bina
 or GPL libraries are removed to conceal a dependency. PyTables uses BSD-3-Clause;
 HDF5 and bundled compression libraries retain their own notices.
 
+Windows HDF5 build copies receive standard C `#line` directives to keep diagnostic
+filenames source-relative while preserving original line numbers and following source
+bytes. Generated HDF5 build-settings path strings are normalized on both platforms.
+Original source archives and license texts remain unchanged. Windows payloads include
+`third-party/hdf5/diagnostic-map.json` with the original source hash, transformation
+description and affected file list; the reproducible recipe is in `packaging/build_native.py`.
+
 Each artifact contains third-party/manifest.json with the source commit, architecture,
 Python version, exact package versions and bundled-method file hashes. Complete
 license/notice texts, Python license, and source-manifest URLs and SHA-256 values accompany
