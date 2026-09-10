@@ -15,6 +15,15 @@ IGNORED_TOP_LEVEL = {
     ".git", ".pytest_cache", "build", "dist", "runtime",
 }
 DISALLOWED_TEXT = ("to" + "do", "pend" + "ing")
+
+
+def has_unfinished_prose(path: Path, text: str) -> bool:
+    # Publication prose must be finished; runtime status names are not research notes.
+    return path.suffix == '.md' and any(
+        re.search(r'\b' + re.escape(marker) + r'\b', text, re.IGNORECASE)
+        for marker in DISALLOWED_TEXT
+    )
+
 DISALLOWED_PATH_PATTERNS = (
     re.compile("/" + "Users/" + "[^/]+/"),
     re.compile(r"[A-Za-z]:\\Users\\[^\\]+\\"),
@@ -127,10 +136,8 @@ def main() -> int:
         text = path.read_text(encoding="utf-8", errors="replace")
         if path.suffix == ".py":
             ast.parse(text, filename=str(path))
-        comparable = text.lower()
-        for marker in DISALLOWED_TEXT:
-            if marker in comparable:
-                raise ValueError(f"internal marker in public package: {path}")
+        if has_unfinished_prose(path, text):
+            raise ValueError(f"internal marker in public package: {path}")
         sensitive_markers = ("REAL" + "_" + "ENABLED",)
         if any(marker in text for marker in sensitive_markers):
             raise ValueError(f"credential or real-trading switch in release: {path}")

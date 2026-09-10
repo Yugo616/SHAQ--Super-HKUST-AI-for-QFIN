@@ -1,5 +1,5 @@
 interface:
-  display_name: "Derivatives Evidence"
+  display_name: "期权定价与仓位线索 · Options Pricing & Positioning"
   short_description: "Interpret option distributions and directional flow"
   default_prompt: "Use $derivatives-evidence to analyze cutoff-safe option and derivatives evidence."
 policy:

@@ -52,6 +52,22 @@ class FakeEvents:
 
 
 class ResearchCollectionTests(unittest.TestCase):
+    def test_different_screeners_collect_same_union_regardless_of_version_order(self):
+        from shaq_daily_oracle.hashing import sha256_payload
+        scripts = ['function compute(x){return {symbols:[x.candidates[0].symbol]}}',
+                   'function compute(x){return {symbols:[x.candidates[x.candidates.length-1].symbol]}}']
+        with tempfile.TemporaryDirectory() as name:
+            results=[]
+            for i, order in enumerate([scripts, list(reversed(scripts))]):
+                evidence=collect_research_evidence(root=Path(name)/str(i), package_root=PACKAGE_ROOT,
+                    profile=self.profile(), sec_identity='Research test@example.edu',
+                    observed_at=datetime(2026,9,4,8,45,tzinfo=ZoneInfo('America/New_York')),
+                    market_provider=FakeMarket(),metadata_provider=FakeMetadata(),event_provider=FakeEvents(),
+                    screening_rules={sha256_payload(script):script for script in order})
+                results.append(evidence)
+            self.assertEqual(len(results[0].candidate_intake['candidates']),2)
+            self.assertEqual(results[0].manifest['evidence_hash'],results[1].manifest['evidence_hash'])
+
     def profile(self, maximum_candidates=3):
         return DataProfile(
             profile_id="test-free",
@@ -100,6 +116,15 @@ class ResearchCollectionTests(unittest.TestCase):
                     event_provider=FakeEvents(),
                 )
             self.assertFalse(root.exists())
+
+    def test_explicit_manual_weekend_run_is_replay_not_premarket_score(self):
+        with tempfile.TemporaryDirectory() as name:
+            evidence=collect_research_evidence(root=Path(name)/'evidence',package_root=PACKAGE_ROOT,
+                profile=self.profile(),sec_identity='Research test@example.edu',allow_replay=True,
+                observed_at=datetime(2026,9,5,8,45,tzinfo=ZoneInfo('America/New_York')),
+                market_provider=FakeMarket(),metadata_provider=FakeMetadata(),event_provider=FakeEvents())
+            self.assertEqual(evidence.manifest['cutoff_status'],'late_research_only')
+            self.assertEqual(evidence.manifest['scheduled_cutoff_et'][:10],'2026-09-04')
 
 
 if __name__ == "__main__":

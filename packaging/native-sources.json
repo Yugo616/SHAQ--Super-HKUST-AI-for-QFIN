@@ -1,0 +1,6 @@
+{
+  "tables": {"url": "https://files.pythonhosted.org/packages/cc/a3/d213ebe7376d48055bd55a29cd9f99061afa0dcece608f94a5025d797b0a/tables-3.11.1.tar.gz", "sha256": "78abcf413091bc7c1e4e8c10fbbb438d1ac0b5a87436c5b972c3e8253871b6fb"},
+  "hdf5": {"url": "https://github.com/HDFGroup/hdf5/releases/download/hdf5_1.14.6/hdf5-1.14.6.tar.gz", "sha256": "e4defbac30f50d64e1556374aa49e574417c9e72c6b1de7a4ff88c4b1bea6e9b"},
+  "quickjs": {"url": "https://files.pythonhosted.org/packages/f1/a7/8fac2e213db8108d8108e9f1ee8d6c2abfcbe943238b0960585c26666862/quickjs-1.19.4.tar.gz", "sha256": "1205953abc24ff757f4a795304d5d61e4bf1e555c9ef6ec96a132d4b95535484"},
+  "bcolz-zipline": {"url": "https://files.pythonhosted.org/packages/ea/31/d67d966443addd1c267b8bbbca86cbe44dc48e5873e6fe5ab6ba258e6f61/bcolz_zipline-1.13.0.tar.gz", "sha256": "51166ad88e20ba70af7677b9402ffdecfe327ed4d0d15d59a9c249323bf11433"}
+}

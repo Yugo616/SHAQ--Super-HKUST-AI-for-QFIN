@@ -1,5 +1,5 @@
 interface:
-  display_name: "Primary Event Reasoner"
+  display_name: "公司催化事件 · Company Catalysts"
   short_description: "Evaluate primary events, expectations, and absorption"
   default_prompt: "Use $primary-event-reasoner to evaluate a cutoff-safe company event from primary sources."
 policy:

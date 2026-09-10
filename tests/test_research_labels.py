@@ -19,7 +19,7 @@ from shaq_daily_oracle.research_batch import (
 from shaq_daily_oracle.research_dashboard import ResearchDashboardIndex
 from shaq_daily_oracle.research_labels import refresh_research_labels
 from shaq_daily_oracle.skill_versions import LocalSkillRegistry
-from tests.test_research_batch import FakeModel
+from test_research_batch import FakeModel
 
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
@@ -106,6 +106,18 @@ class ResearchLabelTests(unittest.TestCase):
         )
         return result["status"]["batch_id"]
 
+    def test_close_same_day_creates_provisional_labels(self):
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name) / 'research'
+            batch_id = self.setup_batch(root)
+            refresh_research_labels(research_root=root, batches_root=root / 'batches',
+                profile=DataProfile(profile_id='test', universe_file='unused.csv'),
+                observed_at=datetime(2026, 9, 4, 16, 5, tzinfo=ZoneInfo('America/New_York')),
+                market_provider=LabelMarket())
+            path = root / 'batches' / batch_id / 'labels.json'
+            self.assertTrue(path.exists())
+            self.assertEqual(json.loads(path.read_text())['labels']['AAPL']['status'], 'provisional')
+
     def test_label_requires_later_independent_matching_observation(self):
         with tempfile.TemporaryDirectory() as name:
             root = Path(name) / "research"
@@ -138,6 +150,16 @@ class ResearchLabelTests(unittest.TestCase):
         self.assertEqual(before["performance"][0]["evaluated"], 0)
         self.assertEqual(after["performance"][0]["evaluated"], 1)
         self.assertEqual(after["performance"][0]["correct"], 1)
+        replay = after["daily_results"]
+        self.assertEqual(len(replay), 1)
+        self.assertEqual(replay[0]["status"], "final")
+        self.assertEqual(replay[0]["correct"], 1)
+        self.assertEqual(replay[0]["incorrect"], 0)
+        self.assertAlmostEqual(replay[0]["daily_pnl"], 2.0)
+        # This test replays historical evidence with today's model invocation.
+        # The paper return remains visible but cannot become a live forecast.
+        self.assertFalse(replay[0]["score_eligible"])
+        self.assertAlmostEqual(replay[0]["cumulative_pnl"], 0.0)
 
     def test_flat_is_neutral_and_directional_prediction_is_wrong(self):
         class FlatMarket(LabelMarket):

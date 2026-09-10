@@ -1,99 +1,121 @@
 name: Build SHAQ Daily Oracle Lab
-
 on:
   workflow_dispatch:
   push:
     paths:
       - ".github/workflows/build-desktop.yml"
-      - "config/**"
-      - "governance/**"
       - "packaging/**"
-      - "schemas/**"
-      - "scripts/**"
-      - "skills/**"
       - "src/**"
       - "tests/**"
+      - "bundled_versions/**"
+      - "config/**"
+      - "skills/**"
+      - "decision/**"
       - "pyproject.toml"
-
+      - ".gitattributes"
+permissions:
+  contents: read
 jobs:
-  windows-x64:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      - name: Install research workbench dependencies
-        run: python -m pip install -e ".[desktop,test]"
-      - name: Validate and test
-        run: |
-          python scripts/validate_release.py
-          python -m unittest discover -s tests -v
-      - name: Build installer
-        shell: pwsh
-        run: .\packaging\build_windows.ps1
-      - name: Install, smoke test, and uninstall
-        shell: pwsh
-        run: |
-          $InstallDir = Join-Path $env:RUNNER_TEMP "SHAQ-Daily-Oracle-Lab-Test"
-          $Setup = Join-Path $PWD "dist\SHAQ-Daily-Oracle-Lab-Windows-x64-Setup.exe"
-          $Process = Start-Process $Setup -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/DIR=$InstallDir" -Wait -PassThru
-          if ($Process.ExitCode -ne 0) { throw "Installer failed" }
-          $Executable = Join-Path $InstallDir "SHAQ Daily Oracle Lab.exe"
-          $Process = Start-Process $Executable -ArgumentList "--smoke" -Wait -PassThru
-          if ($Process.ExitCode -ne 0) { throw "Installed app smoke test failed" }
-          $Uninstall = Join-Path $InstallDir "unins000.exe"
-          $Process = Start-Process $Uninstall -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART" -Wait -PassThru
-          if ($Process.ExitCode -ne 0) { throw "Uninstaller failed" }
-      - uses: actions/upload-artifact@v4
-        with:
-          name: SHAQ-Daily-Oracle-Lab-Windows-x64
-          path: |
-            dist/SHAQ-Daily-Oracle-Lab-Windows-x64-Setup.exe
-            dist/SHAQ-Daily-Oracle-Lab-Windows-x64-Setup.exe.sha256
-
-  macos:
+  native:
     strategy:
       fail-fast: false
       matrix:
         include:
+          - runner: windows-latest
+            platform: Windows-x64
           - runner: macos-15
-            machine_arch: arm64
-            package_arch: Apple-Silicon
+            platform: macOS-Apple-Silicon
+            arch: arm64
           - runner: macos-15-intel
-            machine_arch: x86_64
-            package_arch: Intel
+            platform: macOS-Intel
+            arch: x86_64
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
-      - name: Verify runner architecture
-        run: test "$(uname -m)" = "${{ matrix.machine_arch }}"
-      - name: Install research and isolated Mac operator dependencies
-        run: python -m pip install -e ".[desktop,futu,test]"
-      - name: Validate and test
+          python-version: '3.13'
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: runner.os == 'Windows'
+        with:
+          arch: x64
+      - uses: msys2/setup-msys2@v2
+        if: runner.os == 'Windows'
+        with:
+          install: mingw-w64-x86_64-gcc
+          update: false
+      - name: Enable MinGW-W64 for the upstream QuickJS CPython 3.13 source build
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: '"C:\msys64\mingw64\bin" | Out-File -FilePath $env:GITHUB_PATH -Append'
+      - name: Verify actual macOS architecture
+        if: runner.os == 'macOS'
+        run: test "$(uname -m)" = "${{ matrix.arch }}"
+      - name: Build native no-LZO dependencies then install locked application
+        run: python packaging/build_native.py
+      - name: Validate eight Skills and all application tests
         run: |
           python scripts/validate_release.py
           python -m unittest discover -s tests -v
-      - name: Build disk image
+      - name: Build Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: .\packaging\build_windows.ps1
+      - name: Install, settle both methods, reopen, inspect native window and uninstall
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $InstallDir = Join-Path $env:RUNNER_TEMP "SHAQ-Lab-Acceptance"
+          $Setup = Join-Path $PWD "dist\SHAQ-Daily-Oracle-Lab-Windows-x64-Setup.exe"
+          $Process = Start-Process $Setup -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/DIR=$InstallDir" -Wait -PassThru
+          if ($Process.ExitCode -ne 0) { throw "Installer failed; verify WebView2 Evergreen runtime" }
+          $Executable = Join-Path $InstallDir "SHAQ Daily Oracle Lab.exe"
+          $Report = Join-Path $PWD "dist\installed-smoke.json"
+          $Process = Start-Process $Executable -ArgumentList "--smoke", "--smoke-output", $Report -Wait -PassThru
+          if ($Process.ExitCode -ne 0) { throw "Installed settlement/history/reopen failed" }
+          $GuiReport = Join-Path $PWD "dist\installed-gui.json"
+          $Process = Start-Process $Executable -ArgumentList "--gui-smoke", $GuiReport -PassThru
+          if (-not $Process.WaitForExit(60000)) { $Process.Kill(); throw "Native GUI timed out" }
+          if ($Process.ExitCode -ne 0) { throw "Native GUI failed" }
+          python packaging/audit_payload.py $InstallDir --output dist/installed-native-audit.json
+          if ($LASTEXITCODE -ne 0) { throw "Installed payload audit failed" }
+          $Process = Start-Process (Join-Path $InstallDir "unins000.exe") -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART" -Wait -PassThru
+          if ($Process.ExitCode -ne 0 -or (Test-Path $Executable)) { throw "Uninstall failed" }
+      - name: Build macOS disk image
+        if: runner.os == 'macOS'
         run: zsh packaging/build_macos.sh
-      - name: Mount, smoke test, and verify temporary signature
+      - name: Install from DMG, settle both methods, reopen and inspect native window
+        if: runner.os == 'macOS'
         run: |
           MOUNT_POINT="$RUNNER_TEMP/shaq-dmg"
           INSTALL_ROOT="$RUNNER_TEMP/shaq-applications"
-          DMG="dist/SHAQ-Daily-Oracle-Lab-macOS-${{ matrix.package_arch }}.dmg"
           mkdir -p "$MOUNT_POINT" "$INSTALL_ROOT"
-          hdiutil attach -nobrowse -mountpoint "$MOUNT_POINT" "$DMG"
+          hdiutil attach -nobrowse -mountpoint "$MOUNT_POINT" "dist/SHAQ-Daily-Oracle-Lab-${{ matrix.platform }}.dmg"
           ditto "$MOUNT_POINT/SHAQ Daily Oracle Lab.app" "$INSTALL_ROOT/SHAQ Daily Oracle Lab.app"
-          "$INSTALL_ROOT/SHAQ Daily Oracle Lab.app/Contents/MacOS/SHAQ Daily Oracle Lab" --smoke
-          codesign --verify --deep --strict "$INSTALL_ROOT/SHAQ Daily Oracle Lab.app"
           hdiutil detach "$MOUNT_POINT"
+          "$INSTALL_ROOT/SHAQ Daily Oracle Lab.app/Contents/MacOS/SHAQ Daily Oracle Lab" --smoke --smoke-output "$PWD/dist/installed-smoke.json"
+          python -c 'import subprocess,sys; subprocess.run(sys.argv[1:],check=True,timeout=60)' "$INSTALL_ROOT/SHAQ Daily Oracle Lab.app/Contents/MacOS/SHAQ Daily Oracle Lab" --gui-smoke "$PWD/dist/installed-gui.json"
+          codesign --verify --deep --strict "$INSTALL_ROOT/SHAQ Daily Oracle Lab.app"
+          python packaging/audit_payload.py "$INSTALL_ROOT/SHAQ Daily Oracle Lab.app" --output dist/installed-native-audit.json
           find "$INSTALL_ROOT/SHAQ Daily Oracle Lab.app" -depth -delete
-      - uses: actions/upload-artifact@v4
+          test ! -e "$INSTALL_ROOT/SHAQ Daily Oracle Lab.app"
+      - name: Retain installers, checksums, provenance, native sources and acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
-          name: SHAQ-Daily-Oracle-Lab-macOS-${{ matrix.package_arch }}
+          name: SHAQ-Daily-Oracle-Lab-${{ matrix.platform }}
           path: |
-            dist/SHAQ-Daily-Oracle-Lab-macOS-${{ matrix.package_arch }}.dmg
-            dist/SHAQ-Daily-Oracle-Lab-macOS-${{ matrix.package_arch }}.dmg.sha256
+            dist/*.dmg
+            dist/*Setup.exe
+            dist/*.sha256
+            dist/*.json
+            dist/native/*.json
+            build/third-party/**
+            build/license-sources/*.tar.gz
+            build/native-dependencies/sources/*.tar.gz
+            build/native-dependencies/wheel-sha256.json
+            build/native-dependencies/wheels/*.whl

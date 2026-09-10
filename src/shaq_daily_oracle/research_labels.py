@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 from .data_providers import DataProfile, OpenBBProviderAdapter, YFinanceProvider
 from .hashing import sha256_payload
 from .research_batch import load_frozen_evidence
+from .market_calendar import market_session
 
 
 class ResearchLabelError(ValueError):
@@ -97,7 +98,8 @@ def refresh_research_labels(
             continue
         batch_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         trade_date = date.fromisoformat(str(batch_root.name[4:14]))
-        if trade_date >= now.date():
+        session = market_session(trade_date)
+        if session is None or now <= session.market_close:
             continue
         evidence_hash = str(batch_manifest.get("batch_identity", {}).get("evidence_hash", ""))
         try:

@@ -1,5 +1,5 @@
 interface:
-  display_name: "Capital Order Flow"
+  display_name: "买卖压力与流动性 · Order Flow & Liquidity"
   short_description: "Measure liquidity-adjusted order-flow imbalance"
   default_prompt: "Use $capital-order-flow to evaluate verified order-flow and liquidity evidence."
 policy:

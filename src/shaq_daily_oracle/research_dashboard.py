@@ -283,11 +283,141 @@ class ResearchDashboardIndex:
                 break
             except (ResearchDashboardError, ResearchBatchError):
                 continue
+        daily_results = self._daily_results(batches)
+        from .virtual_accounts import AccountStore
+        accounts = AccountStore(self.batches_root.parent / 'virtual_accounts').view(
+            self.account_rows(daily_results))
         return {
             "generated_at_et": datetime.now(ZoneInfo("America/New_York")).isoformat(),
             "batches": batches, "versions": versions, "performance": performance,
-            "latest": latest,
+            "latest": latest, "daily_results": daily_results, "virtual_accounts": accounts,
         }
+
+    def account_rows(self, daily_results):
+        """Join minute observations only at the execution/account boundary."""
+        from .minute_settlements import MINUTE_NAMESPACE, MinuteStore
+        store = MinuteStore(self.batches_root.parent / MINUTE_NAMESPACE)
+        return [dict(row, minute=store.snapshot(row['trade_date'],
+                    [p['symbol'] for p in row['predictions']]))
+                for row in daily_results if row.get('series_key')]
+
+    def _daily_results(self, batches: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Build the simple, comparable research replay view from immutable files.
+
+        SQLite remains only an index.  This view deliberately uses official
+        unadjusted open/close labels and one notional share; it never implies a
+        broker fill or feeds any result back into a premarket decision.
+        """
+        chronological = sorted(batches, key=lambda row: (str(row["trade_date"]), str(row["batch_id"])))
+        details, first = {}, {}
+        for batch in chronological:
+            if not batch.get('source_valid'):
+                continue
+            try:
+                detail = self.batch_detail(batch['batch_id'])
+            except (ResearchDashboardError, ResearchBatchError):
+                continue
+            details[batch['batch_id']] = detail
+            for key, variant in detail.get('variants', {}).items():
+                if variant.get('score_eligible') is not True or detail['evidence']['cutoff_status'] != 'on_time':
+                    continue
+                completed = variant.get('completed_at_et')
+                if not completed:
+                    continue
+                identity = (batch['trade_date'], key, variant['variant'].get('version_sha256'), variant.get('model_profile_sha256'))
+                candidate = (datetime.fromisoformat(completed), batch['batch_id'])
+                if identity not in first or candidate < first[identity]:
+                    first[identity] = candidate
+        cumulative: dict[str, float] = {}
+        scored_sessions: set[tuple[str, str]] = set()
+        output: list[dict[str, Any]] = []
+        for batch in chronological:
+            if not batch.get("source_valid"):
+                output.append({
+                    "batch_id": batch["batch_id"], "trade_date": batch["trade_date"],
+                    "variant_key": "engineering-failure", "label": "工程故障",
+                    "predictions": [], "correct": 0, "incorrect": 0,
+                    "daily_pnl": None, "cumulative_pnl": None,
+                    "status": "engineering_failure", "cutoff_status": batch["cutoff_status"],
+                })
+                continue
+            try:
+                detail = details[str(batch["batch_id"])]
+            except KeyError:
+                continue
+            labels = detail.get("labels", {}).get("labels", {})
+            for key, variant in sorted(detail.get("variants", {}).items()):
+                model_hash = str(variant.get("model_profile_sha256", ""))
+                series_key = key + ":" + str(variant.get("variant", {}).get("version_sha256", "")) + ":" + model_hash
+                session_key = (str(batch["trade_date"]), series_key)
+                source_eligible = variant.get('score_eligible') is True and detail['evidence'].get('cutoff_status') == 'on_time'
+                identity = (batch['trade_date'], key, variant['variant'].get('version_sha256'), variant.get('model_profile_sha256'))
+                eligible = source_eligible and identity in first and first[identity][1] == batch['batch_id'] and session_key not in scored_sessions
+                if eligible:
+                    scored_sessions.add(session_key)
+                predictions = list(variant.get("predictions", []))
+                final = []
+                pending = False
+                for prediction in predictions:
+                    label = labels.get(str(prediction.get("symbol", "")), {})
+                    if label.get("status") != "final":
+                        pending = True
+                        continue
+                    if not isinstance(label.get("official_unadjusted_open"), (int, float)) or not isinstance(label.get("official_unadjusted_close"), (int, float)):
+                        pending = True
+                        continue
+                    final.append((prediction, label))
+                if not predictions:
+                    state = "empty"
+                    correct = incorrect = 0
+                    daily_pnl: float | None = 0.0
+                elif pending or len(final) != len(predictions):
+                    state = "pending"
+                    correct = incorrect = 0
+                    daily_pnl = None
+                else:
+                    state = "final"
+                    correct = sum(
+                        1 for prediction, label in final
+                        if prediction.get("direction") == label.get("actual_direction")
+                    )
+                    incorrect = len(final) - correct  # a flat outcome is intentionally incorrect
+                    daily_pnl = round(sum(
+                        float(label["official_unadjusted_close"]) - float(label["official_unadjusted_open"])
+                        if prediction.get("direction") == "bullish"
+                        else float(label["official_unadjusted_open"]) - float(label["official_unadjusted_close"])
+                        for prediction, label in final
+                    ), 6)
+                previous = cumulative.get(series_key, 0.0)
+                if daily_pnl is not None and eligible:
+                    cumulative[series_key] = round(previous + daily_pnl, 6)
+                output.append({
+                    "batch_id": batch["batch_id"], "trade_date": batch["trade_date"],
+                    "variant_key": key, "label": variant.get("variant", {}).get("label", key),
+                    "series_key": series_key, "score_eligible": eligible,
+                    "method_identity": variant.get('variant', {}).get('version_sha256'),
+                    "model_identity": variant.get('model_profile_sha256'),
+                    "source_eligible": source_eligible,
+                    "completed_at_et": variant.get('completed_at_et'),
+                    "publication_deadline_et": datetime.fromisoformat(batch['trade_date']).replace(hour=9, tzinfo=ZoneInfo('America/New_York')).isoformat(),
+                    "variant_result_sha256": variant.get('variant_result_sha256'),
+                    "labels": {p['symbol']: labels.get(p['symbol'], {}) for p in predictions},
+                    "model": variant.get("model_name") or next((x.get("response_model") for x in detail.get("model_calls", []) if x.get("response_model")), "未记录模型"),
+                    "predictions": [{"symbol": row.get("symbol"), "direction": row.get("direction")} for row in predictions],
+                    "correct": correct, "incorrect": incorrect,
+                    "daily_pnl": daily_pnl,
+                    "cumulative_pnl": cumulative.get(series_key, previous),
+                    "status": state, "cutoff_status": detail["evidence"].get("cutoff_status", "unknown"),
+                })
+            for key, reason in sorted((detail.get("status", {}).get("failed_variants", {}) or {}).items()):
+                output.append({
+                    "batch_id": batch["batch_id"], "trade_date": batch["trade_date"],
+                    "variant_key": key, "label": key, "predictions": [], "correct": 0, "incorrect": 0,
+                    "daily_pnl": None, "cumulative_pnl": cumulative.get(key, 0.0),
+                    "status": "engineering_failure", "failure_reason": str(reason),
+                    "cutoff_status": detail["evidence"].get("cutoff_status", "unknown"),
+                })
+        return sorted(output, key=lambda row: (str(row["trade_date"]), str(row["variant_key"])), reverse=True)
 
     def batch_detail(self, batch_id: str) -> dict[str, Any]:
         if Path(batch_id).name != batch_id:
@@ -319,6 +449,7 @@ class ResearchDashboardIndex:
             skill_snapshots[key] = {
                 "skill_snapshot_sha256": snapshot["skill_snapshot_sha256"],
                 "document_sha256": snapshot["document_sha256"],
+                "documents": snapshot["documents"],
             }
         if set(skill_snapshots) != set(manifest.get("skill_snapshot_sha256s", {})):
             raise ResearchDashboardError("batch Skill snapshot set is incomplete")
@@ -369,8 +500,16 @@ class ResearchDashboardIndex:
                 raise ResearchDashboardError("batch Skill count mismatch")
             if status.get("model_call_document_count") != len(model_calls):
                 raise ResearchDashboardError("batch model call count mismatch")
+        from .replay_summary import candidate_summary, compare_versions
+        labels = _verified_labels(root / "labels.json")
+        summaries = {key: {symbol: candidate_summary(value, symbol, labels.get('labels', {}).get(symbol, {}))
+                           for symbol in value.get('reports_by_symbol', {})}
+                     for key, value in variants.items()}
+        comparisons = {a: {b: compare_versions(left, right, skill_snapshots[a]['documents'], skill_snapshots[b]['documents'])
+                           for b, right in variants.items() if a != b} for a, left in variants.items()}
         return {
             "batch_id": batch_id, "manifest": manifest, "status": status,
+            "replay_summaries": summaries, "version_comparisons": comparisons,
             "evidence": {
                 "evidence_hash": evidence.manifest["evidence_hash"],
                 "cutoff_status": evidence.manifest["cutoff_status"],
@@ -389,7 +528,7 @@ class ResearchDashboardIndex:
                 } for row in evidence.manifest.get("records", [])],
             },
             "variants": variants,
-            "labels": _verified_labels(root / "labels.json"),
+            "labels": labels,
             "skill_snapshots": skill_snapshots,
             "model_calls": model_calls,
         }

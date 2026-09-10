@@ -1,0 +1,14 @@
+{
+  "parameter_bindings": {
+    "timeout_seconds": ["REF-OPENBB-PROVIDERS-001", "DEC-DATA-PROVIDERS-001", "EXP-CROSS-PLATFORM-LAB-001"],
+    "history_overlap_days": ["REF-YFINANCE-001", "DEC-DATA-PROVIDERS-001", "EXP-CROSS-PLATFORM-LAB-001"],
+    "sources": ["REF-OPENBB-PROVIDERS-001", "DEC-DATA-PROVIDERS-001", "EXP-CROSS-PLATFORM-LAB-001"]
+  },
+  "timeout_seconds": 15,
+  "history_overlap_days": 7,
+  "sources": {
+    "cboe_vix": {"url": "https://cdn.cboe.com/api/global/us_indices/daily_prices/VIX_History.csv", "kind": "csv", "enabled": true},
+    "federal_reserve_h15": {"url": "https://www.federalreserve.gov/releases/h15/", "kind": "html", "enabled": true},
+    "nasdaq_earnings": {"url": "https://api.nasdaq.com/api/calendar/earnings", "kind": "json", "enabled": true}
+  }
+}

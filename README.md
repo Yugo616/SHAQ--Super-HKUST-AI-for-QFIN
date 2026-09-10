@@ -1,5 +1,41 @@
 # SHAQ Daily Oracle Lab
 
+## 下载与开始
+
+0.6.0 Zipline 升级安装包尚未发布。Windows x64、Mac Apple Silicon 和 Mac Intel 必须通过同一源码版本的实际安装验收后，才会提供两个独立发布页和下载链接；构建定义或本机测试不等于远程平台通过。
+内部测试版未进行商业签名；安装和模型连接的实测范围以该发布页说明为准。
+
+1. 安装并打开软件，在「连接设置」连接 Codex、Claude Code 或模型 API。
+2. 登录团队 GitHub；软件已配置本仓库，无需填写 Client ID。
+3. 在「开始运行」勾选原版基准和综合判断版，点击运行。
+4. 在「查看结果」比较方法、股票判断和虚拟账户；点击记录展开分析与简短复盘。
+
+Codex、Claude Code 登录方式要求本机安装对应工具；API 方式不需要。Claude 网页登录不等同 Claude Code。
+WorkBuddy没有直接登录接口，只有提供兼容 API 时才通过中转配置使用。研究模式无需富途账户。
+
+## 团队版本库
+
+**[打开统一版本文件夹](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/tree/versions/shadow_versions)**
+
+程序位于 `main`；团队方法位于 `versions` 分支的 `shadow_versions/作者/版本编号/`。
+软件「修改版本 → 团队同步」上传、检查更新和下载。上传只添加完整方法包，不修改程序或旧版本。
+没有仓库写权限的成员仍可下载运行。旧个人分支版本继续兼容。
+
+原版和综合判断版随软件提供；同一批次共享数据。模型不同时会标注，不能把全部差异归因于方法。
+历史记录、模型调用、每日行情和虚拟账户仅存本机，不上传。
+
+## 结果与虚拟账户
+
+每个方法与模型配置使用独立账户：初始 10,000 美元，每票最多 1,000 美元，整数股，
+由 Zipline-reloaded 3.1.1 在真实一分钟数据上回放：参考 09:31 ET 分钟开盘进入、收盘前五分钟开盘退出；半日市按交易日历调整。双边各收 0.05% 手续费，并应用 0.05% 不利滑点。
+这是收盘后模拟回放，不是真实券商成交。分钟证据独立复核后才最终结算；下次打开只补齐仍可验证的数据，缺分钟则明确等待或缺失，不猜价、不重复记账。
+同时保留相同股数的零成本对照；官方未复权开收盘方向评价单独显示。旧 Backtrader 记录仅保留展示，不重算成新引擎成绩。
+
+简短复盘列出结果和当时依据，不以涨跌结果编造唯一原因。仅有开收盘价格时，不能证明盘中反转或某条消息导致涨跌。
+依赖许可见 [第三方说明](docs/third-party-notices.md)。
+
+## Technical overview
+
 SHAQ Daily Oracle Lab is a Windows and macOS research workbench for comparing
 governed premarket-analysis Skills. The application freezes one point-in-time
 evidence set, gives the same candidates and evidence to every selected Skill
@@ -14,7 +50,7 @@ different setup, runtime directory, system identity and score history.
 ```text
 Install the app
 → sign in to the team repository in a browser
-→ add an OpenAI, Anthropic or compatible API profile
+→ connect an existing Codex / Claude Code login, or add an API profile
 → enter the SEC research identity and verify the PIT universe/local storage
 → check team updates
 → select main and one or more Shadow versions
@@ -22,8 +58,11 @@ Install the app
 → inspect the local dashboard
 ```
 
-Python, Git, Codex, WorkBuddy and a Futu account are not required for research
-mode. The internal test release provides three installers:
+The release builds use one code revision for Windows and both macOS architectures. Research mode never
+requires a Futu account. Model access can come from a local Codex or Claude Code
+login, OpenAI, Anthropic, or an OpenAI-compatible relay API.
+
+Platform-specific installation validation is recorded in each release:
 
 - Windows 10/11 x64
 - macOS Apple Silicon
@@ -50,7 +89,7 @@ versioned PIT universe + replaceable data providers
          └──── same candidates, model profile and schema ────┘
                          │
                          ▼
- six blind domain analyses → non-voting adversary → deterministic gate
+ six blind domain analyses → non-voting adversary → sandboxed decision rule
                          │
                          ▼
        local history, comparison, labels and professor export
@@ -75,12 +114,17 @@ the everyday dashboard.
 | `price-volume-structure` | Interprets residual gap, path, participation and liquidity states |
 | `thesis-adversary` | Finds leakage, duplicated evidence and horizon mismatch without voting |
 
-Each Skill has a short `SKILL.md` and one `references/foundations.md`. A Shadow
-version may change only these Markdown or reference files. The application
-rejects Python, scripts, binaries, Actions, credentials, local paths and runtime
-data before upload. `main` is read-only; each member publishes immutable versions
-to `shadow/<github-login>` and every version stays bound to its original main
-commit.
+Each Skill is a complete three-file package: `SKILL.md`,
+`references/foundations.md`, and `agents/openai.yaml`. A Shadow can also include
+`decision/decision.js` plus mandatory `decision/cases.json`. The decision rule
+runs inside a local QuickJS sandbox and can read only frozen domain conclusions,
+the adversary result, and verified evidence roots. It cannot access files,
+network, system commands, credentials, broker code, or post-close labels.
+
+The application rejects arbitrary Python, binaries, Actions, credentials, local
+paths and runtime data before upload. `main` is read-only; each member publishes
+immutable versions to `shadow/<github-login>` and every version stays bound to
+its original main commit.
 
 ## Models
 
@@ -89,13 +133,15 @@ The same `ModelBackend` contract supports:
 - OpenAI Responses API with native strict structured output, `store=false` and
   no tools;
 - Anthropic Messages API with structured output and no tools;
-- OpenAI Chat Completions-compatible endpoints, either native strict schema or
-  local strict JSON Schema validation.
+- OpenAI Chat Completions-compatible endpoints, with local strict JSON Schema
+  validation;
+- existing Codex and Claude Code subscriptions through their local logged-in
+  command-line clients.
 
 The app probes the exact endpoint, model, authentication style and output mode
 before saving a profile. It does not silently switch a model or endpoint after a
-401, 429, timeout or schema failure. Codex CLI is retained only as an advanced
-Mac development backend and is not needed by the research application.
+401, 429, timeout or schema failure. A relay profile also records its declared
+context limit and rejects an evidence packet that would exceed it.
 
 ## Data providers
 
@@ -116,7 +162,7 @@ directional option-flow vote. Free data is explicitly marked research-only.
 
 The dashboard shows the timeline, selected versions, all candidates, six domain
 reports, support and counterarguments, unknowns, invalidation conditions,
-adversary result, deterministic gate and open-to-close results. File hashes and
+adversary result, decision-code reason and open-to-close results. File hashes and
 technical metadata are kept behind a collapsed verification section. It does not
 display or claim to reconstruct a model's hidden chain of thought.
 
@@ -137,16 +183,17 @@ cannot upload.
 ## Developer verification
 
 ```bash
-python3 -m venv .venv
+python3.13 -m venv .venv
 source .venv/bin/activate
-python3 -m pip install -e ".[desktop,futu,test]"
+python3 packaging/build_native.py
 python3 scripts/validate_release.py
 python3 -m unittest discover -s tests -v
 shaq-daily-oracle-desktop --smoke
 ```
 
-The GitHub workflow builds and smoke-tests all three installers on native x64 or
-arm64 runners. Installers contain no account identifier, email address, API key,
+The GitHub workflow defines native Windows x64, macOS arm64 and macOS x86_64 builds;
+only successful installed-artifact runs establish platform acceptance. See
+[native build and installation instructions](packaging/README.md). Installers must contain no account identifier, email address, API key,
 daily run record or development-machine path. Internal packages use SHA-256 files
 and ad-hoc or temporary signing, so the operating system may ask the reviewer to
 confirm the first launch.

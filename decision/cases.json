@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "name": "market-and-stock-roots-publish",
+      "input": {
+        "schema_version": 1,
+        "as_of_et": "2026-01-02T08:50:00-05:00",
+        "horizon": "official_US_regular_session_open_to_close",
+        "candidates": [
+          {"symbol": "AAA", "industry_group": "Technology", "track": "ordinary"}
+        ],
+        "reports_by_symbol": {
+          "AAA": [
+            {"domain": "market", "availability": "available", "verdict": "bullish", "lineage_root_ids": ["market-root"]},
+            {"domain": "price_volume", "availability": "available", "verdict": "bullish", "lineage_root_ids": ["stock-root"]}
+          ]
+        },
+        "adversary_by_symbol": {
+          "AAA": {"veto": false, "strongest_countercase": "可能已充分定价", "veto_reason": ""}
+        },
+        "root_component_types": {
+          "market-root": ["market_context"],
+          "stock-root": ["stock_price_volume"]
+        }
+      },
+      "expected_decisions": [
+        {
+          "symbol": "AAA",
+          "action": "publish",
+          "direction": "bullish",
+          "reason": "两个独立领域同向，且同时包含市场或行业背景与个股证据",
+          "evidence_root_ids": ["market-root", "stock-root"]
+        }
+      ]
+    },
+    {
+      "name": "opposing-domains-reject",
+      "input": {
+        "schema_version": 1,
+        "as_of_et": "2026-01-02T08:50:00-05:00",
+        "horizon": "official_US_regular_session_open_to_close",
+        "candidates": [
+          {"symbol": "BBB", "industry_group": "Health Care", "track": "event"}
+        ],
+        "reports_by_symbol": {
+          "BBB": [
+            {"domain": "market", "availability": "available", "verdict": "bullish", "lineage_root_ids": ["market-root"]},
+            {"domain": "price_volume", "availability": "available", "verdict": "bearish", "lineage_root_ids": ["stock-root"]}
+          ]
+        },
+        "adversary_by_symbol": {
+          "BBB": {"veto": false, "strongest_countercase": "方向冲突", "veto_reason": ""}
+        },
+        "root_component_types": {
+          "market-root": ["market_context"],
+          "stock-root": ["stock_price_volume"]
+        }
+      },
+      "expected_decisions": [
+        {
+          "symbol": "BBB",
+          "action": "reject",
+          "direction": "neutral",
+          "reason": "未满足两个独立领域及市场与个股证据门禁",
+          "evidence_root_ids": []
+        }
+      ]
+    }
+  ]
+}

@@ -23,6 +23,7 @@ from .market_calendar import market_session, next_market_session
 from .postmortem_runner import PostmortemRunner
 from .settings import SettingsStore, _atomic_json
 from .workflow import Workflow
+from .operator_control import requested_today
 
 
 class ServiceError(RuntimeError):
@@ -134,7 +135,7 @@ def run_worker(
                 continue
             start_time = clock_time.fromisoformat(str(settings["automatic_start_et"]))
             start = datetime.combine(session.session_date, start_time, ZoneInfo("America/New_York"))
-            if now_et < start:
+            if now_et < start and not requested_today(paths, session.session_date):
                 _write_status(paths, {"state": "waiting", "next_start_et": start.isoformat()})
                 if once:
                     return 0

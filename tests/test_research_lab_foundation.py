@@ -25,6 +25,7 @@ from shaq_daily_oracle.model_backends import (
     ModelProfile,
     _http_post_json,
     call_structured,
+    uses_local_subscription,
 )
 from shaq_daily_oracle.lab_service import LabService, LabServiceError
 from shaq_daily_oracle.research_settings import ResearchSettingsStore
@@ -52,6 +53,32 @@ def skill_text(name: str = "market-common-shock") -> str:
 
 
 class ResearchLabFoundationTests(unittest.TestCase):
+    def test_restart_preserves_account_rules_and_activation_time(self):
+        from shaq_daily_oracle.virtual_accounts import AccountStore, AccountRules
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = self.paths(Path(tmp))
+            store = AccountStore(paths.research_root / 'virtual_accounts')
+            policy = store.activate(AccountRules(commission_rate=0), '2026-09-09T07:00:00-04:00')
+            LabService(paths)
+            self.assertEqual(json.loads((store.root / 'activation.json').read_text()), policy)
+
+    def test_offline_copy_and_save_preserve_complete_skill_package(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lab = LabService(self.paths(Path(tmp)))
+            with patch('keyring.get_password', side_effect=AssertionError('unexpected keychain access')):
+                copy = lab.copy_local_version(version_id='main', author='team')
+                saved = lab.finalize_local_version(draft_id=copy['draft_id'], description='local copy')
+                actual = lab.registry.effective_skills(saved['version_id'], saved['author'])
+            self.assertEqual(actual, lab.registry.effective_skills('main', 'team'))
+
+    def test_github_username_case_does_not_hide_saved_local_version(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lab = LabService(self.paths(Path(tmp)))
+            with patch.object(lab.settings, 'load', return_value={'github_login':'TeamMember'}):
+                copy = lab.copy_local_version(version_id='main', author='team')
+                saved = lab.finalize_local_version(draft_id=copy['draft_id'], description='case test')
+            self.assertEqual(len(lab._resolve_variants([saved])),1)
+
     def paths(self, root: Path) -> AppPaths:
         return AppPaths(
             package_root=PACKAGE_ROOT,
@@ -80,6 +107,17 @@ class ResearchLabFoundationTests(unittest.TestCase):
                 "profile_id": "relay", "protocol": "other",
                 "base_url": "https://relay.invalid/v1", "model": "model",
             })
+
+    def test_local_subscription_profile_needs_no_api_key(self) -> None:
+        profile = ModelProfile.from_dict({
+            "profile_id": "codex", "protocol": "codex-cli", "base_url": "",
+            "model": "subscription-default",
+        })
+        self.assertTrue(uses_local_subscription(profile))
+        self.assertNotEqual(profile.endpoint_fingerprint(), ModelProfile.from_dict({
+            "profile_id": "claude", "protocol": "claude-code", "base_url": "",
+            "model": "subscription-default",
+        }).endpoint_fingerprint())
 
     def test_openai_responses_disables_storage_and_tools(self) -> None:
         captured = {}
@@ -328,7 +366,7 @@ class ResearchLabFoundationTests(unittest.TestCase):
         self.assertTrue(readiness["storage_writable"])
         self.assertNotIn(str(Path.home()), json.dumps(readiness))
 
-    def test_lab_state_is_broker_free_and_lists_bundled_main(self) -> None:
+    def test_lab_state_is_broker_free_and_lists_two_canonical_methods(self) -> None:
         class EmptyKeyring:
             @staticmethod
             def get_password(service, name):
@@ -340,11 +378,55 @@ class ResearchLabFoundationTests(unittest.TestCase):
             had_futu = "futu" in sys.modules
             with patch.object(service.settings, "_keyring", return_value=EmptyKeyring):
                 state = service.state()
+            all_ids = {row["version_id"] for row in service.registry.list_versions()}
+            old_selection = service._resolve_variants(
+                [{"author": "team", "version_id": "main"}]
+            )[0]
         self.assertEqual(state["product_name"], "SHAQ Daily Oracle Lab")
         self.assertFalse(state["research_mode"]["orders_allowed"])
         self.assertFalse(state["research_mode"]["broker_modules_loaded"])
-        self.assertEqual(state["versions"][0]["version_id"], "main")
+        self.assertEqual(
+            [(row["method_name"], row["status_badge"]) for row in state["versions"]],
+            [("独立证据门禁版", "正式基准"), ("跨域综合研判版", "Shadow")],
+        )
+        self.assertEqual(
+            all_ids,
+            {"main", "synthesis-1", "independent-gate-1", "cross-domain-synthesis-1"},
+        )
+        self.assertEqual(
+            old_selection.version_id,
+            "main",
+        )
         self.assertEqual("futu" in sys.modules, had_futu)
+
+    def test_read_only_method_comparison_normalizes_legacy_aliases(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            service = LabService(self.paths(Path(name)))
+            before = {
+                str(path.relative_to(service.registry.root)): path.read_bytes()
+                for path in service.registry.root.rglob("*") if path.is_file()
+            }
+
+            comparison = service.compare_methods(
+                {"author": "team", "version_id": "main"},
+                {"author": "team", "version_id": "synthesis-1"},
+            )
+
+            after = {
+                str(path.relative_to(service.registry.root)): path.read_bytes()
+                for path in service.registry.root.rglob("*") if path.is_file()
+            }
+        self.assertEqual(comparison["left_method"]["version_id"], "independent-gate-1")
+        self.assertEqual(comparison["left_method"]["method_name"], "独立证据门禁版")
+        self.assertEqual(comparison["left_method"]["status_badge"], "正式基准")
+        self.assertEqual(comparison["right_method"]["version_id"], "cross-domain-synthesis-1")
+        self.assertEqual(comparison["right_method"]["method_name"], "跨域综合研判版")
+        self.assertEqual(comparison["right_method"]["status_badge"], "Shadow")
+        self.assertGreater(comparison["changed_file_count"], 0)
+        self.assertNotEqual(
+            comparison["decision_mode"]["left"], comparison["decision_mode"]["right"]
+        )
+        self.assertEqual(before, after)
 
     def test_github_device_flow_preserves_and_rotates_expiring_credentials(self) -> None:
         class Response:
@@ -722,7 +804,7 @@ class ResearchLabFoundationTests(unittest.TestCase):
                 root=Path(name), package_skills=PACKAGE_ROOT / "skills"
             )
             main = registry.main_version()
-        self.assertEqual(len(main["skill_hashes"]), 16)
+        self.assertEqual(len(main["skill_hashes"]), 26)
         self.assertEqual(
             len([path for path in main["skill_hashes"] if path.endswith("/SKILL.md")]),
             8,
@@ -731,7 +813,47 @@ class ResearchLabFoundationTests(unittest.TestCase):
             len([path for path in main["skill_hashes"] if path.endswith("/references/foundations.md")]),
             8,
         )
+        self.assertEqual(
+            len([path for path in main["skill_hashes"] if path.endswith("/agents/openai.yaml")]),
+            8,
+        )
+        self.assertIn("decision/decision.js", main["skill_hashes"])
+        self.assertIn("decision/cases.json", main["skill_hashes"])
         self.assertEqual(main["version_id"], "main")
+
+    def test_shadow_decision_rule_requires_its_cases_and_overlays_main(self) -> None:
+        script = (PACKAGE_ROOT / "decision/decision.js").read_text(encoding="utf-8")
+        cases = (PACKAGE_ROOT / "decision/cases.json").read_text(encoding="utf-8")
+        files = {
+            "decision/decision.js": script,
+            "decision/cases.json": cases,
+        }
+        with self.assertRaises(SkillVersionError):
+            SkillVersionManifest.create(
+                version_id="decision-only",
+                author="alice",
+                base_main_sha="d" * 40,
+                files={"decision/decision.js": script},
+                description="Incomplete decision package.",
+            )
+        manifest = SkillVersionManifest.create(
+            version_id="decision-only",
+            author="alice",
+            base_main_sha="d" * 40,
+            files=files,
+            description="A tested decision policy.",
+        )
+        self.assertEqual(manifest.changed_domains, ("decision",))
+        with tempfile.TemporaryDirectory() as name:
+            registry = LocalSkillRegistry(
+                root=Path(name) / "registry", package_skills=PACKAGE_ROOT / "skills"
+            )
+            target = registry.install(
+                manifest=manifest, files=files, commit_sha="e" * 40
+            )
+            effective = registry.effective_skills("decision-only", "alice")
+            self.assertEqual(effective["decision/decision.js"], script)
+            self.assertTrue((target / "changed_decision/decision.js").is_file())
 
     def test_main_version_changes_when_a_foundation_changes(self) -> None:
         with tempfile.TemporaryDirectory() as name:

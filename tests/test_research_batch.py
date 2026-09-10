@@ -195,12 +195,13 @@ class ResearchBatchTests(unittest.TestCase):
         self.assertIn("prompt", call)
         self.assertIn("schema", call)
         self.assertIn("result", call)
-        self.assertEqual(len(skill_snapshot["documents"]), 16)
+        self.assertEqual(len(skill_snapshot["documents"]), 26)
         for variant in result["results"].values():
             self.assertEqual(variant["candidate_set_sha256"], evidence.manifest["candidate_set_sha256"])
             self.assertEqual(variant["orders"], [])
             self.assertFalse(variant["broker_modules_loaded"])
             self.assertEqual(variant["predictions"][0]["symbol"], "AAPL")
+            self.assertEqual(variant["decision"]["audit"]["engine"], "quickjs-isolated")
 
     def test_variant_order_does_not_change_batch_identity(self):
         with tempfile.TemporaryDirectory() as name:
@@ -226,6 +227,34 @@ class ResearchBatchTests(unittest.TestCase):
         self.assertEqual(first["manifest"]["batch_identity_sha256"], second["manifest"]["batch_identity_sha256"])
         self.assertEqual(first["batch_root"], second["batch_root"])
         self.assertEqual(model.calls, 3)
+
+    def test_complete_baseline_freezes_default_modules_without_changing_main_inputs(self):
+        from shaq_daily_oracle.bundled_versions import install_bundled_versions
+
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            registry = self.registry(root)
+            install_bundled_versions(registry)
+            rows = {row["version_id"]: row for row in registry.list_versions()}
+            main = VariantSelection.from_registry_row(rows["main"])
+            baseline = VariantSelection.from_registry_row(rows["independent-gate-1"])
+            model = FakeModel()
+            result = ResearchBatchRunner(
+                batches_root=root / "batches", cache_root=root / "cache",
+                registry=registry, integration_policy=self.policy(),
+            ).run(
+                evidence=self.evidence(root), variants=[main, baseline],
+                profile=self.profile(), secret="secret", caller=model,
+            )
+
+        old = result["results"]["team/main"]
+        frozen = result["results"]["team/independent-gate-1"]
+        self.assertEqual(model.calls, 3)
+        for field in (
+            "candidate_set_sha256", "evidence_hash", "reports_by_symbol",
+            "adversary_by_symbol", "decision", "predictions", "orders",
+        ):
+            self.assertEqual(old[field], frozen[field], field)
 
     def test_one_bad_shadow_does_not_fail_main(self):
         with tempfile.TemporaryDirectory() as name:

@@ -4,6 +4,7 @@
   "repository": "SHAQ--Super-HKUST-AI-for-QFIN",
   "github_app_client_id": "Iv23liK8i6kjOMMtXAWR",
   "branch_prefix": "shadow/",
+  "catalog_branch": "versions",
   "skill_package_root": "shadow_versions",
   "token_refresh_leeway_seconds": 300,
   "parameter_bindings": {
@@ -11,6 +12,7 @@
     "repository": ["REF-GITHUB-DEVICE-FLOW-001", "DEC-TEAM-SKILL-SYNC-001", "EXP-CROSS-PLATFORM-LAB-001"],
     "github_app_client_id": ["REF-GITHUB-DEVICE-FLOW-001", "DEC-TEAM-SKILL-SYNC-001", "EXP-CROSS-PLATFORM-LAB-001"],
     "branch_prefix": ["REF-GITHUB-CONTENTS-001", "DEC-TEAM-SKILL-SYNC-001", "EXP-CROSS-PLATFORM-LAB-001"],
+    "catalog_branch": ["REF-GITHUB-CONTENTS-001", "DEC-TEAM-SKILL-SYNC-001", "EXP-CROSS-PLATFORM-LAB-001"],
     "skill_package_root": ["REF-GITHUB-CONTENTS-001", "DEC-TEAM-SKILL-SYNC-001", "EXP-CROSS-PLATFORM-LAB-001"],
     "token_refresh_leeway_seconds": ["REF-GITHUB-TOKEN-REFRESH-001", "DEC-TEAM-SKILL-SYNC-001", "EXP-CROSS-PLATFORM-LAB-001"]
   }

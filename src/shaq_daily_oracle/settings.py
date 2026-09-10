@@ -29,6 +29,7 @@ def default_settings() -> dict[str, Any]:
         "universe_file": "",
         "automatic_run_enabled": False,
         "automatic_start_et": "07:45:00",
+        "openai_key_saved": False,
     }
 
 
@@ -112,6 +113,7 @@ class SettingsStore:
                 self.set_openai_key(supplied_key)
             if not self.get_openai_key():
                 raise SettingsError("请填写 OpenAI API Key")
+            value["openai_key_saved"] = True
         value["setup_complete"] = True
         value.pop("openai_api_key", None)
         _atomic_json(self.paths.settings_file, value)

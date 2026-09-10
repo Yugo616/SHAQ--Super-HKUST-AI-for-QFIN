@@ -225,19 +225,24 @@ def collect_research_evidence(
     metadata_provider: Any | None = None,
     event_provider: Any | None = None,
     openbb_api_key: str = "",
+    screening_rules: dict[str, str] | None = None,
+    history_cache_root: Path | None = None,
+    allow_replay: bool = False,
 ) -> FrozenEvidence:
     now = (observed_at or datetime.now(ET)).astimezone(ET)
     session = market_session(now.date())
     if session is None:
-        raise ResearchCollectionError("today_is_not_a_nyse_trading_session")
+        if not allow_replay:
+            raise ResearchCollectionError("today_is_not_a_nyse_trading_session")
+        session = previous_market_session(now.date())
     scheduled_cutoff = datetime.combine(session.session_date, time(8, 50), ET)
     data_cutoff = min(now, scheduled_cutoff)
-    if data_cutoff < datetime.combine(session.session_date, time(4, 0), ET):
+    if not allow_replay and data_cutoff < datetime.combine(session.session_date, time(4, 0), ET):
         raise ResearchCollectionError("premarket_collection_has_not_started")
     universe_path = Path(profile.universe_file)
     if not universe_path.is_absolute():
         universe_path = package_root / universe_path
-    members = load_versioned_universe(universe_path, cutoff=scheduled_cutoff)
+    members = load_versioned_universe(universe_path, cutoff=data_cutoff)
     benchmark_path = package_root / "config/market-benchmarks.csv"
     benchmark_symbols, sector_etf = _benchmark_rows(benchmark_path)
     openbb = OpenBBProviderAdapter(
@@ -249,6 +254,11 @@ def collect_research_evidence(
     market = market_provider or (
         openbb if profile.market_provider == "openbb-rest" else YFinanceProvider(profile)
     )
+    public_config_path = package_root / "config/public-data.json"
+    public_config = json.loads(public_config_path.read_text()) if public_config_path.exists() else None
+    if history_cache_root is not None and public_config:
+        from .public_data import DailyBarCache
+        market = DailyBarCache(market, history_cache_root / profile.identity(), overlap_days=public_config["history_overlap_days"])
     lookback_start = session.session_date - timedelta(days=400)
     stock_symbols = [member.symbol for member in members]
     stock_daily = market.history(
@@ -263,8 +273,16 @@ def collect_research_evidence(
         members=members, stock_daily=stock_daily, stock_intraday=stock_intraday,
         benchmark_daily=benchmark_daily, benchmark_intraday=benchmark_intraday,
         sector_etf=sector_etf, session_date=session.session_date, cutoff=data_cutoff,
-        maximum_candidates=profile.maximum_candidates,
+        maximum_candidates=len(members) if screening_rules else profile.maximum_candidates,
     )
+    candidate_sets = {}
+    full_pool = list(candidates)
+    if screening_rules:
+        from .module_rules import select_symbols
+        for identity, script in sorted(screening_rules.items()):
+            candidate_sets[identity] = select_symbols(script, full_pool, profile.maximum_candidates)
+        selected = {s for symbols in candidate_sets.values() for s in symbols}
+        candidates = [c for c in full_pool if c["symbol"] in selected]
     candidate_symbols = [row["symbol"] for row in candidates]
     member_by_symbol = {member.symbol: member for member in members}
     metadata: dict[str, Any] = {}
@@ -299,7 +317,26 @@ def collect_research_evidence(
             for symbol in candidate_symbols
         }
     files: dict[str, bytes] = {}
+    if screening_rules:
+        files["raw/screening.json"] = _json_bytes({"pool": full_pool, "candidate_sets": candidate_sets})
     records: list[dict[str, Any]] = []
+    public_statuses = []
+    if public_config and market_provider is None:
+        from .public_data import collect_public_context
+        for packet in collect_public_context(public_config, cutoff=scheduled_cutoff):
+            name = packet["provider"]
+            raw = packet.pop("raw", None)
+            public_statuses.append({k: v for k, v in packet.items() if k != "data"})
+            if raw is not None:
+                files[f"raw/public/{name}.source"] = raw
+            files[f"raw/public/{name}.json"] = _json_bytes(packet)
+            if packet["status"] == "collected" and packet.get("data"):
+                records.append({"evidence_id": "ev_public_"+name, "domain": "market", "provider": name,
+                    "source_uri": packet["source_uri"], "captured_at": packet["captured_at"],
+                    "raw_file_path": f"raw/public/{name}.json",
+                    "scope_symbols": [str(r['symbol']) for r in packet['data'] if r.get('symbol')] if name == 'nasdaq_earnings' else ["*"],
+                    "consumer_domains": ["event", "relationships", "price_volume"] if name == 'nasdaq_earnings' else ["market", "price_volume", "derivatives"],
+                    "root_component_type": "event_calendar" if name == 'nasdaq_earnings' else "market_context"})
     collection_statuses: list[dict[str, str]] = [
         {"symbol": "*", "domain": "market", "status": "collected"},
         {"symbol": "*", "domain": "capital", "status": "no_data"},
@@ -443,6 +480,7 @@ def collect_research_evidence(
     manifest["collection_completed_at_et"] = completed.isoformat()
     manifest["metadata_status"] = metadata_status
     manifest["collection_statuses"] = collection_statuses
+    manifest["public_source_statuses"] = public_statuses
     return freeze_evidence_bundle(
         root=root, as_of_et=completed.isoformat(),
         scheduled_cutoff_et=scheduled_cutoff.isoformat(), cutoff_status=cutoff_status,

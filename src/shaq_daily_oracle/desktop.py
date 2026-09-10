@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import socket
 import sys
 import tempfile
@@ -30,8 +31,8 @@ def _tcp_ready(host: str, port: int) -> bool:
 
 
 class DesktopBridge:
-    def __init__(self) -> None:
-        self.paths = app_paths().ensure()
+    def __init__(self, paths=None) -> None:
+        self.paths = (paths or app_paths()).ensure()
         migrate_legacy_runtime(self.paths)
         self.store = SettingsStore(self.paths)
         self.index = DashboardIndex(
@@ -55,7 +56,10 @@ class DesktopBridge:
     def get_state(self) -> dict[str, Any]:
         settings = self.store.load()
         public_settings = dict(settings)
-        public_settings["openai_key_saved"] = bool(self.store.get_openai_key())
+        public_settings["openai_key_saved"] = (
+            bool(settings.get("openai_key_saved"))
+            or bool(os.environ.get("OPENAI_API_KEY", "").strip())
+        )
         if not public_settings.get("universe_file"):
             candidates = sorted(
                 self.paths.runtime_root.glob("*/universe/effective_universe_formal.csv"),
@@ -74,10 +78,35 @@ class DesktopBridge:
 
     def get_lab_state(self) -> dict[str, Any]:
         def state() -> dict[str, Any]:
+            from .operator_control import status
             value = self.lab.state()
             value["operator_mode"] = dict(self.operator_status)
+            value["formal_operator"] = status(self.paths)
             return value
         return self._result(state)
+
+    def copy_local_version(self, version_id: str, author: str) -> dict[str, Any]:
+        return self._result(self.lab.copy_local_version, version_id=version_id, author=author)
+
+    def get_module_document(self, module, version_id, author, draft_id=""):
+        return self._result(self.lab.module_document, module=module, version_id=version_id, author=author, draft_id=draft_id)
+
+    def save_module_draft(self, module, script, cases, draft_id):
+        return self._result(self.lab.save_module_draft, module=module, script=script, cases=cases, draft_id=draft_id)
+
+    def get_local_draft(self, draft_id):
+        return self._result(self.lab.get_local_draft, draft_id)
+
+    def finalize_local_version(self, draft_id: str, description: str) -> dict[str, Any]:
+        return self._result(self.lab.finalize_local_version, draft_id=draft_id, description=description)
+
+    def get_research_schedule(self) -> dict[str, Any]:
+        from .research_schedule import schedule_status
+        return self._result(schedule_status, self.paths)
+
+    def save_research_schedule(self, value: dict[str, Any]) -> dict[str, Any]:
+        from .research_schedule import save_schedule
+        return self._result(save_schedule, self.paths, self.lab, value)
 
     def check_operator_mode(self) -> dict[str, Any]:
         def check() -> dict[str, Any]:
@@ -154,6 +183,45 @@ class DesktopBridge:
             skill_name=skill_name, content=content, draft_id=draft_id,
         )
 
+    def save_skill_package_draft(
+        self, skill_name: str, method: str, foundations: str,
+        agent_profile: dict[str, Any], draft_id: str,
+    ) -> dict[str, Any]:
+        return self._result(
+            self.lab.save_skill_package_draft,
+            skill_name=skill_name,
+            method=method,
+            foundations=foundations,
+            agent_profile=agent_profile,
+            draft_id=draft_id,
+        )
+
+    def get_decision_document(
+        self, version_id: str, author: str
+    ) -> dict[str, Any]:
+        return self._result(
+            self.lab.decision_document,
+            version_id=version_id,
+            author=author,
+        )
+
+    def save_decision_draft(
+        self, script: str, cases: str, draft_id: str
+    ) -> dict[str, Any]:
+        return self._result(
+            self.lab.save_decision_draft,
+            script=script,
+            cases=cases,
+            draft_id=draft_id,
+        )
+
+    def test_decision(self, script: str, cases: str) -> dict[str, Any]:
+        return self._result(
+            self.lab.test_decision,
+            script=script,
+            cases=cases,
+        )
+
     def upload_skill_draft(self, draft_id: str, description: str) -> dict[str, Any]:
         return self._result(
             self.lab.upload_skill_draft,
@@ -180,8 +248,10 @@ class DesktopBridge:
     def get_shadow_batch(self, batch_id: str) -> dict[str, Any]:
         return self._result(self.lab.batch_detail, batch_id)
 
-    def export_lab_report(self) -> dict[str, Any]:
-        return self._result(self.lab.export_professor_report)
+    def compare_lab_methods(
+        self, left: dict[str, str], right: dict[str, str]
+    ) -> dict[str, Any]:
+        return self._result(self.lab.compare_methods, left, right)
 
     def save_setup(self, submitted: dict[str, Any]) -> dict[str, Any]:
         def save_and_check() -> dict[str, Any]:
@@ -213,7 +283,8 @@ class DesktopBridge:
         return self._result(choose)
 
     def run_today(self) -> dict[str, Any]:
-        return self._result(lambda: {"worker_pid": start_worker(self.paths, once=True)})
+        from .operator_control import request_today
+        return self._result(request_today, self.paths)
 
     def enable_automatic(self) -> dict[str, Any]:
         return self._result(enable_autostart, self.paths)
@@ -308,12 +379,6 @@ class DesktopBridge:
     def doctor(self) -> dict[str, Any]:
         return self._result(self._doctor_checks)
 
-    def export_report(self) -> dict[str, Any]:
-        destination = self.paths.data_root / "exports" / "SHAQ_Daily_Oracle_教授报告.html"
-        return self._result(lambda: {
-            "file": str(self.index.export_professor_report(destination)),
-        })
-
     def open_run_file(self, run_id: str, name: str) -> dict[str, Any]:
         if name not in {"run_replay.html", "professor_report.html", "agent_trace.html"}:
             return {"ok": False, "error": "不允许打开该文件"}
@@ -326,35 +391,79 @@ class DesktopBridge:
         return {"ok": True, "value": {"opened": name}}
 
 
-def launch_desktop() -> int:
+def isolated_smoke_paths(root: Path):
+    from dataclasses import fields, replace
+    original = app_paths()
+    return replace(original, **{field.name: root / field.name for field in fields(original)
+                                if field.name != 'package_root'})
+
+
+def desktop_api(bridge):
+    from types import SimpleNamespace
+    return SimpleNamespace(**{name: getattr(bridge, name) for name in dir(type(bridge))
+                              if not name.startswith('_') and callable(getattr(bridge, name))})
+
+
+def launch_desktop(*, smoke_output: Path | None = None) -> int:
     try:
         import webview  # type: ignore
     except ImportError as exc:
         raise SettingsError("桌面组件尚未安装，请安装 desktop 依赖") from exc
-    bridge = DesktopBridge()
+    temporary = tempfile.TemporaryDirectory(prefix='shaq-native-gui-') if smoke_output else None
+    bridge = DesktopBridge(isolated_smoke_paths(Path(temporary.name)) if temporary else None)
     page = Path(__file__).with_name("desktop") / "index.html"
     if not page.is_file():
         raise FileNotFoundError("desktop interface asset is missing")
     window = webview.create_window(
         "SHAQ Daily Oracle Lab",
         page.as_uri(),
-        js_api=bridge,
+        js_api=desktop_api(bridge),
         width=1320,
         height=860,
         min_size=(980, 680),
         background_color="#f4f7fb",
     )
     bridge.window = window
-    webview.start(debug=False, private_mode=True)
-    return 0
+    result = {'status': 'failed', 'pages': [], 'model_calls': 'not tested'}
+    def inspect_window():
+        import time
+        try:
+            deadline = time.monotonic() + 35
+            while time.monotonic() < deadline:
+                if window.evaluate_js("Boolean(window.pywebview && document.querySelector('#run').textContent.trim())"):
+                    break
+                time.sleep(0.2)
+            for page_name in ('run', 'editor', 'history'):
+                window.evaluate_js(f"document.querySelector('.nav[data-page={page_name}]').click()")
+                if not window.evaluate_js(f"Boolean(document.querySelector('#{page_name}.active').textContent.trim())"):
+                    raise RuntimeError(f'Native page failed to render: {page_name}')
+                result['pages'].append(page_name)
+            result['status'] = 'passed'
+        except Exception as exc:
+            result['error'] = str(exc)
+        finally:
+            smoke_output.write_text(json.dumps(result), encoding='utf-8')
+            window.destroy()
+    try:
+        webview.start(inspect_window if smoke_output else None, debug=False, private_mode=True)
+    finally:
+        if temporary:
+            temporary.cleanup()
+    return 0 if not smoke_output or result['status'] == 'passed' else 2
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--worker", action="store_true")
+    parser.add_argument("--research-worker", action="store_true")
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--smoke", action="store_true")
+    parser.add_argument("--smoke-output", type=Path)
+    parser.add_argument("--gui-smoke", type=Path)
     args, _ = parser.parse_known_args(argv)
+    if args.research_worker:
+        from .research_schedule import run_research_worker
+        return run_research_worker(app_paths().ensure())
     if args.smoke:
         paths = app_paths()
         checks = {
@@ -363,12 +472,72 @@ def main(argv: list[str] | None = None) -> int:
             "research_universe": (paths.package_root / "config/research-universe.csv").is_file(),
             "team_repository": (paths.package_root / "config/team-repository.json").is_file(),
             "skills": len(list((paths.package_root / "skills").glob("*/SKILL.md"))) == 8,
+            "account_view": (Path(__file__).with_name("desktop") / "accounts.js").is_file(),
+            "replay_view": (Path(__file__).with_name("desktop") / "review.js").is_file(),
         }
-        print(json.dumps({"status": "passed" if all(checks.values()) else "failed", "checks": checks}))
+        smoke: dict[str, Any] = {}
+        try:
+            from .lab_smoke import run_lab_smoke
+
+            with tempfile.TemporaryDirectory(prefix="shaq-whole-lab-smoke-") as temporary:
+                smoke = run_lab_smoke(
+                    package_root=paths.package_root, output_root=Path(temporary)
+                )
+            methods = [
+                (row.get("method_name"), row.get("status_badge"))
+                for row in smoke.get("methods", [])
+            ]
+            checks.update({
+                "whole_lab_fixture": smoke.get("status") == "passed",
+                "zipline_minute_engine": (
+                    smoke.get("account_engine") == "zipline-reloaded"
+                    and smoke.get("account_engine_version") == "3.1.1"
+                ),
+                "two_canonical_methods": methods == [
+                    ("独立证据门禁版", "正式基准"),
+                    ("跨域综合研判版", "Shadow"),
+                ],
+                "provisional_confirmation": (
+                    set(smoke.get("provisional_statuses", [])) == {"provisional"}
+                    and set(smoke.get("final_statuses", [])) == {"final"}
+                ),
+                "frozen_evidence_shared": (
+                    len(set(smoke.get("evidence_hashes", {}).values())) == 1
+                ),
+                "broker_free": (
+                    not smoke.get("broker_modules_loaded")
+                    and not smoke.get("provider_secrets_used")
+                ),
+                "reopen_matches": bool(smoke.get("reopen_matches")),
+                "accounting_contract": (
+                    bool(smoke.get("contract_checks"))
+                    and all(smoke["contract_checks"].values())
+                ),
+                "view_states": {
+                    row.get("name"): row.get("status")
+                    for row in smoke.get("view_cases", [])
+                } == {
+                    "long": "final", "empty": "empty", "pending": "pending",
+                    "incomplete": "incomplete", "failed": "error",
+                },
+            })
+        except Exception as exc:
+            checks["whole_lab_fixture"] = False
+            print(str(exc), file=sys.stderr)
+        import tables
+        checks['no_lzo_runtime'] = tables.which_lib_version('lzo') is None
+        serialized = json.dumps({
+            **smoke,
+            "status": "passed" if all(checks.values()) else "failed",
+            "checks": checks,
+        }, ensure_ascii=False)
+        if args.smoke_output:
+            args.smoke_output.write_text(serialized, encoding='utf-8')
+        print(serialized)
         return 0 if all(checks.values()) else 2
     if args.worker:
         return run_worker(paths=app_paths().ensure(), once=args.once)
-    return launch_desktop()
+    return launch_desktop(smoke_output=args.gui_smoke)
 
 
 if __name__ == "__main__":

@@ -10,20 +10,17 @@
   <aside class="sidebar">
     <div class="brand"><div class="mark">S</div><div><strong>SHAQ</strong><span>DAILY ORACLE LAB</span></div></div>
     <nav>
-      <button class="nav active" data-page="run">运行今日 Shadow</button>
-      <button class="nav" data-page="editor">编辑当前 Skill</button>
-      <button class="nav" data-page="upload">上传 Shadow 版本</button>
-      <button class="nav" data-page="updates">检查团队更新</button>
-      <button class="nav" data-page="history">历史与比较</button>
-      <button class="nav" data-page="settings">系统设置</button>
+      <button class="nav active" data-page="run">开始运行</button>
+      <button class="nav" data-page="editor">修改版本</button>
+      <button class="nav" data-page="history">查看结果</button>
       <button class="nav hidden" id="operator-nav" data-page="operator">Mac 操作员</button>
     </nav>
     <div class="sidebar-foot"><span id="service-dot" class="dot"></span><span id="service-text">正在读取本地记录</span></div>
   </aside>
   <main>
     <header>
-      <div><p class="eyebrow">CROSS-PLATFORM RESEARCH WORKBENCH</p><h1 id="page-title">运行今日 Shadow</h1></div>
-      <div class="header-actions"><span class="mode-badge">研究模式 · 永不下单</span><button class="secondary" id="refresh-button">刷新</button></div>
+      <div><h1 id="page-title">开始运行</h1></div>
+      <div class="header-actions"><button class="secondary" id="connections-button">连接设置</button><button class="secondary" id="refresh-button">刷新</button></div>
     </header>
     <section id="notice" class="notice hidden"></section>
     <section id="run" class="page active"></section>
@@ -31,24 +28,31 @@
     <section id="upload" class="page"></section>
     <section id="updates" class="page"></section>
     <section id="history" class="page"></section>
+    <section id="data" class="page"></section>
     <section id="settings" class="page"></section>
     <section id="operator" class="page"></section>
   </main>
 
   <div id="setup" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="setup-title">
     <div class="setup-card">
-      <p class="step-label">首次设置 · Windows 与 Mac 相同</p>
-      <h2 id="setup-title">连接团队、模型和公开数据</h2>
-      <p>不需要安装 Python、Git、Codex、WorkBuddy 或富途。密钥只进入系统凭据管理器。</p>
+      <div class="section-head"><h2 id="setup-title">连接设置</h2><button class="secondary" id="close-setup">完成</button></div>
       <div class="setup-steps">
-        <section><b>1</b><div><h3>GitHub 团队仓库</h3><p>使用浏览器设备登录；软件只同步允许的 Skill Markdown 和引用。</p><div id="github-setup"></div></div></section>
-        <section><b>2</b><div><h3>连接一个模型</h3><p>普通使用只填下面三项。接口细节已经按服务商配置好。</p><form id="model-form" class="form-grid">
-          <input name="profile_id" value="primary-model" type="hidden">
-          <label>模型服务商<select name="protocol"><option value="openai-responses">OpenAI</option><option value="anthropic-messages">Anthropic Claude</option><option value="openai-chat-completions">兼容中转服务</option></select></label>
-          <label>模型名称<input name="model" placeholder="由团队负责人提供，例如 gpt-5-mini" required></label>
+        <section id="github-step"><b>2</b><div><h3>登录团队 GitHub</h3><div id="github-setup"></div></div></section>
+        <section id="model-step"><b>1</b><div><h3>连接分析模型</h3><p>选择你正在使用的模型。</p>
+          <div class="connection-choices">
+            <button class="connection-choice" id="connect-codex" type="button"><b>连接 Codex</b><span>使用此电脑已登录的 ChatGPT / Codex</span></button>
+            <button class="connection-choice" id="connect-claude" type="button"><b>连接 Claude</b><span>使用此电脑已登录的 Claude Code</span></button>
+            <button class="connection-choice subtle" id="show-api-form" type="button"><b>使用 API 或中转站</b><span>仅在没有上述订阅时使用</span></button>
+          </div><p id="model-status" class="inline-status"></p>
+          <form id="model-form" class="form-grid hidden">
+          <input name="profile_id" value="api-model" type="hidden">
+          <input name="base_url" value="https://api.openai.com/v1" type="hidden">
+          <label>模型服务商<select name="protocol"><option value="openai-responses">OpenAI API</option><option value="anthropic-messages">Anthropic API</option><option value="openai-chat-completions">兼容中转服务</option></select></label>
+          <label>模型名称<input name="model" placeholder="例如 gpt-5-mini" required></label>
+          <label class="wide hidden" id="relay-url-field">中转站 URL<input name="relay_base_url" placeholder="https://example.com/v1"></label>
+          <label class="wide hidden" id="relay-context-field">中转站上下文长度<input name="maximum_context_tokens" type="number" min="16000" value="128000"></label>
           <label class="wide">API Key<input name="secret" type="password" autocomplete="new-password" placeholder="只保存在本机系统凭据库" required></label>
           <details class="wide model-advanced"><summary>高级设置（通常不用修改）</summary><div class="form-grid compact-form">
-            <label class="wide">接口地址<input name="base_url" value="https://api.openai.com/v1" required></label>
             <label>输出校验<select name="output_mode"><option value="strict">服务商保证格式</option><option value="local_validated">本机严格检查</option></select></label>
             <label>认证方式<select name="auth_style"><option value="bearer">Bearer</option><option value="x-api-key">x-api-key</option></select></label>
             <label>同时调用数<input name="max_concurrency" type="number" min="1" max="8" value="2" required></label>
@@ -57,12 +61,15 @@
             <label>输出单价（可选）<input name="output_price_per_million" type="number" min="0" step="any" placeholder="留空不估算费用"></label>
           </div></details>
           <button class="primary wide" type="submit">测试连接并保存</button>
-        </form><p id="model-status" class="inline-status"></p></div></section>
+        </form></div></section>
         <section><b>3</b><div><h3>SEC 研究身份</h3><form id="research-form" class="form-grid"><label class="wide">团队名称与联系邮箱<input name="sec_identity" placeholder="Research Team contact@example.edu" required></label><button class="primary wide" type="submit">保存身份</button></form><p id="research-status" class="inline-status"></p></div></section>
         <section><b>4</b><div><h3>数据与本地空间</h3><p>检查版本化股票池、数据配置和本机研究目录是否可写。</p><button class="secondary" id="check-research-environment">检查并进入工作台</button><p id="environment-status" class="inline-status"></p></div></section>
       </div>
     </div>
   </div>
   <script src="app.js"></script>
+  <script src="workbench.js"></script>
+  <script src="accounts.js"></script>
+  <script src="review.js"></script>
 </body>
 </html>

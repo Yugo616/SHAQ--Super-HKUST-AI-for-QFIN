@@ -1,5 +1,5 @@
 interface:
-  display_name: "Price-Volume Structure"
+  display_name: "价格走势与参与度 · Price Action & Participation"
   short_description: "Classify nonlinear path and participation states"
   default_prompt: "Use $price-volume-structure to classify the cutoff-safe price-volume state for the open-to-close horizon."
 policy:

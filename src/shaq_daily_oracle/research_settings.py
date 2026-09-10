@@ -8,7 +8,7 @@ from typing import Any
 
 from .app_paths import AppPaths
 from .hashing import sha256_payload
-from .model_backends import ModelProfile
+from .model_backends import ModelProfile, uses_local_subscription
 from .settings import SERVICE_NAME, SettingsError, _atomic_json
 
 
@@ -26,6 +26,7 @@ def _repository_defaults(package_root: Path) -> dict[str, Any]:
             "repository": "",
             "github_app_client_id": "",
             "branch_prefix": "shadow/",
+            "catalog_branch": "versions",
             "skill_package_root": "shadow_versions",
             "token_refresh_leeway_seconds": 300,
         }
@@ -37,6 +38,7 @@ def _repository_defaults(package_root: Path) -> dict[str, Any]:
             "repository": "",
             "github_app_client_id": "",
             "branch_prefix": "shadow/",
+            "catalog_branch": "versions",
             "skill_package_root": "shadow_versions",
             "token_refresh_leeway_seconds": 300,
         }.items()
@@ -55,6 +57,12 @@ def default_research_settings(package_root: Path) -> dict[str, Any]:
         "github_refresh_expires_at": "",
         "active_model_profile_id": "",
         "model_profiles": [],
+        "credential_state": {
+            "github_token_saved": False,
+            "github_refresh_saved": False,
+            "model_secret_saved": {},
+            "openbb_secret_saved": False,
+        },
         "data_profile": {
             "profile_id": "free-research",
             "universe_file": "config/research-universe.csv",
@@ -118,6 +126,29 @@ class ResearchSettingsStore:
             **defaults["data_profile"], **saved.get("data_profile", {})
         }
         merged["batch"] = {**defaults["batch"], **saved.get("batch", {})}
+        saved_credential_state = saved.get("credential_state")
+        if isinstance(saved_credential_state, dict):
+            merged["credential_state"] = {
+                **defaults["credential_state"],
+                **saved_credential_state,
+                "model_secret_saved": {
+                    **defaults["credential_state"]["model_secret_saved"],
+                    **saved_credential_state.get("model_secret_saved", {}),
+                },
+            }
+        else:
+            # Older builds did not persist non-secret presence markers.  Migrate
+            # from the saved connection metadata without touching Keychain.
+            merged["credential_state"] = {
+                "github_token_saved": bool(saved.get("github_login")),
+                "github_refresh_saved": bool(saved.get("github_refresh_expires_at")),
+                "model_secret_saved": {
+                    str(row.get("profile_id", "")): True
+                    for row in saved.get("model_profiles", [])
+                    if row.get("profile_id")
+                },
+                "openbb_secret_saved": False,
+            }
         readiness = merged.get("research_readiness", {})
         if (
             readiness.get("status") != "ready"
@@ -135,6 +166,18 @@ class ResearchSettingsStore:
             raise SettingsError("凭据不能为空")
         self._keyring().set_password(SERVICE_NAME, name, secret)
 
+    def _record_secret_state(
+        self, kind: str, *, present: bool, profile_id: str = ""
+    ) -> None:
+        settings = self.load()
+        state = settings.setdefault("credential_state", {})
+        if kind == "model":
+            profiles = state.setdefault("model_secret_saved", {})
+            profiles[profile_id] = present
+        else:
+            state[kind] = present
+        self._save(settings)
+
     def _get_secret(self, name: str) -> str | None:
         try:
             return self._keyring().get_password(SERVICE_NAME, name)
@@ -149,6 +192,7 @@ class ResearchSettingsStore:
 
     def set_model_secret(self, profile_id: str, value: str) -> None:
         self._set_secret(MODEL_SECRET_PREFIX + profile_id, value)
+        self._record_secret_state("model", present=True, profile_id=profile_id)
 
     def get_model_secret(self, profile_id: str) -> str | None:
         environment_name = "SHAQ_MODEL_API_KEY_" + "".join(
@@ -159,6 +203,7 @@ class ResearchSettingsStore:
 
     def set_github_token(self, value: str) -> None:
         self._set_secret(GITHUB_TOKEN_NAME, value)
+        self._record_secret_state("github_token_saved", present=True)
 
     def get_github_token(self) -> str | None:
         return os.environ.get("SHAQ_GITHUB_TOKEN", "").strip() or self._get_secret(
@@ -167,12 +212,14 @@ class ResearchSettingsStore:
 
     def set_github_refresh_token(self, value: str) -> None:
         self._set_secret(GITHUB_REFRESH_TOKEN_NAME, value)
+        self._record_secret_state("github_refresh_saved", present=True)
 
     def get_github_refresh_token(self) -> str | None:
         return self._get_secret(GITHUB_REFRESH_TOKEN_NAME)
 
     def set_openbb_secret(self, value: str) -> None:
         self._set_secret(OPENBB_SECRET_NAME, value)
+        self._record_secret_state("openbb_secret_saved", present=True)
 
     def get_openbb_secret(self) -> str | None:
         return os.environ.get("SHAQ_OPENBB_API_KEY", "").strip() or self._get_secret(
@@ -183,11 +230,9 @@ class ResearchSettingsStore:
         self, profile_value: dict[str, Any], *, secret: str | None = None
     ) -> dict[str, Any]:
         profile = ModelProfile.from_dict(profile_value)
-        if profile.protocol == "codex-cli":
-            raise SettingsError("Codex CLI只能由Mac高级开发模式配置")
         if secret:
             self.set_model_secret(profile.profile_id, secret)
-        if not self.get_model_secret(profile.profile_id):
+        if not uses_local_subscription(profile) and not self.get_model_secret(profile.profile_id):
             raise SettingsError("请填写该模型配置的API密钥")
         settings = self.load()
         profiles = [
@@ -212,17 +257,38 @@ class ResearchSettingsStore:
         return bool(
             settings.get("model_profiles")
             and active_profile
-            and self.get_model_secret(active_profile)
+            and self._model_profile_ready(settings, active_profile)
             and settings.get("sec_identity")
             and settings.get("github_login")
             and self._github_credentials_available(settings)
             and readiness_matches
         )
 
+    def _model_profile_ready(self, settings: dict[str, Any], profile_id: str) -> bool:
+        try:
+            row = next(
+                candidate for candidate in settings.get("model_profiles", [])
+                if candidate.get("profile_id") == profile_id
+            )
+            profile = ModelProfile.from_dict(row)
+        except (SettingsError, StopIteration):
+            return False
+        saved = settings.get("credential_state", {}).get("model_secret_saved", {})
+        environment_name = "SHAQ_MODEL_API_KEY_" + "".join(
+            character if character.isalnum() else "_"
+            for character in profile_id.upper()
+        )
+        return (
+            uses_local_subscription(profile)
+            or bool(os.environ.get(environment_name, "").strip())
+            or saved.get(profile_id) is True
+        )
+
     def _github_credentials_available(self, settings: dict[str, Any]) -> bool:
         if os.environ.get("SHAQ_GITHUB_TOKEN", "").strip():
             return True
-        if not self.get_github_token():
+        state = settings.get("credential_state", {})
+        if state.get("github_token_saved") is not True:
             return False
         expiry_text = str(settings.get("github_token_expires_at", "")).strip()
         if not expiry_text:
@@ -236,7 +302,7 @@ class ResearchSettingsStore:
         now = datetime.now(timezone.utc)
         if expiry > now:
             return True
-        if not self.get_github_refresh_token():
+        if state.get("github_refresh_saved") is not True:
             return False
         refresh_expiry_text = str(
             settings.get("github_refresh_expires_at", "")
@@ -336,6 +402,7 @@ class ResearchSettingsStore:
             self.set_github_refresh_token(refresh_token)
         elif refresh_token is not None:
             self._delete_secret(GITHUB_REFRESH_TOKEN_NAME)
+            self._record_secret_state("github_refresh_saved", present=False)
         settings = self.load()
         settings["github_login"] = normalized
         settings["github_upload_allowed"] = upload_allowed is True
@@ -368,15 +435,33 @@ class ResearchSettingsStore:
 
     def public_settings(self) -> dict[str, Any]:
         settings = self.load()
+        state = settings.get("credential_state", {})
+        model_state = state.get("model_secret_saved", {})
         return {
             **settings,
-            "github_token_saved": bool(self.get_github_token()),
-            "github_refresh_saved": bool(self.get_github_refresh_token()),
+            "github_token_saved": (
+                bool(os.environ.get("SHAQ_GITHUB_TOKEN", "").strip())
+                or state.get("github_token_saved") is True
+            ),
+            "github_refresh_saved": state.get("github_refresh_saved") is True,
             "model_secret_saved": {
-                row["profile_id"]: bool(self.get_model_secret(row["profile_id"]))
+                row["profile_id"]: (
+                    uses_local_subscription(ModelProfile.from_dict(row))
+                    or bool(os.environ.get(
+                        "SHAQ_MODEL_API_KEY_" + "".join(
+                            character if character.isalnum() else "_"
+                            for character in row["profile_id"].upper()
+                        ),
+                        "",
+                    ).strip())
+                    or model_state.get(row["profile_id"]) is True
+                )
                 for row in settings.get("model_profiles", [])
             },
-            "openbb_secret_saved": bool(self.get_openbb_secret()),
+            "openbb_secret_saved": (
+                bool(os.environ.get("SHAQ_OPENBB_API_KEY", "").strip())
+                or state.get("openbb_secret_saved") is True
+            ),
         }
 
     def _save(self, settings: dict[str, Any]) -> None:
