@@ -1,38 +1,25 @@
-name: Inspect existing Windows payload
+name: Publish accepted macOS artifacts
 on:
   workflow_dispatch:
 permissions:
-  contents: read
+  contents: write
   actions: read
 jobs:
-  inspect:
-    runs-on: windows-latest
-    timeout-minutes: 12
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
-          name: SHAQ-Daily-Oracle-Lab-Windows-x64
-          run-id: 34480684368
+          pattern: SHAQ-Daily-Oracle-Lab-macOS-*
+          run-id: 34486634455
           github-token: ${{ github.token }}
-          path: prior
-      - name: Inspect existing installer without rebuilding
-        shell: pwsh
+          path: accepted
+      - name: Verify original accepted files and prepare required notices
+        run: python packaging/publish_accepted_macos.py
+      - name: Publish two native DMGs, checksums and sources without rebuilding
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          $exe = Get-ChildItem prior -Recurse -Filter '*Setup.exe' | Select-Object -First 1
-          if (!$exe) { throw 'Missing diagnostic installer' }
-          $root = Join-Path $env:RUNNER_TEMP 'shaq-inspect'
-          try {
-            $p = Start-Process $exe.FullName -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/DIR=`"$root`"") -Wait -PassThru
-            if ($p.ExitCode -ne 0) { throw "Install failed $($p.ExitCode)" }
-            python packaging/inspect_existing_payload.py "$root" inventory.json
-            if ($LASTEXITCODE -ne 0) { throw 'Inventory failed' }
-          } finally {
-            $uninstaller = Join-Path $root 'unins000.exe'
-            if (Test-Path $uninstaller) { Start-Process $uninstaller -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait }
-          }
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: existing-windows-inventory
-          path: inventory.json
+          gh release create lab-v0.6.0-macos --target 84dc32c4901ccadab53372ee526186d44786d83c --prerelease --title 'SHAQ Daily Oracle Lab 0.6.0 · macOS' --notes-file packaging/macos-release-notes.md release/*
