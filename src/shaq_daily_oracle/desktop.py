@@ -108,6 +108,9 @@ class DesktopBridge:
         from .research_schedule import save_schedule
         return self._result(save_schedule, self.paths, self.lab, value)
 
+    def refresh_prices_and_results(self) -> dict[str, Any]:
+        return self._result(self.lab.start_result_refresh, manual=True)
+
     def check_operator_mode(self) -> dict[str, Any]:
         def check() -> dict[str, Any]:
             if sys.platform != "darwin":
@@ -411,6 +414,33 @@ def launch_desktop(*, smoke_output: Path | None = None) -> int:
         raise SettingsError("桌面组件尚未安装，请安装 desktop 依赖") from exc
     temporary = tempfile.TemporaryDirectory(prefix='shaq-native-gui-') if smoke_output else None
     bridge = DesktopBridge(isolated_smoke_paths(Path(temporary.name)) if temporary else None)
+    if temporary:
+        from .lab_smoke import run_lab_smoke
+        fixture = run_lab_smoke(
+            package_root=bridge.paths.package_root,
+            output_root=Path(temporary.name) / "fixture",
+        )
+        fixture_state = fixture["browser_state"]
+        fixture_detail = fixture["batch_detail"]
+        second_candidate = {
+            **fixture_detail["evidence"]["candidates"][0],
+            "symbol": "MSFT",
+            "selection_method": "fixture_nondefault_candidate",
+        }
+        fixture_detail["evidence"]["candidates"].append(second_candidate)
+        for variant in fixture_detail["variants"].values():
+            variant["candidate_intake"]["candidates"].append(dict(second_candidate))
+        fixture_state["result_refresh"] = {"status": "idle"}
+        bridge.get_lab_state = lambda: {"ok": True, "value": fixture_state}
+        bridge.get_shadow_batch = lambda batch_id: {
+            "ok": True, "value": fixture_detail}
+        def fixture_refresh():
+            fixture_state["result_refresh"] = {
+                "status": "complete", "completed_at": "2026-09-10T09:00:00-04:00",
+                "failure_count": 0,
+            }
+            return {"ok": True, "value": fixture_state["result_refresh"]}
+        bridge.refresh_prices_and_results = fixture_refresh
     page = Path(__file__).with_name("desktop") / "index.html"
     if not page.is_file():
         raise FileNotFoundError("desktop interface asset is missing")
@@ -438,6 +468,61 @@ def launch_desktop(*, smoke_output: Path | None = None) -> int:
                 if not window.evaluate_js(f"Boolean(document.querySelector('#{page_name}.active').textContent.trim())"):
                     raise RuntimeError(f'Native page failed to render: {page_name}')
                 result['pages'].append(page_name)
+            window.evaluate_js("document.querySelector('#history tr[data-batch]').click()")
+            replay_deadline = time.monotonic() + 5
+            while time.monotonic() < replay_deadline:
+                if window.evaluate_js("Boolean(document.querySelector('#replay-modal').open && document.querySelector('#candidate-analysis').textContent.includes('AAPL'))"):
+                    break
+                time.sleep(0.1)
+            else:
+                raise RuntimeError('Fixture replay modal or candidate failed to load')
+            result['fixture_replay_loaded'] = True
+            window.evaluate_js("document.querySelector('.candidate-button[data-symbol=MSFT]').click()")
+            candidate_deadline = time.monotonic() + 5
+            while time.monotonic() < candidate_deadline:
+                selected = window.evaluate_js(
+                    "document.querySelector('.candidate-button.active')?.dataset.symbol || ''")
+                loaded = window.evaluate_js(
+                    "document.querySelector('#candidate-analysis').textContent.includes('MSFT')")
+                if selected == 'MSFT' and loaded:
+                    break
+                time.sleep(0.1)
+            else:
+                raise RuntimeError('Non-default fixture candidate failed to load')
+            result['fixture_candidate_selected'] = selected
+            window.evaluate_js("document.querySelector('#refresh-button').click()")
+            refresh_deadline = time.monotonic() + 5
+            while time.monotonic() < refresh_deadline:
+                if window.evaluate_js("document.querySelector('#refresh-status').textContent.includes('完成')"):
+                    break
+                time.sleep(0.1)
+            else:
+                raise RuntimeError('Fixture refresh did not complete')
+            result['refresh_completed'] = True
+            result['refresh_preserved_modal'] = bool(window.evaluate_js(
+                "document.querySelector('#replay-modal').open"))
+            result['refresh_preserved_candidate'] = bool(window.evaluate_js(
+                "document.querySelector('.candidate-button.active')?.dataset.symbol === 'MSFT' && "
+                "document.querySelector('#candidate-analysis').textContent.includes('MSFT')"))
+            window.evaluate_js("document.querySelector('#replay-close').click()")
+            closed = not window.evaluate_js("document.querySelector('#replay-modal').open")
+            window.evaluate_js("document.querySelector('#history tr[data-batch]').click()")
+            reopen_deadline = time.monotonic() + 5
+            while time.monotonic() < reopen_deadline:
+                reopened = bool(window.evaluate_js(
+                    "document.querySelector('#replay-modal').open && "
+                    "document.querySelector('#candidate-analysis').textContent.includes('AAPL')"))
+                if reopened:
+                    break
+                time.sleep(0.1)
+            else:
+                raise RuntimeError('Reopened fixture replay content failed to load')
+            result['modal_close_reopen'] = bool(closed and reopened)
+            if not all(result[key] for key in (
+                'refresh_preserved_modal', 'refresh_preserved_candidate',
+                'modal_close_reopen',
+            )):
+                raise RuntimeError('Fixture replay state was not preserved through refresh')
             result['status'] = 'passed'
         except Exception as exc:
             result['error'] = str(exc)

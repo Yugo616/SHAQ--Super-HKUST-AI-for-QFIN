@@ -9,6 +9,7 @@ import csv
 import shutil
 import tempfile
 import threading
+import uuid
 import difflib
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -46,6 +47,7 @@ class LabServiceError(ValueError):
 
 
 ET = ZoneInfo("America/New_York")
+RESULT_REFRESH_INTERVAL = timedelta(minutes=15)
 
 
 SKILL_EXPLANATIONS = {
@@ -130,7 +132,6 @@ class LabService:
         )
         self.jobs: dict[str, dict[str, Any]] = {}
         self.jobs_lock = threading.Lock()
-        self.label_refresh_lock = threading.Lock()
         from .virtual_accounts import AccountStore, AccountRules
         account_store = AccountStore(paths.research_root / 'virtual_accounts')
         if not (account_store.root / 'activation.json').exists():
@@ -152,34 +153,87 @@ class LabService:
         except LockTimeout:
             return {'status': 'already_running', 'refreshed_dates': [], 'failures': []}
 
-    def refresh_labels_if_due(self):
-        """Background-only refresh; status rendering never asks for credentials."""
-        if not self.label_refresh_lock.acquire(blocking=False):
-            return
+    @property
+    def _result_refresh_receipt(self) -> Path:
+        return self.paths.research_root / "label_refresh_status.json"
+
+    def result_refresh_status(self) -> dict[str, Any]:
         try:
-            receipt = self.paths.research_root / 'label_refresh_status.json'
-            prior = json.loads(receipt.read_text(encoding="utf-8")) if receipt.exists() else {}
-            now = datetime.now(ET)
-            if prior.get('attempted_at') and now - datetime.fromisoformat(prior['attempted_at']) < timedelta(minutes=15):
-                return
-            if not any(self.paths.batches_root.glob('LAB-*/batch_manifest.json')):
-                return
-            profile = DataProfile.from_dict(self.settings.load()['data_profile'])
-            if profile.market_provider != 'yfinance':
-                return  # An authenticated provider is refreshed only during explicit runs.
-            _atomic_json(receipt, {'attempted_at': now.isoformat(), 'status': 'running'})
+            return json.loads(self._result_refresh_receipt.read_text(encoding="utf-8"))
+        except (FileNotFoundError, json.JSONDecodeError):
+            return {"status": "idle", "operation_id": "", "result": {}}
+
+    def start_result_refresh(self, *, manual: bool = False) -> dict[str, Any]:
+        """Start one credential-free price/result refresh across app instances."""
+        now = datetime.now(ET)
+        prior = self.result_refresh_status()
+        lock = FileLock(
+            str(self.paths.research_root / "result_refresh.lock"),
+            timeout=0, thread_local=False,
+        )
+        try:
+            lock.acquire()
+        except LockTimeout:
+            current = self.result_refresh_status()
+            return {**current, "status": "already_running"}
+        if not manual and prior.get("attempted_at"):
             try:
-                result = refresh_research_labels(research_root=self.paths.research_root,
-                    batches_root=self.paths.batches_root, profile=profile)
-                result['minute_settlement'] = self._refresh_minute_accounts(profile)
-                _atomic_json(receipt, {'attempted_at': now.isoformat(), 'status': 'complete', 'result': result})
-            except Exception as exc:
-                _atomic_json(receipt, {'attempted_at': now.isoformat(), 'status': 'failed', 'error': str(exc)})
+                attempted = datetime.fromisoformat(str(prior["attempted_at"])).astimezone(ET)
+            except ValueError:
+                attempted = None
+            if attempted is not None and now - attempted < RESULT_REFRESH_INTERVAL:
+                lock.release()
+                return {**prior, "status": "not_due", "next_eligible_at": (
+                    attempted + RESULT_REFRESH_INTERVAL).isoformat()}
+
+        operation_id = uuid.uuid4().hex
+        running = {
+            "status": "running", "operation_id": operation_id,
+            "attempted_at": now.isoformat(), "manual": manual,
+        }
+        _atomic_json(self._result_refresh_receipt, running)
+        threading.Thread(
+            target=self._run_result_refresh,
+            args=(lock, running), daemon=True,
+            name="shaq-result-refresh",
+        ).start()
+        return running
+
+    def _run_result_refresh(self, lock: FileLock, running: dict[str, Any]) -> None:
+        try:
+            profile = DataProfile.from_dict(self.settings.load()["data_profile"])
+            if profile.market_provider != "yfinance":
+                raise LabServiceError(
+                    "价格与成绩刷新仅使用无需凭据的 Yahoo 数据配置；当前配置未执行"
+                )
+            result = refresh_research_labels(
+                research_root=self.paths.research_root,
+                batches_root=self.paths.batches_root,
+                profile=profile,
+            )
+            result["minute_settlement"] = self._refresh_minute_accounts(profile)
+            failures = list(result.get("failures", []))
+            minute = result.get("minute_settlement", {})
+            failures.extend(minute.get("failures", []))
+            status = "partial_failure" if failures else "complete"
+            _atomic_json(self._result_refresh_receipt, {
+                **running, "status": status, "completed_at": datetime.now(ET).isoformat(),
+                "result": result, "failure_count": len(failures),
+            })
+        except Exception as exc:
+            _atomic_json(self._result_refresh_receipt, {
+                **running, "status": "failed", "completed_at": datetime.now(ET).isoformat(),
+                "error_type": type(exc).__name__, "error": str(exc),
+            })
         finally:
-            self.label_refresh_lock.release()
+            lock.release()
+
+    def refresh_labels_if_due(self):
+        """Compatibility entry point for the research scheduler."""
+        return self.start_result_refresh(manual=False)
 
     def state(self) -> dict[str, Any]:
-        threading.Thread(target=self.refresh_labels_if_due, daemon=True).start()
+        self.start_result_refresh(manual=False)
         from .market_calendar import market_session, next_market_session
         now = datetime.now(ET)
         session = market_session(now.date())
@@ -212,6 +266,7 @@ class LabService:
             "dashboard": self.dashboard.overview(),
             "data_status": self.data_status(),
             "jobs": self.job_statuses(),
+            "result_refresh": self.result_refresh_status(),
         }
 
     def compare_methods(

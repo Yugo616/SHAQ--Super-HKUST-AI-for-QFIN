@@ -14,3 +14,23 @@
 .account-note { color: #66717f; font-size: 13px; }
 .virtual-accounts .table { font-variant-numeric: tabular-nums; }
 .method-badge{display:inline-block;margin-left:5px;padding:2px 6px;border:1px solid #cfd3d8;border-radius:3px;background:#f4f5f6;color:#555;font-size:10px;font-weight:500;vertical-align:1px}.settlement-flow{display:flex;align-items:center;gap:8px;flex-wrap:wrap;color:#4d535a;font-size:12px}.settlement-flow span{padding:5px 8px;background:#f2f3f5;border:1px solid #dfe1e4;border-radius:3px}.settlement-flow i{font-style:normal;color:#92969b}.method-progress{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:10px}.method-progress>div{padding:8px;border-left:2px solid #b9c0c9;background:#fafafa}.method-progress small{display:block;color:var(--muted);margin-top:3px}.provisional-note{padding:10px;border-left:3px solid #c79232;background:#fbf7ee}.incomplete-note{padding:10px;border-left:3px solid var(--red);background:#fbefef}.account-secondary{border-top:1px solid var(--line);padding-top:10px}.trade-detail td{min-width:130px;vertical-align:top}.trade-detail small{white-space:nowrap}
+/* One progress group per batch. Completed history belongs to the results page. */
+.progress-batch { padding:16px 0; border-bottom:1px solid #e5e7eb; }
+.progress-batch:last-child { border-bottom:0; }
+.progress-batch header,.progress-versions li { display:flex; justify-content:space-between; gap:20px; }
+.progress-batch header { color:#59616c; font-size:13px; }
+.progress-batch p { margin:9px 0; overflow-wrap:anywhere; }
+.progress-versions { list-style:none; padding:0; margin:12px 0; }
+.progress-versions li { padding:7px 0; align-items:flex-start; }
+.progress-versions li span:first-child { overflow-wrap:anywhere; }
+.progress-versions li span:last-child { flex-shrink:0; color:#59616c; }
+.progress-actions { display:flex; gap:12px; align-items:center; }
+.progress-empty { color:#59616c; padding:12px 0; }
+#automatic-summary { cursor:pointer; }
+.virtual-accounts>summary,.account-policy>summary { cursor:pointer; font-weight:600; }
+#replay-modal{width:min(1120px,94vw);height:90vh;max-height:90vh;padding:0;border:1px solid #d7dce3;border-radius:12px;background:#f5f6f8;color:#20242b;box-shadow:0 18px 70px #0004;overflow:hidden}
+#replay-modal::backdrop{background:#17202b70}
+#replay-modal[open]{display:flex;flex-direction:column}
+.replay-modal-header{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:14px 22px;background:white;border-bottom:1px solid #d7dce3;flex:none}
+.replay-modal-header h2{margin:0;font-size:20px}
+#replay-modal #batch-detail{overflow:auto;padding:18px;min-height:0;flex:1}

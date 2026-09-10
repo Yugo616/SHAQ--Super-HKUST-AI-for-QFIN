@@ -2,15 +2,20 @@
 
 ## 下载与开始
 
-**[下载 Windows 版](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.6.0-windows)** · **[下载 Mac 版](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.6.0-macos)**
+**[下载 Windows 版](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.6.1-windows)** · **[下载 Mac 版](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.6.1-macos)**
 
 Windows 下载 x64 安装程序；Mac 在同一发布页选择 Apple Silicon（M 系列）或 Intel 的一个 DMG，要求 macOS 15 或以上。三个安装包使用同一源码提交，内置相同的两个方法包。
 内部测试版未进行商业签名；实际安装、模型连接测试范围和校验值见各平台发布说明。
 
+[本版源码](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/tree/lab-v0.6.1-windows)与三个安装包绑定同一提交。发布页的 `Acceptance.json` 记录完整提交编号；每个安装包附有同名 `.sha256` 校验文件。
+
 1. 安装并打开软件，在「连接设置」连接 Codex、Claude Code 或模型 API。
 2. 登录团队 GitHub；软件已配置本仓库，无需填写 Client ID。
 3. 在「开始运行」勾选「独立证据门禁版 · 正式基准」和「跨域综合研判版 · Shadow」，点击运行。
-4. 在「查看结果」比较方法、股票判断和虚拟账户；点击记录展开分析与简短复盘。
+4. 在「查看结果」比较方法、股票判断和虚拟账户；点击记录弹出分析详情卡片，关闭或按 Esc 返回列表。
+
+「开始运行」只展示当日任务进度；历史记录集中在「查看结果」。自动预测需要主动开启，安装或升级不会自动启用。
+应用打开时自动检查待确认价格，也可点击「更新价格与成绩」。同日重复刷新不会撤销已确认且未变化的价格；供应商修订会单独标明并重新确认。等待或失败状态显示原因，方向成绩与分钟模拟盈亏分别记录。
 
 Codex、Claude Code 登录方式要求本机安装对应工具；API 方式不需要。Claude 网页登录不等同 Claude Code。
 WorkBuddy没有直接登录接口，只有提供兼容 API 时才通过中转配置使用。研究模式无需富途账户。

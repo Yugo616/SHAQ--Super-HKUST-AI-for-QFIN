@@ -17,6 +17,7 @@ from shaq_daily_oracle.research_batch import (
     load_frozen_evidence,
 )
 from shaq_daily_oracle.research_dashboard import ResearchDashboardIndex
+from shaq_daily_oracle import research_labels
 from shaq_daily_oracle.research_labels import refresh_research_labels
 from shaq_daily_oracle.skill_versions import LocalSkillRegistry
 from test_research_batch import FakeModel
@@ -37,6 +38,129 @@ class LabelMarket:
 
 
 class ResearchLabelTests(unittest.TestCase):
+    def recompute(self, value):
+        self.assertTrue(hasattr(research_labels, "recompute_label"),
+                        "saved observations need a canonical status recomputation")
+        return research_labels.recompute_label(value)
+
+    def observation(self, at, opening=100.0, closing=102.0):
+        return {
+            "observed_at_et": at,
+            "provider": "yfinance",
+            "official_unadjusted_open": opening,
+            "official_unadjusted_close": closing,
+            "open_to_close_return": closing / opening - 1,
+            "actual_direction": "bullish" if closing > opening else "bearish",
+            "observation_sha256": at,
+        }
+
+    def test_confirmed_label_survives_same_day_unchanged_refresh(self):
+        observations = [
+            self.observation("2026-09-04T16:05:00-04:00"),
+            self.observation("2026-09-08T09:00:00-04:00"),
+            self.observation("2026-09-08T10:00:00-04:00"),
+        ]
+        label = self.recompute({"observations": observations})
+        self.assertEqual(label["status"], "final")
+        self.assertTrue(label["confirmed_by_independent_reobservation"])
+        self.assertEqual([row["observed_at_et"] for row in label["observations"]], [
+            "2026-09-04T16:05:00-04:00", "2026-09-08T09:00:00-04:00",
+            "2026-09-08T10:00:00-04:00",
+        ])
+
+    def test_revision_is_retained_and_requires_new_trading_day_confirmation(self):
+        original = [
+            self.observation("2026-09-04T16:05:00-04:00"),
+            self.observation("2026-09-08T09:00:00-04:00"),
+        ]
+        revised = self.recompute({"observations": original + [
+            self.observation("2026-09-08T10:00:00-04:00", closing=101.0),
+        ]})
+        self.assertEqual(revised["status"], "provisional")
+        self.assertEqual(len(revised["corrections"]), 1)
+        self.assertEqual(revised["earliest_eligible_confirmation_trading_day"], "2026-09-09")
+        reconfirmed = self.recompute({
+            "observations": revised["observations"] + [
+                self.observation("2026-09-09T09:00:00-04:00", closing=101.0),
+            ],
+            "corrections": revised["corrections"],
+        })
+        self.assertEqual(reconfirmed["status"], "final")
+        self.assertEqual(len(reconfirmed["corrections"]), 1)
+
+    def test_legacy_unsorted_observations_are_repaired_without_fabrication(self):
+        later = self.observation("2026-09-08T09:00:00-04:00")
+        earlier = self.observation("2026-09-04T16:05:00-04:00")
+        label = self.recompute({"status": "provisional", "observations": [later, earlier]})
+        self.assertEqual(label["status"], "final")
+        self.assertEqual(label["observations"], [earlier, later])
+        self.assertEqual(len(label["observations"]), 2)
+
+    def test_saved_observations_repair_even_when_current_provider_is_offline(self):
+        class OfflineMarket:
+            def history(self, *args, **kwargs):
+                raise OSError("offline")
+
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name) / "research"
+            batch_id = self.setup_batch(root)
+            path = root / "batches" / batch_id / "labels.json"
+            observations = [
+                self.observation("2026-09-08T09:00:00-04:00"),
+                self.observation("2026-09-04T16:05:00-04:00"),
+            ]
+            path.write_text(json.dumps({"schema_version": 1, "labels": {
+                "AAPL": {"status": "provisional", "observations": observations},
+            }}), encoding="utf-8")
+            receipt = refresh_research_labels(
+                research_root=root, batches_root=root / "batches",
+                profile=DataProfile(profile_id="test", universe_file="unused.csv"),
+                observed_at=datetime(2026, 9, 9, 9, tzinfo=ZoneInfo("America/New_York")),
+                market_provider=OfflineMarket(),
+            )
+            saved = json.loads(path.read_text(encoding="utf-8"))["labels"]["AAPL"]
+        self.assertEqual(saved["status"], "final")
+        self.assertEqual(len(saved["observations"]), 2)
+        self.assertEqual(receipt["refreshed_batches"], [])
+        self.assertEqual(receipt["failures"][0]["error_type"], "OSError")
+
+    def test_malformed_label_batch_isolated_from_later_healthy_batch(self):
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name) / "research"
+            healthy_id = self.setup_batch(root)
+            healthy = root / "batches" / healthy_id
+            malformed = root / "batches" / "LAB-2026-09-03-malformed"
+            malformed.mkdir()
+            (malformed / "batch_manifest.json").write_bytes(
+                (healthy / "batch_manifest.json").read_bytes())
+            (malformed / "labels.json").write_text("{broken", encoding="utf-8")
+            result = refresh_research_labels(
+                research_root=root, batches_root=root / "batches",
+                profile=DataProfile(profile_id="test", universe_file="unused.csv"),
+                observed_at=datetime(2026, 9, 8, 9, tzinfo=ZoneInfo("America/New_York")),
+                market_provider=LabelMarket(),
+            )
+        self.assertEqual(result["refreshed_batches"], [healthy_id])
+        self.assertEqual(result["failures"][0]["batch_id"], malformed.name)
+        self.assertEqual(result["failures"][0]["error_type"], "JSONDecodeError")
+
+    def test_missing_expected_daily_bar_is_a_batch_failure(self):
+        class MissingMarket:
+            def history(self, *args, **kwargs):
+                return {}
+
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name) / "research"
+            batch_id = self.setup_batch(root)
+            result = refresh_research_labels(
+                research_root=root, batches_root=root / "batches",
+                profile=DataProfile(profile_id="test", universe_file="unused.csv"),
+                observed_at=datetime(2026, 9, 8, 9, tzinfo=ZoneInfo("America/New_York")),
+                market_provider=MissingMarket(),
+            )
+        self.assertEqual(result["refreshed_batches"], [])
+        self.assertEqual(result["failures"][0]["batch_id"], batch_id)
+        self.assertEqual(result["failures"][0]["missing_symbols"], ["AAPL"])
     def test_openbb_label_refresh_receives_explicit_credential(self):
         profile = DataProfile(
             profile_id="openbb-test",
@@ -136,7 +260,7 @@ class ResearchLabelTests(unittest.TestCase):
             before = dashboard.overview()
             second = refresh_research_labels(
                 research_root=root, batches_root=root / "batches", profile=profile,
-                observed_at=datetime(2026, 9, 6, 9, tzinfo=ZoneInfo("America/New_York")),
+                observed_at=datetime(2026, 9, 8, 9, tzinfo=ZoneInfo("America/New_York")),
                 market_provider=LabelMarket(),
             )
             final = json.loads(label_path.read_text(encoding="utf-8"))["labels"]["AAPL"]
@@ -173,7 +297,7 @@ class ResearchLabelTests(unittest.TestCase):
             root = Path(name) / "research"
             self.setup_batch(root)
             profile = DataProfile(profile_id="test", universe_file="unused.csv")
-            for day in (5, 6):
+            for day in (5, 8):
                 refresh_research_labels(
                     research_root=root, batches_root=root / "batches", profile=profile,
                     observed_at=datetime(2026, 9, day, 9, tzinfo=ZoneInfo("America/New_York")),

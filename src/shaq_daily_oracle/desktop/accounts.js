@@ -194,11 +194,7 @@ if (typeof document !== 'undefined') {
     previousRun();
     const data=state.data.dashboard.virtual_accounts;
     const versions=state.data.versions || [];
-    const progress=(data?.results || []).slice(0, versions.length).map(row => {
-      const meta=SHAQAccounts.methodMeta(row, versions);
-      return `<div><b>${SHAQAccounts.escape(meta.method_name)}</b> <span class="method-badge">${SHAQAccounts.escape(meta.status_badge)}</span><small>预测已冻结 → ${row.status === 'pending' ? '等待收盘' : '分钟模拟成交'} → ${SHAQAccounts.escape(SHAQAccounts.statusName(row.status))}</small></div>`;
-    }).join('');
-    q('#run .run-toolbar')?.insertAdjacentHTML('afterend', `<section class="account-policy"><p>${SHAQAccounts.rulesText(data?.rules)}</p><div class="settlement-flow"><span>预测冻结</span><i>→</i><span>等待收盘</span><i>→</i><span>暂定回放</span><i>→</i><span>最终确认</span></div>${progress ? `<div class="method-progress">${progress}</div>` : '<small>运行完成后按方法分别显示分钟回放进度；无需券商账户。</small>'}</section>`);
+    q('#run .run-toolbar')?.insertAdjacentHTML('afterend', `<details class="account-policy"><summary>虚拟账户规则</summary><p>${SHAQAccounts.rulesText(data?.rules)}</p><small>预测完成后等待收盘，结果和结算统一在「查看结果」中显示。</small></details>`);
   };
 
   const previousHistory = renderHistory;
@@ -206,17 +202,10 @@ if (typeof document !== 'undefined') {
     previousHistory();
     const data=state.data.dashboard.virtual_accounts;
     if (!data?.rules) return;
-    const section=document.createElement('section');
+    const section=document.createElement('details');
     section.className='sheet virtual-accounts';
-    section.innerHTML=SHAQAccounts.overviewHtml(data, state.data.versions || [], wb.filters || {});
+    section.innerHTML='<summary>虚拟账户汇总与成本</summary>'+SHAQAccounts.overviewHtml(data, state.data.versions || [], wb.filters || {});
     q('#history .result-summary')?.insertAdjacentElement('afterend', section);
-    const oldCard=q('.result-table')?.closest('.card');
-    if (oldCard) {
-      const details=document.createElement('details');
-      details.className='sheet official-direction-history';
-      details.innerHTML='<summary>官方 O→C 方向正确／错误与原一股研究评价</summary>';
-      oldCard.before(details); details.append(oldCard);
-    }
     qa('[data-account-batch]').forEach(row => row.onclick=async() => {
       const details=q('.official-direction-history');
       if (details) details.open=true;

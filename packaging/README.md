@@ -3,10 +3,11 @@
 Build all three artifacts from one clean public source commit. Never publish private
 worktree history or ignored build/runtime directories. The workflow is dispatchable on
 an acceptance branch and has read-only repository permissions; it does not publish releases.
-Version 0.6.0 is reserved for lab-v0.6.0-windows and lab-v0.6.0-macos, after acceptance.
+The version in pyproject.toml is released as separate lab-v<VERSION>-windows and
+lab-v<VERSION>-macos tags only after all three native platforms pass acceptance.
 
-The workflow's `target` selector accepts `windows`, `macos`, or `all`. Run Windows
-acceptance first, then both macOS jobs at that identical commit. Windows delivery uses
+The workflow's `target` selector accepts `windows`, `macos`, or `all`. Use `all` for
+the three-platform release; any targeted rerun must use that identical commit. Windows delivery uses
 one fresh staging/install directory on a disposable GitHub-hosted runner. It records
 each reachable build, smoke, audit, installer, installed smoke/reopen, three-page GUI,
 and uninstall check under `dist/diagnostic/`, continuing independent checks after errors.
