@@ -125,6 +125,52 @@ class NativePackagingTests(unittest.TestCase):
             (root / 'runtime/settings.json').write_text('{}')
             self.assertEqual(audit.forbidden_paths(root), ['backtrader', 'runtime', 'runtime/settings.json'])
 
+    def test_hosted_runner_vendor_paths_do_not_hide_current_checkout_or_private_data(self):
+        audit = self.module('audit_payload')
+        self.assertTrue(hasattr(audit, 'contains_private_path'))
+        home = '/'.join(('', 'Users', 'runner'))
+        checkout = home + '/work/current/current'
+        vendor = (home + '/work/h5py/h5py/lzf/lzf_filter.c\0' +
+                  home + '/.cargo/registry/src/index.crates.io/pyo3/src/err.rs').encode()
+        self.assertFalse(audit.contains_private_path(vendor, home, checkout, hosted_runner=True))
+        self.assertTrue(audit.contains_private_path(vendor, home, checkout, hosted_runner=False))
+        for private in (checkout + '/src/app.py', home + '/Library/settings.json', home + '/.ssh/id_ed25519',
+                        home + '/work/_temp/credentials'):
+            self.assertTrue(audit.contains_private_path(vendor + b'\0' + private.encode(), home, checkout, hosted_runner=True))
+        with tempfile.TemporaryDirectory() as personal:
+            self.assertTrue(audit.contains_private_path((personal + '/work/h5py/h5py').encode(), personal, checkout, hosted_runner=True))
+
+    def test_windows_pefile_pin_satisfies_packager_metadata(self):
+        from importlib.metadata import requires
+        from packaging.requirements import Requirement
+        pinned = next(Requirement(line) for line in (ROOT / 'packaging/requirements.lock.txt').read_text().splitlines()
+                      if line.startswith('pefile=='))
+        version = next(iter(pinned.specifier)).version
+        for text in requires('pyinstaller'):
+            dependency = Requirement(text)
+            if dependency.name == 'pefile':
+                self.assertIn(version, dependency.specifier)
+
+    def test_x64_sqlalchemy_runtime_dependencies_are_pinned(self):
+        from importlib.metadata import requires
+        from packaging.markers import default_environment
+        from packaging.requirements import Requirement
+        from packaging.utils import canonicalize_name
+        lines = (ROOT / 'packaging/requirements.lock.txt').read_text().splitlines()
+        for platform, machine in (('win32', 'AMD64'), ('darwin', 'x86_64')):
+            environment = dict(default_environment(), sys_platform=platform, platform_machine=machine, extra='')
+            pins = {}
+            for line in lines:
+                if line and not line.startswith('#'):
+                    requirement = Requirement(line)
+                    if requirement.marker is None or requirement.marker.evaluate(environment):
+                        pins[canonicalize_name(requirement.name)] = next(iter(requirement.specifier)).version
+            for text in requires('SQLAlchemy'):
+                requirement = Requirement(text)
+                if requirement.marker is None or requirement.marker.evaluate(environment):
+                    self.assertIn(canonicalize_name(requirement.name), pins, text)
+                    self.assertIn(pins[canonicalize_name(requirement.name)], requirement.specifier)
+
     def test_macho_links_reject_external_build_paths(self):
         audit = self.module('audit_payload')
         self.assertEqual(audit.bad_macos_links(['@loader_path/libhdf5.dylib', '/usr/lib/libSystem.B.dylib', '/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation']), [])

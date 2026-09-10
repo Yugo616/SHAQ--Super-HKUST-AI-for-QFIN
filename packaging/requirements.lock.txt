@@ -26,6 +26,7 @@ empyrical-reloaded==0.5.12
 exchange_calendars==4.13.2
 filelock==3.32.6
 formulaic==1.2.2
+greenlet==3.3.2 ; platform_machine == "x86_64" or platform_machine == "AMD64"
 h11==0.16.0
 h2==4.4.1
 h5py==3.16.0
@@ -77,7 +78,7 @@ pycparser==3.0
 pydantic==2.13.5
 pydantic_core==2.46.5
 pyinstaller-hooks-contrib==2026.7
-pyinstaller==6.16.0
+pyinstaller==6.17.0
 pyluach==2.3.0
 pyobjc-core==12.2.2 ; sys_platform == "darwin"
 pyobjc-framework-Cocoa==12.2.2 ; sys_platform == "darwin"

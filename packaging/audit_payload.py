@@ -3,6 +3,7 @@ from pathlib import Path
 import argparse
 import hashlib
 import json
+import os
 import platform
 import re
 import subprocess
@@ -56,18 +57,36 @@ def verify_methods(root):
     return failures
 
 
+def contains_private_path(data, home, checkout, hosted_runner=False):
+    if checkout.encode() in data:
+        return True
+    home_bytes = home.encode()
+    for match in re.finditer(re.escape(home_bytes), data):
+        # Upstream wheels retain generic hosted build and Cargo source locations.
+        # Only this exact hosted identity gets the exception, never a personal or
+        # self-hosted home, current checkout, settings, credentials, or other data.
+        suffix = data[match.end():]
+        upstream = (hosted_runner and home.split('/') == ['', 'Users', 'runner'] and
+                    (re.match(rb'/work/([^/\x00\r\n]+)/\1/', suffix) or
+                     suffix.startswith(b'/.cargo/registry/src/')))
+        if not upstream:
+            return True
+    return False
+
+
 def audit(root):
     failures = forbidden_paths(root) + verify_methods(root)
     native = []
     upstream_paths = []
-    private_prefixes = (str(Path.home()), str(Path(__file__).resolve().parents[1]))
+    home, checkout = str(Path.home()), str(Path(__file__).resolve().parents[1])
+    hosted_runner = os.environ.get('GITHUB_ACTIONS') == 'true' and os.environ.get('RUNNER_ENVIRONMENT') == 'github-hosted'
     for path in root.rglob('*'):
         if not path.is_file() or path.is_symlink():
             continue
         with path.open('rb') as stream:
             magic = stream.read(4)
         data = path.read_bytes()
-        if any(prefix.encode() in data for prefix in private_prefixes):
+        if contains_private_path(data, home, checkout, hosted_runner):
             # User names in debug/source paths are private, even if linking is relocatable.
             failures.append(f'private macOS user path: {path.relative_to(root)}')
         elif b'/Users/' in data:
