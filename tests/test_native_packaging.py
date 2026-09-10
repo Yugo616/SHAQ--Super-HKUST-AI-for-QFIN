@@ -2,6 +2,7 @@ from pathlib import Path
 import importlib.util
 import hashlib
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -14,6 +15,64 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class NativePackagingTests(unittest.TestCase):
+    def mingw_fixture(self, root):
+        prefix = root / 'action-location/mingw64'
+        compiler = prefix / 'bin/gcc.exe'
+        compiler.parent.mkdir(parents=True)
+        compiler.write_bytes(b'configured MSYS2 compiler')
+        notices = {'gcc-libs': ('COPYING3', 'COPYING.LIB', 'COPYING.RUNTIME'),
+                   'crt': ('COPYING', 'COPYING.MinGW-w64.txt', 'COPYING.MinGW-w64-runtime.txt'),
+                   'headers': ('COPYING', 'COPYING.MinGW-w64.txt', 'COPYING.MinGW-w64-runtime.txt'),
+                   'winpthreads': ('COPYING',), 'libwinpthread': ('COPYING',)}
+        for component, names in notices.items():
+            for name in names:
+                target = prefix / 'share/licenses' / component / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(f'upstream {component} {name}'.encode())
+        for component in ('gcc', *notices):
+            package = 'mingw-w64-x86_64-' + component
+            target = prefix.parent / 'var/lib/pacman/local' / (package + '-1.0-1/desc')
+            target.parent.mkdir(parents=True)
+            target.write_text(f'%NAME%\n{package}\n\n%VERSION%\n1.0-1\n\n%BASE%\nmingw-w64-test\n', encoding='utf-8')
+        return prefix
+
+    def test_mingw_notices_and_compiler_use_same_explicit_msys2_prefix(self):
+        build = self.module('build_desktop')
+        self.assertTrue(hasattr(build, 'mingw_toolchain'))
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            prefix = self.mingw_fixture(root)
+            with patch.dict(os.environ, {'SHAQ_MINGW_PREFIX': str(prefix), 'PATH': str(root / 'other/bin')}):
+                actual, env, provenance = build.mingw_toolchain()
+                self.assertEqual(actual, prefix.resolve())
+                self.assertEqual(env['PATH'].split(os.pathsep)[0], str(prefix.resolve() / 'bin'))
+                build.collect_mingw_notices(root / 'notices', provenance)
+            self.assertEqual((root / 'notices/MinGW-W64/gcc-libs/COPYING.RUNTIME').read_bytes(),
+                             b'upstream gcc-libs COPYING.RUNTIME')
+            manifest = json.loads((root / 'notices/MinGW-W64/toolchain.json').read_text(encoding='utf-8'))
+            self.assertEqual(manifest['packages']['mingw-w64-x86_64-gcc-libs']['version'], '1.0-1')
+            self.assertEqual(manifest['compiler_sha256'], hashlib.sha256(b'configured MSYS2 compiler').hexdigest())
+            self.assertNotIn(str(root), json.dumps(manifest))
+
+    def test_mingw_missing_notices_or_changed_compiler_fail_closed(self):
+        build = self.module('build_desktop')
+        self.assertTrue(hasattr(build, 'mingw_toolchain'))
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            prefix = self.mingw_fixture(root)
+            with patch.dict(os.environ, {'SHAQ_MINGW_PREFIX': str(prefix)}):
+                _, _, provenance = build.mingw_toolchain()
+                (prefix / 'bin/gcc.exe').write_bytes(b'changed compiler')
+                with self.assertRaisesRegex(RuntimeError, 'changed'):
+                    build.collect_mingw_notices(root / 'notices', provenance)
+                notice = prefix / 'share/licenses/gcc-libs/COPYING.RUNTIME'
+                notice.unlink()
+                with self.assertRaisesRegex(RuntimeError, 'COPYING.RUNTIME'):
+                    build.mingw_toolchain()
+            with patch.dict(os.environ, {}, clear=True):
+                with self.assertRaisesRegex(RuntimeError, 'SHAQ_MINGW_PREFIX'):
+                    build.mingw_toolchain()
+
     def module(self, name):
         path = ROOT / 'packaging' / f'{name}.py'
         self.assertTrue(path.is_file(), f'missing packaging implementation: {name}')

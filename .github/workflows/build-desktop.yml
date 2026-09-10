@@ -44,6 +44,7 @@ jobs:
         with:
           arch: x64
       - uses: msys2/setup-msys2@v2
+        id: msys2
         if: runner.os == 'Windows'
         with:
           install: mingw-w64-x86_64-gcc
@@ -51,7 +52,11 @@ jobs:
       - name: Enable MinGW-W64 for the upstream QuickJS CPython 3.13 source build
         if: runner.os == 'Windows'
         shell: pwsh
-        run: '"C:\msys64\mingw64\bin" | Out-File -FilePath $env:GITHUB_PATH -Append'
+        env:
+          MSYS2_LOCATION: ${{ steps.msys2.outputs.msys2-location }}
+        run: |
+          $prefix = Join-Path $env:MSYS2_LOCATION 'mingw64'
+          "SHAQ_MINGW_PREFIX=$prefix" | Out-File -FilePath $env:GITHUB_ENV -Append
       - name: Verify actual macOS architecture
         if: runner.os == 'macOS'
         run: test "$(uname -m)" = "${{ matrix.arch }}"

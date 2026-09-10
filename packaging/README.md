@@ -8,8 +8,11 @@ Version 0.6.0 is reserved for lab-v0.6.0-windows and lab-v0.6.0-macos, after acc
 ## Build
 
 Use native CPython 3.13, CMake, and the native C compiler. On Windows activate MSVC x64
-for PyTables/bcolz and place 64-bit MinGW-W64 GCC on PATH for QuickJS. The workflow configures
-both. Python, Git, compilers and Zipline are build-runner tools, not user prerequisites.
+for PyTables/bcolz and set `SHAQ_MINGW_PREFIX` to your MSYS2 installation's `mingw64`
+directory for QuickJS. The workflow derives this from the setup action's actual location.
+The native build prioritizes that compiler and records its hash/package versions; packaging
+requires the same toolchain and its installed license texts, including the GCC runtime exception.
+Python, Git, compilers and Zipline are build-runner tools, not user prerequisites.
 
     python3.13 -m venv .venv
     # Activate .venv (on Windows use its Scripts/Activate.ps1).

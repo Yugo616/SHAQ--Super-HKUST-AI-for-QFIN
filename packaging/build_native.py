@@ -62,6 +62,10 @@ def main():
     output = root / 'build/native-dependencies'
     source_dir = output / 'sources'
     source_dir.mkdir(parents=True, exist_ok=True)
+    if sys.platform == 'win32':
+        from build_desktop import mingw_toolchain
+        mingw_prefix, mingw_env, mingw_provenance = mingw_toolchain()
+        (output / 'mingw-toolchain.json').write_text(json.dumps(mingw_provenance, indent=2), encoding='utf-8')
     sources = {}
     specification = json.loads((root / 'packaging/native-sources.json').read_text(encoding="utf-8"))
     for name, item in specification.items():
@@ -113,14 +117,17 @@ def main():
         # bcolz uses MSVC; QuickJS upstream requires 64-bit MinGW-W64 and static pthread.
         with tempfile.TemporaryDirectory(prefix='bcolz-build-', dir=output) as environment:
             build_bcolz(root, sources['bcolz-zipline'], raw, Path(environment))
-        run(sys.executable, 'setup.py', 'build', '--compiler=mingw32', 'bdist_wheel', '--dist-dir', raw, cwd=sources['quickjs'])
+        # Do not attribute cached objects from a previous compiler to this toolchain.
+        if (sources['quickjs'] / 'build').is_dir():
+            shutil.rmtree(sources['quickjs'] / 'build')
+        run(sys.executable, 'setup.py', 'build', '--compiler=mingw32', 'bdist_wheel', '--dist-dir', raw, cwd=sources['quickjs'], env=mingw_env)
         import blosc2
-        library_dirs = [prefix / 'bin', Path(blosc2.__file__).parent / 'lib', Path(blosc2.__file__).parent / 'bin']
+        library_dirs = [prefix / 'bin', Path(blosc2.__file__).parent / 'lib', Path(blosc2.__file__).parent / 'bin', mingw_prefix / 'bin']
         for wheel in raw.glob('*.whl'):
             run(sys.executable, '-m', 'delvewheel', 'repair', '--add-path',
                 os.pathsep.join(str(p) for p in library_dirs if p.is_dir()),
                 *(['--no-mangle', 'libblosc2.dll'] if wheel.name.startswith('tables-') else []),
-                '-w', repaired, wheel)
+                '-w', repaired, wheel, env=mingw_env)
         for wheel in repaired.glob('tables-*.whl'):
             verify_windows_blosc2(wheel)
     else:

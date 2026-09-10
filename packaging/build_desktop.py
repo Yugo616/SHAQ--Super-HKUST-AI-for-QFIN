@@ -130,11 +130,8 @@ def collect_notices(root):
     for name, source in json.loads((root / 'packaging/native-sources.json').read_text(encoding="utf-8")).items():
         _, sources[name] = source_notices(destination, name, source=source)
     if sys.platform == 'win32':
-        compiler = shutil.which('gcc')
-        licenses = Path(compiler).parent.parent / 'share/licenses' if compiler else None
-        if licenses is None or not licenses.is_dir():
-            raise RuntimeError('MinGW-W64 runtime licenses are required for the native Windows build')
-        shutil.copytree(licenses, destination / 'MinGW-W64', dirs_exist_ok=True)
+        provenance = json.loads((root / 'build/native-dependencies/mingw-toolchain.json').read_text(encoding='utf-8'))
+        collect_mingw_notices(destination, provenance)
     (destination / 'source-manifest.json').write_text(json.dumps(sources, indent=2), encoding='utf-8')
     python_license = Path(sys.base_prefix) / 'Resources/Python.app/Contents/Resources/English.lproj/Documentation/License.html'
     candidates = [python_license, Path(sys.base_prefix) / 'LICENSE.txt', Path(sys.base_prefix) / 'lib/python3.13/LICENSE.txt']
@@ -150,6 +147,53 @@ def collect_notices(root):
                 'python': platform.python_version(), 'architecture': platform.machine(),
                 'methods': methods, 'distributions': distributions}
     (destination / 'manifest.json').write_text(json.dumps(manifest, indent=2), encoding='utf-8')
+
+
+def mingw_toolchain():
+    """Bind QuickJS and its notices to the configured MSYS2 MINGW64 installation."""
+    configured = os.environ.get('SHAQ_MINGW_PREFIX')
+    if not configured:
+        raise RuntimeError('Set SHAQ_MINGW_PREFIX to the MSYS2 MINGW64 prefix before building')
+    prefix = Path(configured).resolve()
+    compiler = prefix / 'bin/gcc.exe'
+    if not compiler.is_file():
+        raise RuntimeError(f'Missing configured MinGW compiler: {compiler}')
+    required = {'gcc-libs': ('COPYING3', 'COPYING.LIB', 'COPYING.RUNTIME'),
+                'crt': ('COPYING', 'COPYING.MinGW-w64.txt', 'COPYING.MinGW-w64-runtime.txt'),
+                'headers': ('COPYING', 'COPYING.MinGW-w64.txt', 'COPYING.MinGW-w64-runtime.txt'),
+                'winpthreads': ('COPYING',), 'libwinpthread': ('COPYING',)}
+    for component, names in required.items():
+        for name in names:
+            notice = prefix / 'share/licenses' / component / name
+            if not notice.is_file() or not notice.read_bytes().strip():
+                raise RuntimeError(f'MinGW-W64 runtime license is required: {notice}')
+    packages = {}
+    database = prefix.parent / 'var/lib/pacman/local'
+    for component in ('gcc', *required):
+        name = 'mingw-w64-x86_64-' + component
+        matches = []
+        for desc in database.glob(name + '-*/desc'):
+            fields = dict(block.split('\n', 1) for block in desc.read_text(encoding='utf-8').strip().split('\n\n'))
+            if fields.get('%NAME%') == name:
+                matches.append(fields)
+        if len(matches) != 1 or not all(matches[0].get(key) for key in ('%VERSION%', '%BASE%')):
+            raise RuntimeError(f'Missing or ambiguous MSYS2 package provenance: {name}')
+        version, base = matches[0]['%VERSION%'], matches[0]['%BASE%']
+        packages[name] = {'version': version, 'base': base,
+                          'source_url': f'https://repo.msys2.org/mingw/sources/{base}-{version}.src.tar.zst'}
+    provenance = {'compiler_sha256': hashlib.sha256(compiler.read_bytes()).hexdigest(), 'packages': packages}
+    env = dict(os.environ)
+    env['PATH'] = str(prefix / 'bin') + os.pathsep + env.get('PATH', '')
+    return prefix, env, provenance
+
+
+def collect_mingw_notices(destination, built_provenance):
+    prefix, _, provenance = mingw_toolchain()
+    if provenance != built_provenance:
+        raise RuntimeError('MinGW toolchain changed since the native wheels were built')
+    target = destination / 'MinGW-W64'
+    shutil.copytree(prefix / 'share/licenses', target, dirs_exist_ok=True)
+    (target / 'toolchain.json').write_text(json.dumps(provenance, indent=2), encoding='utf-8')
 
 
 def main():
