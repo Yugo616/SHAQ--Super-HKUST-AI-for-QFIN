@@ -2,6 +2,7 @@
 from contextlib import contextmanager
 from pathlib import Path, PureWindowsPath
 import json
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -19,6 +20,23 @@ def legacy_text_locale():
 
 
 class TextPortabilityTests(unittest.TestCase):
+    def test_complete_history_chart_runs_with_windows_command_line_limit(self):
+        from test_account_view import AccountViewTests
+        original = subprocess.Popen
+        commands = []
+
+        def bounded_popen(args, *positional, **kwargs):
+            # CreateProcess limits the command line, including its terminating NUL.
+            command_units = len(subprocess.list2cmdline(args).encode('utf-16-le')) // 2 + 1
+            if command_units > 32767:
+                raise OSError(206, 'Windows command line exceeds 32767 UTF-16 units')
+            commands.append(args)
+            return original(args, *positional, **kwargs)
+
+        with patch.object(subprocess, 'Popen', bounded_popen):
+            AccountViewTests().test_history_chart_uses_metadata_badges_and_keeps_account_series_distinct()
+        self.assertEqual(commands, [['node', '-']])
+
     def test_chinese_account_view_round_trips_under_legacy_locale(self):
         from test_account_view import AccountViewTests
         with legacy_text_locale():

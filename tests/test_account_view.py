@@ -9,7 +9,7 @@ class AccountViewTests(unittest.TestCase):
         path = Path(__file__).parents[1] / 'src/shaq_daily_oracle/desktop/accounts.js'
         self.assertTrue(path.exists(), 'Virtual account view must render actual settlement data')
         script = path.read_text(encoding="utf-8") + f'\nconsole.log(SHAQAccounts.{name}({json.dumps(value)}));'
-        return subprocess.check_output(['node', '-e', script], text=True, encoding="utf-8")
+        return subprocess.check_output(['node', '-'], input=script, text=True, encoding="utf-8")
 
     def test_pending_shows_waiting_not_fake_fills(self):
         html = self.render('dayHtml', {'status':'pending','scope':'historical','orders':[], 'trades':[]})
@@ -82,7 +82,7 @@ class AccountViewTests(unittest.TestCase):
             '\nconsole.log(JSON.stringify(SHAQAccounts.normalizeSelections('
             f'{json.dumps(versions)},{json.dumps(selections)})));'
         )
-        value = json.loads(subprocess.check_output(['node', '-e', script], text=True, encoding="utf-8"))
+        value = json.loads(subprocess.check_output(['node', '-'], input=script, text=True, encoding="utf-8"))
         self.assertEqual(value, [
             {'author':'team','version_id':'independent-gate-1'},
             {'author':'team','version_id':'cross-domain-synthesis-1'},
@@ -108,7 +108,7 @@ class AccountViewTests(unittest.TestCase):
             '\nconsole.log(JSON.stringify('
             f'{json.dumps(rows)}.map(row=>SHAQAccounts.historyIdentity(row,{json.dumps(versions)}))));'
         )
-        identities = json.loads(subprocess.check_output(['node', '-e', script], text=True, encoding="utf-8"))
+        identities = json.loads(subprocess.check_output(['node', '-'], input=script, text=True, encoding="utf-8"))
 
         self.assertEqual(identities[0]['filter_key'], 'team/independent-gate-1')
         self.assertEqual(identities[1]['filter_key'], 'team/independent-gate-1')
@@ -146,10 +146,8 @@ let renderEditor=()=>{{}},renderHistory=()=>{{}},renderBatch=()=>{{}},loadSkill=
  renderRun=()=>{{}},showPage=()=>{{}},saveDraft=async()=>{{}},estimate=async()=>{{}};
 const setInterval=()=>{{}};
 '''
-        output = subprocess.check_output([
-            'node', '-e', accounts + '\n' + harness + workbench +
-            f'\nconsole.log(plotResults({json.dumps(rows)}));'
-        ], text=True, encoding="utf-8")
+        script = accounts + '\n' + harness + workbench + f'\nconsole.log(plotResults({json.dumps(rows)}));'
+        output = subprocess.check_output(['node', '-'], input=script, text=True, encoding="utf-8")
 
         self.assertNotIn('旧 main 名称', output)
         self.assertNotIn('另一个旧名称', output)
@@ -185,7 +183,7 @@ const setInterval=()=>{{}};
             f'{json.dumps(data)},{json.dumps(versions)},'
             '{version:"team/independent-gate-1"}));'
         )
-        output = subprocess.check_output(['node', '-e', script], text=True, encoding="utf-8")
+        output = subprocess.check_output(['node', '-'], input=script, text=True, encoding="utf-8")
 
         self.assertIn('$10,001.00', output)
         self.assertIn('$20,002.00', output)
@@ -263,7 +261,7 @@ const setInterval=()=>{{}};
             '\nconsole.log(SHAQAccounts.overviewHtml('
             f'{json.dumps(value)},{json.dumps(versions)},{{}}));'
         )
-        html = subprocess.check_output(['node', '-e', script], text=True, encoding="utf-8")
+        html = subprocess.check_output(['node', '-'], input=script, text=True, encoding="utf-8")
         self.assertIn('独立证据门禁版', html)
         self.assertIn('正式基准', html)
         self.assertIn('Zipline-reloaded 3.1.1', html)

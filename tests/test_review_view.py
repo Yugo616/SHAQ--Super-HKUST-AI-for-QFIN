@@ -16,7 +16,7 @@ const q=()=>({after:e=>result=e.innerHTML});
 const state={selectedBatch:{replay_summaries:{version:{X:{correct:false,return_pct:-1,
  explanation:'实际方向未支持预测；不能确定原因',basis:[{domain:'event',thesis:'<script>bad</script>',antithesis:'可能已吸收',evidence_ids:['e1']}]}}}}};
 '''
-        output = subprocess.check_output(['node', '-e', harness + source + "\nwindow.showCandidate('b','version','X');console.log(result);"], text=True, encoding="utf-8")
+        output = subprocess.check_output(['node', '-'], input=harness + source + "\nwindow.showCandidate('b','version','X');console.log(result);", text=True, encoding="utf-8")
         self.assertIn('盘后查看', output)
         self.assertIn('预测错误', output)
         self.assertIn('&lt;script&gt;', output)
@@ -44,7 +44,7 @@ const batch={{variants:{{"team/left":{{variant:{{}},predictions:[],integration_a
 renderBatch(batch,"team/left");selector.value="team/right";
 (async()=>{let rejected="";try{await selector.onchange()}catch(error){rejected=error.message}console.log(JSON.stringify({rendered,notices,rejected}))})()
 '''
-        return json.loads(subprocess.check_output(['node', '-e', script], text=True, encoding="utf-8"))
+        return json.loads(subprocess.check_output(['node', '-'], input=script, text=True, encoding="utf-8"))
 
     def test_missing_installed_method_is_explicitly_unavailable(self):
         value = self.comparison_result('Skill version is not installed: team/right')
