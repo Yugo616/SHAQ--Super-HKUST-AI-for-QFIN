@@ -1,0 +1,129 @@
+{
+  "schema_version": 1,
+  "mode": "synthesis",
+  "parameters": {
+    "maximum_predictions": 3
+  },
+  "cases": [
+    {
+      "name": "publish",
+      "input": {
+        "schema_version": 1,
+        "as_of_et": "2020-01-02T08:00:00-05:00",
+        "horizon": "official_US_regular_session_open_to_close",
+        "candidates": [
+          {
+            "symbol": "EXAMPLE",
+            "track": "ordinary",
+            "industry_group": "Unknown"
+          }
+        ],
+        "reports_by_symbol": {
+          "EXAMPLE": [
+            {
+              "domain": "event",
+              "availability": "available",
+              "verdict": "neutral",
+              "lineage_root_ids": [
+                "r1"
+              ]
+            }
+          ]
+        },
+        "adversary_by_symbol": {
+          "EXAMPLE": {
+            "veto": false
+          }
+        },
+        "root_component_types": {
+          "r1": [
+            "stock_event"
+          ]
+        },
+        "synthesis": {
+          "schema_version": 1,
+          "decisions": [
+            {
+              "symbol": "EXAMPLE",
+              "action": "publish",
+              "direction": "bullish",
+              "reason": "综合分析的条件性机制",
+              "evidence_root_ids": [
+                "r1"
+              ]
+            }
+          ]
+        }
+      },
+      "expected_decisions": [
+        {
+          "symbol": "EXAMPLE",
+          "action": "publish",
+          "direction": "bullish",
+          "reason": "综合分析的条件性机制",
+          "evidence_root_ids": [
+            "r1"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "reject",
+      "input": {
+        "schema_version": 1,
+        "as_of_et": "2020-01-02T08:00:00-05:00",
+        "horizon": "official_US_regular_session_open_to_close",
+        "candidates": [
+          {
+            "symbol": "EXAMPLE",
+            "track": "ordinary",
+            "industry_group": "Unknown"
+          }
+        ],
+        "reports_by_symbol": {
+          "EXAMPLE": [
+            {
+              "domain": "event",
+              "availability": "available",
+              "verdict": "neutral",
+              "lineage_root_ids": [
+                "r1"
+              ]
+            }
+          ]
+        },
+        "adversary_by_symbol": {
+          "EXAMPLE": {
+            "veto": false
+          }
+        },
+        "root_component_types": {
+          "r1": [
+            "stock_event"
+          ]
+        },
+        "synthesis": {
+          "schema_version": 1,
+          "decisions": [
+            {
+              "symbol": "EXAMPLE",
+              "action": "reject",
+              "direction": "neutral",
+              "reason": "综合分析的条件性机制",
+              "evidence_root_ids": []
+            }
+          ]
+        }
+      },
+      "expected_decisions": [
+        {
+          "symbol": "EXAMPLE",
+          "action": "reject",
+          "direction": "neutral",
+          "reason": "综合分析的条件性机制",
+          "evidence_root_ids": []
+        }
+      ]
+    }
+  ]
+}

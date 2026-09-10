@@ -1,0 +1,21 @@
+{
+  "reference": "现有基准方法；新增公式时填写对应研究依据",
+  "cases": [
+    {
+      "name": "基本输入",
+      "input": {
+        "candidates": [
+          {
+            "symbol": "EXAMPLE"
+          }
+        ],
+        "maximum_candidates": 1
+      },
+      "expected": {
+        "symbols": [
+          "EXAMPLE"
+        ]
+      }
+    }
+  ]
+}

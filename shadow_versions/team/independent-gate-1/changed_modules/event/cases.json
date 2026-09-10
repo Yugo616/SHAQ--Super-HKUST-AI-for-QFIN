@@ -1,0 +1,13 @@
+{
+  "reference": "现有基准方法；新增公式时填写对应研究依据",
+  "cases": [
+    {
+      "name": "基本输入",
+      "input": {
+        "symbol": "EXAMPLE",
+        "evidence": []
+      },
+      "expected": {}
+    }
+  ]
+}

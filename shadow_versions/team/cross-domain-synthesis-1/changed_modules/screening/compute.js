@@ -1,0 +1,1 @@
+function compute(input) { return {symbols: input.candidates.slice(0, input.maximum_candidates).map(x => x.symbol)}; }

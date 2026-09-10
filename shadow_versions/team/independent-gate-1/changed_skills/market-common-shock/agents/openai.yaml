@@ -1,0 +1,6 @@
+interface:
+  display_name: "市场环境 · Market Context"
+  short_description: "Classify cross-asset shocks and price absorption"
+  default_prompt: "Use $market-common-shock to produce an evidence-linked premarket market-state report."
+policy:
+  allow_implicit_invocation: false
