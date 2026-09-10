@@ -1,6 +1,7 @@
 import subprocess
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 class ResultRefreshUiTests(unittest.TestCase):
@@ -18,7 +19,18 @@ assert.match(ctx.refreshStatusText({status:'complete',completed_at:'2026-09-09T1
 assert.match(ctx.refreshStatusText({status:'partial_failure',failure_count:2}),/2/);
 assert.match(ctx.refreshStatusText({status:'failed',error:'offline'}),/offline/);
 '''
-        subprocess.run(['node', '-'], input=script, text=True, cwd=root, check=True)
+        subprocess.run(['node', '-'], input=script, text=True, encoding='utf-8',
+                       cwd=root, check=True)
+
+    def test_node_stdin_uses_utf8_when_platform_default_is_cp1252(self):
+        root = Path(__file__).resolve().parents[1]
+        script = "const assert=require('assert/strict');assert.equal('更新完成','更新完成');"
+        with patch.object(subprocess, '_text_encoding', return_value='cp1252'):
+            with self.assertRaises(UnicodeEncodeError):
+                subprocess.run(['node', '-'], input=script, text=True,
+                               cwd=root, check=True)
+            subprocess.run(['node', '-'], input=script, text=True, encoding='utf-8',
+                           cwd=root, check=True)
 
 
 if __name__ == '__main__':

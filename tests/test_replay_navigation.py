@@ -33,7 +33,8 @@ vm.createContext(ctx);vm.runInContext(fn,ctx);
  assert.equal(target.innerHTML,'fresh:v:BBB');
 })().catch(e=>{console.error(e);process.exitCode=1});
 '''
-        subprocess.run(['node', '-'], input=script, text=True, cwd=root, check=True)
+        subprocess.run(['node', '-'], input=script, text=True, encoding='utf-8',
+                       cwd=root, check=True)
 
     def test_deferred_workspace_refresh_never_restores_over_new_user_navigation(self):
         root = Path(__file__).resolve().parents[1]
@@ -60,7 +61,8 @@ vm.createContext(ctx);vm.runInContext(fn,ctx);
  assert.deepEqual(restored,[],'closed and reopened modal is a new generation');
 })().catch(e=>{console.error(e);process.exitCode=1});
 '''
-        subprocess.run(['node', '-'], input=script, text=True, cwd=root, check=True)
+        subprocess.run(['node', '-'], input=script, text=True, encoding='utf-8',
+                       cwd=root, check=True)
 
     def test_escape_then_pending_reopen_blocks_old_workspace_restore(self):
         root = Path(__file__).resolve().parents[1]
@@ -93,7 +95,8 @@ vm.createContext(ctx);vm.runInContext(batchFn,ctx);vm.runInContext(loadFn,ctx);
  assert.deepEqual(renders,[['old','v','AAA'],['new','v2','BBB']]);
 })().catch(e=>{console.error(e);process.exitCode=1});
 '''
-        subprocess.run(['node', '-'], input=script, text=True, cwd=root, check=True)
+        subprocess.run(['node', '-'], input=script, text=True, encoding='utf-8',
+                       cwd=root, check=True)
 
     def test_assembled_renderer_wrapper_chain_forwards_nondefault_candidate(self):
         root = Path(__file__).resolve().parents[1]
@@ -118,4 +121,5 @@ const batch={batch_id:'fixture',evidence:{cutoff_status:'on_time',candidates:[{s
 ctx.renderBatch(batch,'v','BBB');
 assert.equal(vm.runInContext('state.replay.symbol',ctx),'BBB');
 '''
-        subprocess.run(['node', '-'], input=script, text=True, cwd=root, check=True)
+        subprocess.run(['node', '-'], input=script, text=True, encoding='utf-8',
+                       cwd=root, check=True)
