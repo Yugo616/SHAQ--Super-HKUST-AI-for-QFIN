@@ -12,9 +12,18 @@ import sys
 def forbidden_paths(root):
     found = []
     for path in sorted(root.rglob('*')):
-        parts = {p.lower() for p in path.relative_to(root).parts}
+        relative = tuple(p.lower() for p in path.relative_to(root).parts)
+        parts = set(relative)
+        # SHAQ state is rooted at the payload, not in dependency namespaces such
+        # as pythonnet/runtime. Include PyInstaller's platform payload containers.
+        payload = relative
+        for container in (('_internal',), ('contents', 'resources'), ('contents', 'frameworks')):
+            if relative[:len(container)] == container:
+                payload = relative[len(container):]
+                break
+        private_runtime = payload[:1] == ('runtime',) or payload[:2] == ('shaq_daily_oracle', 'runtime')
         name = path.name.lower()
-        if parts & {'backtrader', 'runtime', '.git', '.env'} or 'liblzo' in name or name.startswith('lzo2.'):
+        if private_runtime or parts & {'backtrader', '.git', '.env'} or 'liblzo' in name or name.startswith('lzo2.'):
             found.append(str(path.relative_to(root)))
     return found
 

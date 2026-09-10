@@ -84,7 +84,8 @@ jobs:
           python packaging/audit_payload.py $InstallDir --output dist/installed-native-audit.json
           if ($LASTEXITCODE -ne 0) { throw "Installed payload audit failed" }
           $Process = Start-Process (Join-Path $InstallDir "unins000.exe") -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART" -Wait -PassThru
-          if ($Process.ExitCode -ne 0 -or (Test-Path $Executable)) { throw "Uninstall failed" }
+          python packaging/verify_uninstall.py $InstallDir --timeout-seconds 30 --output dist/uninstall-report.json
+          if ($Process.ExitCode -ne 0 -or $LASTEXITCODE -ne 0) { throw "Uninstall failed; see uninstall-report.json for remaining paths" }
       - name: Build macOS disk image
         if: runner.os == 'macOS'
         run: zsh packaging/build_macos.sh

@@ -25,6 +25,18 @@ def map_build_metadata(path, prefixes):
     path.write_text(content, encoding='utf-8')
 
 
+def reset_wheel_directories(output):
+    """Discard only this builder's generated wheels; preserve sources and archives."""
+    paths = (output / 'raw-wheels', output / 'wheels')
+    if any(path.is_symlink() for path in paths):
+        raise RuntimeError('Generated wheel directories must not be symlinks')
+    for path in paths:
+        if path.exists():
+            shutil.rmtree(path)
+        path.mkdir()
+    return paths
+
+
 def main():
     if sys.version_info[:2] != (3, 13):
         raise RuntimeError('CPython 3.13 is required; do not substitute older binaries')
@@ -74,15 +86,10 @@ def main():
         env['MACOSX_DEPLOYMENT_TARGET'] = deployment
         import blosc2
         env['DYLD_LIBRARY_PATH'] = str(prefix / 'lib') + ':' + str(Path(blosc2.__file__).parent / 'lib')
-    raw = output / 'raw-wheels'
-    repaired = output / 'wheels'
-    raw.mkdir(exist_ok=True)
-    repaired.mkdir(exist_ok=True)
+    raw, repaired = reset_wheel_directories(output)
     # Rebuild only our generated intermediate output; never reuse a universal2 cache.
     if (sources['tables'] / 'build').is_dir():
         shutil.rmtree(sources['tables'] / 'build')
-    for wheel in raw.glob('tables-*.whl'):
-        wheel.unlink()
     run(*pip, 'wheel', '--no-deps', '--no-build-isolation', '--no-cache-dir', '-w', raw, sources['tables'], env=env)
     if sys.platform == 'win32':
         # bcolz uses MSVC; QuickJS upstream requires 64-bit MinGW-W64 and static pthread.
