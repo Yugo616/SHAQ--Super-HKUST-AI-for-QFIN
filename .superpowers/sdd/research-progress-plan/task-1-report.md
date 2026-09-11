@@ -110,6 +110,11 @@ Ran 367 tests in 9.658s
 OK
 ```
 
+## Final UTF-8 tail fix
+
+- Progress reads now decode JSONL one physical line at a time. A partially written or truncated multibyte UTF-8 tail is ignored without discarding earlier valid events or throwing through `LabService` polling/history refresh.
+- Added an actual truncated-Chinese-byte fixture exercised through `LabService.job_statuses`; targeted progress/UI suite: 9 tests passed.
+
 ## Reviewer round 3 fix
 
 - Added stable `data-research-section` identities for the execution timeline and each symbol/domain original-report foldout. Both now participate in the same persisted open-state store as domain sections and remain open after polling redraws.

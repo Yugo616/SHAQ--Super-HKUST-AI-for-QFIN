@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import json
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 from shaq_daily_oracle.research_progress import ResearchProgressLog, safe_observe
 
@@ -53,6 +56,26 @@ class ResearchProgressLogTests(unittest.TestCase):
             log = ResearchProgressLog(Path(tmp) / "progress.jsonl")
             with self.assertRaises(ValueError):
                 log.append(stage="validation_failure", batch_id="B", raw_output={"thesis": "unsafe"})
+
+    def test_truncated_multibyte_tail_keeps_valid_events_and_service_refreshes(self):
+        from shaq_daily_oracle.lab_service import LabService
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); jobs = root / "jobs"; jobs.mkdir()
+            job_id = "job-truncated"
+            (jobs / f"{job_id}.json").write_text(json.dumps({
+                "job_id": job_id, "status": "running",
+                "started_at_et": "2026-09-11T08:00:00-04:00",
+            }), encoding="utf-8")
+            progress = jobs / f"{job_id}-research.jsonl"
+            good = {"sequence": 1, "stage": "preparation", "message": "准备完成"}
+            progress.write_bytes((json.dumps(good, ensure_ascii=False) + "\n").encode("utf-8")
+                                 + '{"sequence":2,"message":"中文'.encode("utf-8")[:-1])
+            service = LabService.__new__(LabService)
+            service.paths = SimpleNamespace(research_root=root)
+            service.jobs = {}; service.jobs_lock = threading.Lock()
+
+            rows = service.job_statuses()
+            self.assertEqual(rows[0]["research_progress"], [good])
 
 
 if __name__ == "__main__":

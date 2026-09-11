@@ -64,14 +64,14 @@ class ResearchProgressLog:
 
     def read(self) -> list[dict[str, Any]]:
         try:
-            lines = self.path.read_text(encoding="utf-8").splitlines()
+            lines = self.path.read_bytes().splitlines()
         except OSError:
             return []
         rows = []
         for line in lines:
             try:
-                row = json.loads(line)
-            except (TypeError, json.JSONDecodeError):
+                row = json.loads(line.decode("utf-8"))
+            except (TypeError, UnicodeDecodeError, json.JSONDecodeError):
                 continue
             if isinstance(row, dict) and isinstance(row.get("sequence"), int):
                 rows.append(row)
