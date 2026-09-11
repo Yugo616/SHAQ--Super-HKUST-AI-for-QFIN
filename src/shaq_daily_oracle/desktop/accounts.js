@@ -147,11 +147,11 @@ const SHAQAccounts = (() => {
   }
 
   function resultRows(rows, versions) {
-    return (rows || []).map(row => `<tr class="${row.batch_id ? 'clickable' : ''}" ${row.batch_id ? `data-account-batch="${e(row.batch_id)}" data-account-key="${e(row.variant_key)}"` : ''}>
+    return (rows || []).map(row => {const trades=row.trades||[],score=row.status==='empty'?'0 / 0':trades.length&&trades.every(trade=>typeof trade.direction_correct==='boolean')?`${trades.filter(trade=>trade.direction_correct).length} / ${trades.filter(trade=>!trade.direction_correct).length}`:'—';return `<tr class="${row.batch_id ? 'clickable' : ''}" ${row.batch_id ? `data-account-batch="${e(row.batch_id)}" data-account-key="${e(row.variant_key)}"` : ''}>
       <td>${e(row.trade_date)}<br>${method(row, versions)}</td><td>${e(scopeName(row.scope))}</td>
-      <td>${e(statusName(row.status))}</td><td>${['provisional','final','empty'].includes(row.status) ? `${(row.trades||[]).filter(t=>t.direction_correct===true).length} / ${(row.trades||[]).filter(t=>t.direction_correct===false).length}` : '—'}</td>
+      <td>${e(statusName(row.status))}</td><td>${score}</td>
       <td>${usd(row.net_pnl)}</td><td>${usd(row.account_cumulative_net_pnl)}</td><td>${usd(row.account_balance)}</td>
-      <td>${usd(row.gross_pnl)}</td><td>${usd(row.fees)}</td><td>${usd(row.slippage_cost)}</td></tr>`).join('');
+      <td>${usd(row.gross_pnl)}</td><td>${usd(row.fees)}</td><td>${usd(row.slippage_cost)}</td></tr>`}).join('');
   }
 
   function overviewHtml(data, versions, filters={}) {

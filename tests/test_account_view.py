@@ -258,6 +258,25 @@ const setInterval=()=>{{}};
         self.assertIn('<td>等待收盘后的分钟资料</td><td>—</td>', html)
         self.assertEqual(html.count('<th>账户余额</th>'), 2)
 
+    def test_complete_minute_settlement_waits_for_complete_daily_direction_score(self):
+        base = {'variant_key':'team/main','scope':'forward','trade_date':'2026-09-09',
+                'net_pnl':1,'gross_pnl':1,'fees':0,'slippage_cost':0}
+        html = self.render('overviewHtml', {
+            'rules':{'initial_cash':10000,'per_prediction_budget':1000,
+                     'commission_rate':0.0005,'slippage_rate':0.0005},
+            'accounts':[], 'legacy':{'results':[]},
+            'results':[
+                {**base,'batch_id':'p','status':'provisional',
+                 'trades':[{'direction_correct':None}]},
+                {**base,'batch_id':'f','status':'final',
+                 'trades':[{'direction_correct':True},{'direction_correct':None}]},
+                {**base,'batch_id':'e','status':'empty','trades':[]},
+            ],
+        })
+        self.assertEqual(html.count('<td>0 / 0</td>'), 1, 'only an empty forecast is zero trades')
+        self.assertEqual(html.count('<td>—</td>'), 8)
+        self.assertNotIn('<td>1 / 0</td>', html)
+
     def test_account_overview_separates_forward_research_and_legacy(self):
         versions = [
             {'author':'team','version_id':'independent-gate-1','method_name':'独立证据门禁版',
