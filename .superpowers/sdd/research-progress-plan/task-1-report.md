@@ -109,3 +109,8 @@ Targeted verification: 22 tests passed. Full verification:
 Ran 367 tests in 9.658s
 OK
 ```
+
+## Reviewer round 3 fix
+
+- Added stable `data-research-section` identities for the execution timeline and each symbol/domain original-report foldout. Both now participate in the same persisted open-state store as domain sections and remain open after polling redraws.
+- Targeted JavaScript/navigation verification: 8 tests passed.
