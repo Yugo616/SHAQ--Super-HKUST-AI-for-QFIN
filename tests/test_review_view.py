@@ -5,6 +5,30 @@ from pathlib import Path
 
 
 class ReviewViewTests(unittest.TestCase):
+    def test_immediate_summary_respects_filters_and_preserves_empty_count(self):
+        source = (Path(__file__).parents[1] / 'src/shaq_daily_oracle/desktop/review.js').read_text(encoding="utf-8")
+        harness = '''
+const window={showCandidate(){}};let renderBatch=()=>{},renderHistory=()=>{};
+const esc=x=>String(x??''),moduleName=x=>x,dir=x=>x,money=x=>String(x);
+const document={createElement:()=>({innerHTML:''})},notice=()=>{},api=async()=>{};
+const SHAQAccounts={methodMeta:()=>({}),statusName:x=>x,usd:x=>x};
+const wb={filters:{from:'2026-09-09',to:'2026-09-09',version:'team/main',model:'m'}};
+const historyIdentity=row=>({filter_key:row.variant_key});
+const rows=[
+ {trade_date:'2026-09-09',variant_key:'team/main',model:'m',status:'provisional',score_eligible:true,correct:1,incorrect:0},
+ {trade_date:'2026-09-08',variant_key:'team/main',model:'m',status:'final',score_eligible:true,correct:0,incorrect:1},
+ {trade_date:'2026-09-09',variant_key:'team/main',model:'m',status:'empty',score_eligible:true,correct:0,incorrect:0}];
+const state={data:{dashboard:{daily_results:rows}}};
+const summary={firstChild:{textContent:''}};
+const q=s=>s==='#history .result-summary'?summary:null,qa=()=>[];
+'''
+        output = subprocess.check_output(
+            ['node', '-'], input=harness + source +
+            '\nrenderHistory();console.log(summary.firstChild.textContent);',
+            text=True, encoding='utf-8')
+        self.assertIn('正确 1 / 错误 0', output)
+        self.assertIn('空榜 1 次', output)
+
     def test_candidate_summary_renders_as_postclose_and_escapes_source(self):
         source = (Path(__file__).parents[1] / 'src/shaq_daily_oracle/desktop/review.js').read_text(encoding="utf-8")
         harness = '''

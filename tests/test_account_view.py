@@ -247,6 +247,17 @@ const setInterval=()=>{{}};
         self.assertIn('$8.00', html)
         self.assertIn('$10,008.00', html)
 
+    def test_pending_score_is_dash_and_historical_table_matches_row_width(self):
+        html = self.render('overviewHtml', {
+            'rules':{'initial_cash':10000,'per_prediction_budget':1000,
+                     'commission_rate':0.0005,'slippage_rate':0.0005},
+            'accounts':[], 'legacy':{'results':[]},
+            'results':[{'batch_id':'b','variant_key':'team/main','scope':'historical',
+                'trade_date':'2026-09-09','status':'pending','trades':[]}],
+        })
+        self.assertIn('<td>等待收盘后的分钟资料</td><td>—</td>', html)
+        self.assertEqual(html.count('<th>账户余额</th>'), 2)
+
     def test_account_overview_separates_forward_research_and_legacy(self):
         versions = [
             {'author':'team','version_id':'independent-gate-1','method_name':'独立证据门禁版',

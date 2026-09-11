@@ -52,6 +52,7 @@ class ResearchLabelTests(unittest.TestCase):
             "open_to_close_return": closing / opening - 1,
             "actual_direction": "bullish" if closing > opening else "bearish",
             "observation_sha256": at,
+            "fresh_provider_read": True,
         }
 
     def test_confirmed_label_survives_same_day_unchanged_refresh(self):
@@ -262,6 +263,16 @@ class ResearchLabelTests(unittest.TestCase):
         self.assertEqual(overview["performance"][0]["evaluated"], 1)
         self.assertEqual(overview["daily_results"][0]["status"], "provisional")
         self.assertAlmostEqual(overview["daily_results"][0]["daily_pnl"], 2.0)
+
+    def test_cached_provider_response_cannot_confirm_but_fresh_same_day_read_can(self):
+        first = self.observation("2026-09-04T16:05:00-04:00")
+        first["fresh_provider_read"] = True
+        cached = self.observation("2026-09-04T16:10:00-04:00")
+        cached["fresh_provider_read"] = False
+        fresh = self.observation("2026-09-04T16:15:00-04:00")
+        fresh["fresh_provider_read"] = True
+        self.assertEqual(self.recompute({"observations": [first, cached]})["status"], "provisional")
+        self.assertEqual(self.recompute({"observations": [first, cached, fresh]})["status"], "final")
 
     def test_label_requires_later_independent_matching_observation(self):
         with tempfile.TemporaryDirectory() as name:

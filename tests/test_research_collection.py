@@ -4,9 +4,11 @@ import tempfile
 import unittest
 from datetime import date, datetime
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 from zoneinfo import ZoneInfo
 
-from shaq_daily_oracle.data_providers import DataProfile
+from shaq_daily_oracle.data_providers import DataProfile, YFinanceProvider
 from shaq_daily_oracle.research_batch import _tasks_for_domain
 from shaq_daily_oracle.research_collection import (
     ResearchCollectionError,
@@ -52,6 +54,18 @@ class FakeEvents:
 
 
 class ResearchCollectionTests(unittest.TestCase):
+    def test_fresh_history_clears_only_yfinance_history_response_cache(self):
+        cache_clear = Mock()
+        fake_yf = SimpleNamespace(data=SimpleNamespace(
+            YfData=SimpleNamespace(cache_get=SimpleNamespace(cache_clear=cache_clear))))
+        provider = YFinanceProvider(self.profile())
+        with patch.object(provider, '_module', return_value=fake_yf), \
+                patch.object(provider, 'history', return_value={'AAA': []}) as history:
+            self.assertEqual(provider.fresh_history(['AAA'], start=date(2026, 9, 9),
+                end=date(2026, 9, 10)), {'AAA': []})
+        cache_clear.assert_called_once_with()
+        history.assert_called_once()
+
     def test_different_screeners_collect_same_union_regardless_of_version_order(self):
         from shaq_daily_oracle.hashing import sha256_payload
         scripts = ['function compute(x){return {symbols:[x.candidates[0].symbol]}}',

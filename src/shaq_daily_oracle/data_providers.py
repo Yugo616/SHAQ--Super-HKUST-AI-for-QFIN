@@ -271,6 +271,15 @@ class YFinanceProvider:
             output.update(rows)
         return output
 
+    def fresh_history(self, *args: Any, **kwargs: Any) -> dict[str, list[dict[str, Any]]]:
+        """Bypass yfinance's process-local historical-response LRU for verification reads."""
+        yf = self._module()
+        try:
+            yf.data.YfData.cache_get.cache_clear()
+        except AttributeError as exc:
+            raise DataProviderError("yfinance history cache cannot be cleared") from exc
+        return self.history(*args, **kwargs)
+
     def recent_intraday(
         self, symbols: list[str], *, cutoff: datetime
     ) -> dict[str, list[dict[str, Any]]]:

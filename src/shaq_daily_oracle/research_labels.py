@@ -125,7 +125,23 @@ def recompute_label(existing: dict[str, Any]) -> dict[str, Any]:
         segment.append(row)
     segment.reverse()
     first_time = _observation_time(segment[0])
-    confirmed = any(_observation_time(row) > first_time for row in segment[1:])
+    def independently_fresh(row: dict[str, Any]) -> bool:
+        if "fresh_provider_read" in row:
+            return row.get("fresh_provider_read") is True
+        # Preserve confirmations made under the former cross-day rule. Same-day
+        # legacy receipts have no proof that yfinance's local LRU was bypassed.
+        return _observation_time(row).date() > first_time.date()
+
+    saved_identity = _price_identity(existing)
+    legacy_confirmed = (
+        existing.get("status") == "final"
+        and existing.get("confirmed_by_independent_reobservation") is True
+        and saved_identity == current_identity
+    )
+    confirmed = legacy_confirmed or any(
+        _observation_time(row) > first_time and independently_fresh(row)
+        for row in segment[1:]
+    )
     latest = observations[-1]
     result.update({key: latest[key] for key in (
         "official_unadjusted_open", "official_unadjusted_close",
@@ -197,8 +213,12 @@ def refresh_research_labels(
                 _atomic_json(path, document)
             evidence = load_frozen_evidence(research_root / "evidence" / evidence_hash)
             symbols = [row["symbol"] for row in evidence.candidate_intake["candidates"]]
-            rows = market_provider.history(
+            history = getattr(market_provider, "fresh_history", market_provider.history)
+            rows = history(
                 symbols, start=trade_date, end=trade_date + timedelta(days=1), interval="1d"
+            )
+            fresh_provider_read = hasattr(market_provider, "fresh_history") or getattr(
+                market_provider, "last_history_was_fresh", True
             )
             missing_symbols = []
             for symbol in symbols:
@@ -209,6 +229,7 @@ def refresh_research_labels(
                 observation = {
                     "observed_at_et": now.isoformat(),
                     "provider": profile.market_provider,
+                    "fresh_provider_read": fresh_provider_read,
                     **label,
                 }
                 observation["observation_sha256"] = sha256_payload(observation)

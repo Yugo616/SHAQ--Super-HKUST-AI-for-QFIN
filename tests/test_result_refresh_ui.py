@@ -5,6 +5,11 @@ from unittest.mock import patch
 
 
 class ResultRefreshUiTests(unittest.TestCase):
+    def test_provisional_replay_status_is_chinese_initial(self):
+        root = Path(__file__).resolve().parents[1]
+        source = (root / 'src/shaq_daily_oracle/desktop/app.js').read_text(encoding='utf-8')
+        self.assertIn("provisional:'初步'", source)
+
     def test_refresh_status_distinguishes_success_partial_failure_and_failure(self):
         root = Path(__file__).resolve().parents[1]
         script = r'''

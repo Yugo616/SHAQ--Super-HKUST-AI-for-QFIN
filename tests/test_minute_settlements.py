@@ -39,6 +39,19 @@ class MinuteStoreTests(unittest.TestCase):
         self.assertEqual(duplicate['status'], 'provisional')
         self.assertEqual(duplicate['observation_hashes'], first['observation_hashes'])
 
+    def test_cached_response_cannot_confirm_but_fresh_same_day_read_can(self):
+        self.store.observe('2026-09-09', ['AAA'], records(), provider='yfinance',
+            observed_at=datetime.fromisoformat('2026-09-09T16:10:00-04:00'),
+            fresh_provider_read=True)
+        cached = self.store.observe('2026-09-09', ['AAA'], records(), provider='yfinance',
+            observed_at=datetime.fromisoformat('2026-09-09T16:15:00-04:00'),
+            fresh_provider_read=False)
+        self.assertEqual(cached['status'], 'provisional')
+        fresh = self.store.observe('2026-09-09', ['AAA'], records(), provider='yfinance',
+            observed_at=datetime.fromisoformat('2026-09-09T16:20:00-04:00'),
+            fresh_provider_read=True)
+        self.assertEqual(fresh['status'], 'final')
+
     def test_future_fields_irrelevant_but_target_revision_requires_new_confirmation(self):
         self.observe()
         data = records()

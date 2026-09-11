@@ -83,7 +83,11 @@ if(typeof renderHistory!=='undefined'){
 const renderHistoryWithImmediateResults=renderHistory;
 renderHistory=function(){
   renderHistoryWithImmediateResults();
-  const rows=state.data.dashboard.daily_results||[];
+  const allRows=state.data.dashboard.daily_results||[];
+  const rows=allRows.filter(row=>(!wb.filters.from||row.trade_date>=wb.filters.from)&&
+    (!wb.filters.to||row.trade_date<=wb.filters.to)&&
+    (!wb.filters.version||historyIdentity(row).filter_key===wb.filters.version)&&
+    (!wb.filters.model||(row.model||'未记录模型')===wb.filters.model));
   for(const tr of qa('.result-table tr[data-batch]')){
     const row=rows.find(item=>item.batch_id===tr.dataset.batch&&item.variant_key===tr.dataset.variantKey);
     if(row&&['provisional','final'].includes(row.status)&&tr.children[3]){
@@ -93,7 +97,8 @@ renderHistory=function(){
   const scored=rows.filter(row=>row.score_eligible!==false&&['provisional','final'].includes(row.status));
   const good=scored.reduce((sum,row)=>sum+Number(row.correct||0),0);
   const bad=scored.reduce((sum,row)=>sum+Number(row.incorrect||0),0);
+  const empty=rows.filter(row=>row.score_eligible!==false&&row.status==='empty').length;
   const summary=q('#history .result-summary');
-  if(summary)summary.firstChild.textContent=`已有结果 ${good+bad} 次 · 正确 ${good} / 错误 ${bad} · 命中率 ${good+bad?(100*good/(good+bad)).toFixed(1)+'%':'—'} · `;
+  if(summary)summary.firstChild.textContent=`已有结果 ${good+bad} 次 · 正确 ${good} / 错误 ${bad} · 命中率 ${good+bad?(100*good/(good+bad)).toFixed(1)+'%':'—'} · 空榜 ${empty} 次`;
 };
 }

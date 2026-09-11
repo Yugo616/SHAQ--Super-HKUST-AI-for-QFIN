@@ -149,7 +149,7 @@ const SHAQAccounts = (() => {
   function resultRows(rows, versions) {
     return (rows || []).map(row => `<tr class="${row.batch_id ? 'clickable' : ''}" ${row.batch_id ? `data-account-batch="${e(row.batch_id)}" data-account-key="${e(row.variant_key)}"` : ''}>
       <td>${e(row.trade_date)}<br>${method(row, versions)}</td><td>${e(scopeName(row.scope))}</td>
-      <td>${e(statusName(row.status))}</td><td>${(row.trades||[]).filter(t=>t.direction_correct===true).length} / ${(row.trades||[]).filter(t=>t.direction_correct===false).length}</td>
+      <td>${e(statusName(row.status))}</td><td>${['provisional','final','empty'].includes(row.status) ? `${(row.trades||[]).filter(t=>t.direction_correct===true).length} / ${(row.trades||[]).filter(t=>t.direction_correct===false).length}` : '—'}</td>
       <td>${usd(row.net_pnl)}</td><td>${usd(row.account_cumulative_net_pnl)}</td><td>${usd(row.account_balance)}</td>
       <td>${usd(row.gross_pnl)}</td><td>${usd(row.fees)}</td><td>${usd(row.slippage_cost)}</td></tr>`).join('');
   }
@@ -183,7 +183,7 @@ const SHAQAccounts = (() => {
       <p class="account-note">收盘后模拟回放。方法、模型、引擎和规则各自绑定账户；初步完整结算立即计入，后续读取仅复核或修订。卖空仅作可借券研究假设。</p>${plot(accounts)}
       <h3>持续账户</h3><div class="account-scroll"><table class="table"><thead><tr><th>方法 / 模型 / 引擎</th><th>账户净值</th><th>累计净盈亏</th><th>零成本对照</th><th>手续费</th><th>滑点影响</th><th>最大收盘回撤</th></tr></thead><tbody>${accountRows || '<tr><td colspan="7">等待首个合格的持续账户结果。</td></tr>'}</tbody></table></div>
       <h3>持续账户每日记录</h3><div class="account-scroll"><table class="table"><thead><tr><th>日期 / 方法</th><th>范围</th><th>状态</th><th>正确 / 错误</th><th>当日净盈亏</th><th>累计净盈亏</th><th>账户余额</th><th>零成本盈亏</th><th>手续费</th><th>滑点影响</th></tr></thead><tbody>${resultRows(forward, versions) || '<tr><td colspan="10">尚无持续账户记录。</td></tr>'}</tbody></table></div>
-      <details class="account-secondary"><summary>历史 / 练习（不入账）</summary><div class="account-scroll"><table class="table"><thead><tr><th>日期 / 方法</th><th>范围</th><th>状态</th><th>净盈亏</th><th>零成本盈亏</th><th>手续费</th><th>滑点影响</th></tr></thead><tbody>${resultRows(research, versions) || '<tr><td colspan="7">没有历史或练习回放。</td></tr>'}</tbody></table></div></details>
+      <details class="account-secondary"><summary>历史 / 练习（不入账）</summary><div class="account-scroll"><table class="table"><thead><tr><th>日期 / 方法</th><th>范围</th><th>状态</th><th>正确 / 错误</th><th>当日净盈亏</th><th>累计净盈亏</th><th>账户余额</th><th>零成本盈亏</th><th>手续费</th><th>滑点影响</th></tr></thead><tbody>${resultRows(research, versions) || '<tr><td colspan="10">没有历史或练习回放。</td></tr>'}</tbody></table></div></details>
       <details class="account-secondary"><summary>旧版已保存结果（只读） · ${e(legacy.status === 'saved_only' ? 'saved-only' : legacy.status || 'unavailable')}</summary><p>旧引擎记录仅显示已保存文件，不重算、不并入 Zipline 分钟账户。</p><div class="account-scroll"><table class="table"><thead><tr><th>日期</th><th>旧引擎</th><th>保存状态</th><th>净盈亏</th></tr></thead><tbody>${legacyRows || '<tr><td colspan="4">没有可核验的旧版已保存结果。</td></tr>'}</tbody></table></div></details>`;
   }
 

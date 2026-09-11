@@ -56,7 +56,8 @@ class MinuteStore:
     def __init__(self, root: Path):
         self.root = root
 
-    def observe(self, trade_date, symbols, records, *, provider, observed_at):
+    def observe(self, trade_date, symbols, records, *, provider, observed_at,
+                fresh_provider_read=True):
         day = date.fromisoformat(trade_date)
         now = _stamp(observed_at).astimezone(ET)
         session = market_session(day)
@@ -66,6 +67,7 @@ class MinuteStore:
         document = dict(schema_version=1, trade_date=trade_date, provider=provider,
             interval='1m', price_adjustment='unadjusted', session_scope='US_regular_session',
             timestamp_semantics='bar_start', captured_at_et=now.isoformat(), symbols=symbols,
+            fresh_provider_read=bool(fresh_provider_read),
             source='Yahoo Finance via YFinanceProvider.history' if provider == 'yfinance' else provider,
             records=records)
         digest = sha256_payload(document)
@@ -118,7 +120,11 @@ class MinuteStore:
                     if prior is None or prior['target'] != target:
                         correction = correction or prior is not None
                         prior = dict(target=target, first_captured_at_et=captured, confirmed=False)
-                    elif captured_time > _stamp(prior['first_captured_at_et']).astimezone(ET):
+                    elif (captured_time > _stamp(prior['first_captured_at_et']).astimezone(ET)
+                          and (observation.get('fresh_provider_read') is True
+                               or ('fresh_provider_read' not in observation
+                                   and captured_time.date() > _stamp(
+                                       prior['first_captured_at_et']).astimezone(ET).date()))):
                         prior['confirmed'] = True
                     prior.update(captured_at_et=captured,
                                  observation_sha256=observation['observation_sha256'])
@@ -168,9 +174,13 @@ def refresh_minute_observations(*, research_root, rows, profile, observed_at=Non
         if not symbols:
             continue
         try:
-            data = provider.history(sorted(symbols), start=day, end=day + timedelta(days=1),
-                                    interval='1m', prepost=False)
-            snapshot = store.observe(day.isoformat(), sorted(symbols), data, provider='yfinance', observed_at=now)
+            history = getattr(provider, 'fresh_history', provider.history)
+            data = history(sorted(symbols), start=day, end=day + timedelta(days=1),
+                           interval='1m', prepost=False)
+            fresh = hasattr(provider, 'fresh_history') or getattr(
+                provider, 'last_history_was_fresh', True)
+            snapshot = store.observe(day.isoformat(), sorted(symbols), data, provider='yfinance',
+                                     observed_at=now, fresh_provider_read=fresh)
             receipt = snapshot['latest_refresh']
             if receipt['status'] != 'available':
                 failures.append(dict(trade_date=day.isoformat(), error_type='UnavailableMinuteTargets',
