@@ -232,6 +232,15 @@ const setInterval=()=>{{}};
         self.assertIn('未完成', incomplete)
         self.assertIn('仍有模拟持仓', incomplete)
 
+    def test_historical_provisional_never_claims_forward_account_entry(self):
+        html = self.render('dayHtml', {
+            'status':'provisional','scope':'historical','trades':[], 'orders':[],
+            'closing_cash':10023.4,
+        })
+        self.assertIn('初步', html)
+        self.assertIn('历史回放余额', html)
+        self.assertNotIn('已计入持续账户净值', html)
+
     def test_daily_account_row_shows_score_net_cumulative_and_balance(self):
         html = self.render('overviewHtml', {
             'rules':{'initial_cash':10000,'per_prediction_budget':1000,

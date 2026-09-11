@@ -88,12 +88,31 @@ renderHistory=function(){
     (!wb.filters.to||row.trade_date<=wb.filters.to)&&
     (!wb.filters.version||historyIdentity(row).filter_key===wb.filters.version)&&
     (!wb.filters.model||(row.model||'未记录模型')===wb.filters.model));
+  const accountRows=state.data.dashboard.virtual_accounts?.results||[];
+  const header=q('.result-table thead tr');
+  if(header)header.innerHTML='<th>日期</th><th>版本</th><th>最终结果</th><th>正确 / 错误</th><th>账户当日净盈亏</th><th>账户累计净盈亏</th><th>账户余额</th><th>状态 / 范围</th>';
   for(const tr of qa('.result-table tr[data-batch]')){
     const row=rows.find(item=>item.batch_id===tr.dataset.batch&&item.variant_key===tr.dataset.variantKey);
+    const account=accountRows.find(item=>item.batch_id===tr.dataset.batch&&item.variant_key===tr.dataset.variantKey);
     if(row&&['provisional','final'].includes(row.status)&&tr.children[3]){
       tr.children[3].textContent=`${row.correct} / ${row.incorrect}`;
     }
+    if(row&&tr.children[6]){
+      tr.children[4].textContent=SHAQAccounts.usd(account?.net_pnl);
+      tr.children[5].textContent=SHAQAccounts.usd(account?.account_cumulative_net_pnl);
+      const balance=document.createElement('td');
+      balance.textContent=SHAQAccounts.usd(account?.account_balance);
+      tr.insertBefore(balance,tr.children[6]);
+      if(account){
+        const scope=account.scope==='historical'
+          ? `${SHAQAccounts.scopeName(account.scope)} · 不进入前瞻账户`
+          : SHAQAccounts.scopeName(account.scope);
+        tr.children[7].textContent=`${tr.children[7].textContent||''}${tr.children[7].textContent?' · ':''}${scope}`;
+      }
+    }
   }
+  const table=q('.result-table');
+  if(table&&rows.length)table.insertAdjacentHTML('afterend',`<details class="one-share-reference"><summary>一股零成本参考（不计入账户）</summary>${rows.map(row=>`<p>${esc(row.trade_date)} · ${esc(historyMethod(row))} · 当日 ${money(row.daily_pnl)} · 累计 ${money(row.cumulative_pnl)}</p>`).join('')}</details>`);
   const scored=rows.filter(row=>row.score_eligible!==false&&['provisional','final'].includes(row.status));
   const good=scored.reduce((sum,row)=>sum+Number(row.correct||0),0);
   const bad=scored.reduce((sum,row)=>sum+Number(row.incorrect||0),0);

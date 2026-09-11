@@ -5,6 +5,36 @@ from pathlib import Path
 
 
 class ReviewViewTests(unittest.TestCase):
+    def test_final_history_chain_promotes_matching_account_values_to_primary_table(self):
+        source = (Path(__file__).parents[1] / 'src/shaq_daily_oracle/desktop/review.js').read_text(encoding="utf-8")
+        harness = '''
+const window={showCandidate(){}};let renderBatch=()=>{},reference='';
+const cells=Array.from({length:7},()=>({textContent:'',innerHTML:''}));
+const tr={dataset:{batch:'b',variantKey:'team/main'},children:cells,insertBefore(node,before){this.children.splice(this.children.indexOf(before),0,node)}};
+const header={innerHTML:''},table={insertAdjacentHTML:(where,html)=>reference=html};
+let renderHistory=()=>{};
+const esc=x=>String(x??''),moduleName=x=>x,dir=x=>x,money=x=>x==null?'—':`${Number(x)>=0?'+':''}$${Number(x).toFixed(2)}`;
+const document={createElement:tag=>tag==='td'?{textContent:''}:{innerHTML:''}},notice=()=>{},api=async()=>{};
+const SHAQAccounts={methodMeta:()=>({}),statusName:x=>x,usd:x=>x==null?'—':'$'+Number(x).toFixed(2),scopeName:x=>x==='historical'?'历史回放 · 不入前瞻账户':x};
+const wb={filters:{}},historyIdentity=row=>({filter_key:row.variant_key});
+const historyMethod=row=>row.variant_key;
+const daily={batch_id:'b',variant_key:'team/main',trade_date:'2026-09-09',model:'m',status:'final',score_eligible:false,correct:1,incorrect:0,daily_pnl:4.23,cumulative_pnl:4.23};
+const account={batch_id:'b',variant_key:'team/main',scope:'historical',status:'final',net_pnl:23.40,account_cumulative_net_pnl:23.40,account_balance:10023.40};
+const state={data:{dashboard:{daily_results:[daily],virtual_accounts:{results:[account]}}}};
+const summary={firstChild:{textContent:''}};
+const q=s=>s==='#history .result-summary'?summary:s==='.result-table thead tr'?header:s==='.result-table'?table:null;
+const qa=s=>s==='.result-table tr[data-batch]'?[tr]:[];
+'''
+        output = subprocess.check_output(['node', '-'], input=harness + source + '''
+renderHistory();console.log(JSON.stringify({header:header.innerHTML,cells:tr.children.map(x=>x.textContent),reference}));
+''', text=True, encoding='utf-8')
+        value = json.loads(output)
+        self.assertIn('账户当日净盈亏', value['header'])
+        self.assertEqual(value['cells'][4:7], ['$23.40', '$23.40', '$10023.40'])
+        self.assertIn('历史回放', value['cells'][-1])
+        self.assertIn('一股零成本参考', value['reference'])
+        self.assertIn('+\u00244.23', value['reference'])
+
     def test_immediate_summary_respects_filters_and_preserves_empty_count(self):
         source = (Path(__file__).parents[1] / 'src/shaq_daily_oracle/desktop/review.js').read_text(encoding="utf-8")
         harness = '''

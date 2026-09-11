@@ -121,7 +121,9 @@ const SHAQAccounts = (() => {
     const refresh = row.latest_refresh && row.latest_refresh.status !== 'available'
       ? `<p class="account-note">最近刷新 ${localTime(row.latest_refresh.captured_at_et)}：目标分钟不可用 ${e(JSON.stringify(row.latest_refresh.missing_targets || {}))}。保留此前目标分钟证据；本次缺失不构成新的独立确认。原始读取记录 ${e(row.latest_refresh.observation_sha256 || '')}</p>` : '';
     const provisional = row.status === 'provisional'
-      ? '<p class="provisional-note">初步模拟结算已计入持续账户净值；稍后真实读取到相同目标分钟后标记为已复核。</p>' : '';
+      ? row.scope === 'historical'
+        ? '<p class="provisional-note">初步模拟结算仅计入历史回放余额，不进入持续账户净值；稍后真实读取到相同目标分钟后标记为已复核。</p>'
+        : '<p class="provisional-note">初步模拟结算已计入持续账户净值；稍后真实读取到相同目标分钟后标记为已复核。</p>' : '';
     const incomplete = row.status === 'incomplete'
       ? `<p class="incomplete-note">未完成：退出分钟缺失，仍有模拟持仓 ${e(JSON.stringify(row.closing_positions || {}))}；不伪造退出成交或最终盈亏。</p>` : '';
     const summary = row.status === 'empty' ? '<p>本日空榜，没有模拟交易或成本。</p>' :
