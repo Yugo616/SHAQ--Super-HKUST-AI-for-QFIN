@@ -47,6 +47,9 @@ class AccountRules:
         if any(getattr(self, name) is not None and (not math.isfinite(getattr(self, name)) or getattr(self, name) <= 0)
                for name in optional):
             raise ValueError('Invalid risk sizing rule')
+        if any(getattr(self, name) is not None and getattr(self, name) > 1
+               for name in ('risk_fraction', 'per_symbol_cap', 'gross_cap')):
+            raise ValueError('Risk fractions and caps cannot exceed account equity')
         if self.lookback is not None and (isinstance(self.lookback, bool) or self.lookback < 2):
             raise ValueError('Risk lookback must be at least two trading days')
 
@@ -62,7 +65,8 @@ def _rules_dict(rules):
     return {key: value for key, value in asdict(rules).items() if value is not None}
 
 
-def freeze_risk_sizing(predictions, history, *, trade_date, frozen_at_et, lookback=20):
+def freeze_risk_sizing(predictions, history, *, trade_date, frozen_at_et, lookback=20,
+                       policy_sha256=None):
     """Attach point-in-time volatility evidence to a new prediction copy."""
     _time(frozen_at_et)
     output = []
@@ -71,6 +75,11 @@ def freeze_risk_sizing(predictions, history, *, trade_date, frozen_at_et, lookba
         for row in history.get(prediction['symbol'], []):
             day_text = str(row.get('date') or row.get('timestamp') or '')[:10]
             if not day_text or day_text >= trade_date:
+                continue
+            if market_session(date.fromisoformat(day_text)) is None:
+                continue
+            available_at = row.get('available_at_et') or row.get('captured_at_et')
+            if available_at and _time(available_at) > _time(frozen_at_et):
                 continue
             opening, closing = row.get('open'), row.get('close')
             if all(isinstance(value, (int, float)) and not isinstance(value, bool)
@@ -86,6 +95,7 @@ def freeze_risk_sizing(predictions, history, *, trade_date, frozen_at_et, lookba
         sizing = dict(lookback=lookback, observation_count=len(eligible),
                       latest_observation_date=eligible[-1]['date'] if eligible else None,
                       frozen_at_et=frozen_at_et, price_basis='unadjusted_same_day_close/open-1')
+        sizing['policy_sha256'] = policy_sha256
         if len(eligible) == lookback:
             mean = math.fsum(row['return_value'] for row in eligible) / lookback
             sizing['sigma'] = math.sqrt(math.fsum((row['return_value'] - mean) ** 2
@@ -94,6 +104,7 @@ def freeze_risk_sizing(predictions, history, *, trade_date, frozen_at_et, lookba
             sizing['sigma'] = None
             sizing['unavailable_reason'] = 'insufficient_prior_trading_days'
         sizing['inputs_sha256'] = sha256_payload(eligible)
+        sizing['observations'] = eligible
         output.append({**prediction, 'risk_sizing': sizing})
     return output
 
@@ -104,7 +115,8 @@ def _positive(value):
     return Decimal(str(value))
 
 
-def replay_day(trade_date, predictions, labels, rules: AccountRules, *, cash=None, minute=None):
+def replay_day(trade_date, predictions, labels, rules: AccountRules, *, cash=None, minute=None,
+               fixed_quantities=None, policy_sha256=None):
     """Execute frozen directions only against dedicated minute observations."""
     from .minute_execution import Bar, Rules, SessionInput, Signal, run_session
     from .minute_settlements import target_bars
@@ -152,28 +164,46 @@ def replay_day(trade_date, predictions, labels, rules: AccountRules, *, cash=Non
     unavailable = {}
     if rules.risk_fraction is not None:
         ticket_budgets = {}
-        gross_remaining = cash * rules.gross_cap
+        raw_budgets = {}
         for prediction in predictions:
             sizing = prediction.get('risk_sizing') or {}
             sigma = sizing.get('sigma')
             reason = None
             if not isinstance(sigma, (int, float)) or isinstance(sigma, bool) or not math.isfinite(sigma) or sigma <= 0:
                 reason = 'missing_frozen_sigma'
-            elif sizing.get('lookback') != rules.lookback:
+            elif sizing.get('lookback') != rules.lookback or sizing.get('observation_count') != rules.lookback:
                 reason = 'invalid_frozen_lookback'
             elif not sizing.get('inputs_sha256') or not sizing.get('frozen_at_et'):
                 reason = 'missing_frozen_sizing_provenance'
-            elif sizing.get('latest_observation_date', trade_date) >= trade_date:
+            elif policy_sha256 is not None and sizing.get('policy_sha256') != policy_sha256:
+                reason = 'frozen_sizing_policy_mismatch'
+            elif sha256_payload(sizing.get('observations', [])) != sizing.get('inputs_sha256'):
+                reason = 'invalid_frozen_sizing_hash'
+            if reason is None:
+                returns = [item.get('return_value') for item in sizing['observations']]
+                if any(not isinstance(value, (int, float)) or not math.isfinite(value) for value in returns):
+                    reason = 'invalid_frozen_sigma'
+                else:
+                    mean = math.fsum(returns) / len(returns)
+                    expected_sigma = math.sqrt(math.fsum((value - mean) ** 2 for value in returns) /
+                                               (len(returns) - 1))
+                    if not math.isclose(sigma, expected_sigma, rel_tol=1e-12, abs_tol=1e-15):
+                        reason = 'invalid_frozen_sigma'
+            if reason is None and _time(sizing['frozen_at_et']) > _time(result['entry_reference_at_et']):
+                reason = 'future_sizing_data_rejected'
+            if reason is None and sizing.get('latest_observation_date', trade_date) >= trade_date:
                 reason = 'future_sizing_data_rejected'
             budget = 0. if reason else min(cash * rules.risk_fraction / sigma,
-                                           cash * rules.per_symbol_cap, gross_remaining)
-            ticket_budgets[prediction['symbol']] = max(0., budget)
-            gross_remaining -= ticket_budgets[prediction['symbol']]
+                                           cash * rules.per_symbol_cap)
+            raw_budgets[prediction['symbol']] = max(0., budget)
             if reason:
                 unavailable[prediction['symbol']] = reason
+        scale = min(1., cash * rules.gross_cap / math.fsum(raw_budgets.values())) if any(raw_budgets.values()) else 1.
+        ticket_budgets = {symbol: budget * scale for symbol, budget in raw_budgets.items()}
     engine = run_session(SessionInput(trade_date, tuple(
         Signal(p['symbol'], 1 if p['direction'] == 'bullish' else -1)
-        for p in predictions), bars, ticket_budgets=ticket_budgets),
+        for p in predictions), bars, ticket_budgets=ticket_budgets,
+        fixed_shares=fixed_quantities),
         Rules(initial_cash=max(0., cash), ticket_budget=rules.per_prediction_budget,
               commission=rules.commission_rate, slippage=rules.slippage_rate))
     if not engine['reconciled'] or not engine['zero_cost']['reconciled']:
@@ -284,6 +314,9 @@ class AccountStore:
             return value
 
     def refresh(self, rows):
+        for settlement in (self.root / 'settlements').glob('*.json'):
+            if sha256_payload(json.loads(settlement.read_text(encoding='utf-8'))) != settlement.stem:
+                raise ValueError('Settlement revision was modified')
         path = self.root / 'activation.json'
         if not path.exists():
             return dict(accounts=[], results=[], rules=None, legacy=self.read_legacy())
@@ -326,9 +359,25 @@ class AccountStore:
                     and (rules_hash is None or value.get('rules_hash') == rules_hash)
                     and value.get('labels_hash') == sha256_payload(row.get('labels', {}))
                     and value.get('minute_hash') == sha256_payload(row.get('minute', {}))
-                    and value.get('status') in ('final', 'provisional', 'empty')):
+                    and value.get('status') in ('final', 'provisional', 'empty', 'incomplete', 'unavailable')):
                 matches.append((path.stem, value))
         return sorted(matches, key=lambda pair: pair[0])[-1] if matches else None
+
+    def saved_quantities_for(self, row, rules_hash):
+        matches = []
+        for path in (self.root / 'settlements').glob('*.json'):
+            value = json.loads(path.read_text(encoding='utf-8'))
+            if sha256_payload(value) != path.stem:
+                raise ValueError('Settlement revision was modified')
+            if (value.get('source_result_hash') == row.get('variant_result_sha256')
+                    and value.get('rules_hash') == rules_hash
+                    and value.get('status') in ('final', 'provisional', 'incomplete', 'unavailable')):
+                matches.append((value.get('processed_at_et', ''), path.stem, value))
+        if not matches:
+            return None
+        _, digest, value = sorted(matches)[0]
+        return digest, {trade['symbol']: int(trade.get('quantity') or 0)
+                        for trade in value.get('trades', [])}
 
     def view(self, rows):
         """Read cached aggregation only. Background reconciliation owns engine work."""
@@ -429,8 +478,18 @@ class AccountStore:
                     try:
                         replay_rules = rules if scope == 'forward' else replace(
                             rules, risk_fraction=None, lookback=None, per_symbol_cap=None, gross_cap=None)
+                        exact_saved = self.saved_settlement_for(row, rules_hash=rules_hash)
+                        frozen = None if exact_saved else self.saved_quantities_for(row, rules_hash)
                         replay = replay_day(row['trade_date'], row['predictions'], row['labels'], replay_rules,
-                                            cash=cash, minute=row.get('minute'))
+                                            cash=cash, minute=row.get('minute'),
+                                            fixed_quantities=frozen[1] if frozen else None,
+                                            policy_sha256=rules_hash if scope == 'forward' else None)
+                        if frozen:
+                            replay.update(sizing_source_settlement_hash=frozen[0], quantities_reused=True)
+                        elif exact_saved and exact_saved[1].get('quantities_reused'):
+                            replay.update(
+                                sizing_source_settlement_hash=exact_saved[1]['sizing_source_settlement_hash'],
+                                quantities_reused=True)
                     except (ValueError, RuntimeError) as exc:
                         replay = {'status': 'error', 'error': str(exc), 'orders': [], 'trades': []}
                 entry = dict(base, **replay)
@@ -492,6 +551,11 @@ class AccountStore:
                         and item.get('status') in ('final', 'provisional', 'empty'))
                     account.update(equity=seed, gross_equity=seed,
                                    opening_simulation_balance=seed, peak=seed)
+                    account['blocked'] = any(
+                        item.get('account_id') == account['account_id']
+                        and item.get('scope') == 'historical'
+                        and item.get('status') not in ('final', 'provisional', 'empty', 'duplicate')
+                        for item in results)
                 for item in results:
                     if item.get('account_id') in accounts and item.get('status') == 'pending':
                         item['source_scope'] = 'simulation_cumulative'
@@ -517,8 +581,17 @@ class AccountStore:
 def reconcile_activation(store, rows, *, activated_at, apply=False):
     """One reviewed controller entrypoint. Preview performs no filesystem writes."""
     rules = experimental_risk_rules()
-    sources = []
+    eligible_rows = {}
     for row in rows:
+        if row.get('source_eligible') is not True or _late(row):
+            continue
+        key = (row['trade_date'], row.get('method_identity', row['series_key']),
+               row.get('model_identity', row.get('model')))
+        rank = (_completion(row) or datetime.max.replace(tzinfo=ET), row['batch_id'], row['variant_key'])
+        if key not in eligible_rows or rank < eligible_rows[key][0]:
+            eligible_rows[key] = (rank, row)
+    sources = []
+    for _, row in eligible_rows.values():
         saved = store.saved_settlement_for(row)
         if saved:
             digest, document = saved

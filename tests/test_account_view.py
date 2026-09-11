@@ -320,7 +320,7 @@ const setInterval=()=>{{}};
         self.assertIn('正式基准', html)
         self.assertIn('Zipline-reloaded 3.1.1', html)
         self.assertIn('持续账户', html)
-        self.assertIn('历史 / 练习（不入账）', html)
+        self.assertIn('历史来源 / 练习（前瞻统计分开）', html)
         self.assertIn('旧版已保存结果（只读）', html)
         self.assertIn('Backtrader', html)
         self.assertIn('saved-only', html)

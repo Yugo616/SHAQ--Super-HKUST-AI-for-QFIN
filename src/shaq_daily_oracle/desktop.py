@@ -111,6 +111,10 @@ class DesktopBridge:
     def refresh_prices_and_results(self) -> dict[str, Any]:
         return self._result(self.lab.start_result_refresh, manual=True)
 
+    def check_result_refresh_due(self) -> dict[str, Any]:
+        """Local due check; network work starts only for an eligible date."""
+        return self._result(self.lab.start_result_refresh, manual=False)
+
     def check_operator_mode(self) -> dict[str, Any]:
         def check() -> dict[str, Any]:
             if sys.platform != "darwin":

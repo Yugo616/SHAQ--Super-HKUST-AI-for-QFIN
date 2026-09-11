@@ -904,17 +904,7 @@ class LabService:
                     self.paths.research_root / "jobs" / f"{job_id}-research.jsonl"
                 ).append,
             )
-            try:
-                label_refresh = refresh_research_labels(
-                    research_root=self.paths.research_root,
-                    batches_root=self.paths.batches_root,
-                    profile=DataProfile.from_dict(settings["data_profile"]),
-                    openbb_api_key=(self.settings.get_openbb_secret() or "") if settings["data_profile"].get("market_provider") == "openbb-rest" else "",
-                )
-                label_refresh['minute_settlement'] = self._refresh_minute_accounts(
-                    DataProfile.from_dict(settings['data_profile']))
-            except Exception as exc:
-                label_refresh = {"status": "failed", "error": str(exc)}
+            label_refresh = self.start_result_refresh(manual=False)
             completed = result["status"]["all_variants_completed"]
             self._set_job(
                 job_id, status="complete" if completed else "partial_failure",

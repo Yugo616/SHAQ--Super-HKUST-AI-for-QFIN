@@ -206,6 +206,7 @@ class VirtualAccountTests(unittest.TestCase):
             account = first['accounts'][0]
             self.assertAlmostEqual(account['opening_simulation_balance'], 10014.3820045)
             self.assertAlmostEqual(account['equity'], 10014.3820045)
+            self.assertTrue(account['blocked'])
             self.assertEqual(first['results'][1]['status'], 'pending')
             self.assertEqual(first['results'][1]['source_scope'], 'simulation_cumulative')
             self.assertEqual(store.refresh([history, pending]), first)
@@ -213,12 +214,11 @@ class VirtualAccountTests(unittest.TestCase):
     def test_risk_sizing_uses_frozen_prior_volatility_and_rejects_missing(self):
         api = self.api()
         rules = api.experimental_risk_rules(lookback=2)
-        predictions = [
-            {'symbol':'AAA','direction':'bullish','risk_sizing':{
-                'sigma':.02, 'lookback':2, 'latest_observation_date':'2026-09-08',
-                'frozen_at_et':'2026-09-09T08:00:00-04:00', 'inputs_sha256':'aaa'}},
-            {'symbol':'BBB','direction':'bearish'},
-        ]
+        base = [{'symbol':'AAA','direction':'bullish'}, {'symbol':'BBB','direction':'bearish'}]
+        histories = {'AAA':[{'date':'2026-09-04','open':100,'close':98.5857864376},
+                            {'date':'2026-09-08','open':100,'close':101.4142135624}]}
+        predictions = api.freeze_risk_sizing(base, histories, trade_date='2026-09-09',
+            frozen_at_et='2026-09-09T08:00:00-04:00', lookback=2)
         result = api.replay_day('2026-09-09', predictions, self.labels(), rules,
                                 cash=10000, minute=self.minute())
         self.assertEqual(result['trades'][0]['quantity'], 9)
@@ -227,7 +227,10 @@ class VirtualAccountTests(unittest.TestCase):
         doubled = api.replay_day('2026-09-09', predictions, self.labels(), rules,
                                  cash=20000, minute=self.minute())
         self.assertEqual(doubled['trades'][0]['quantity'], 19)
-        predictions[0]['risk_sizing']['sigma'] = .04
+        histories['AAA'] = [{'date':'2026-09-04','open':100,'close':97.1715728752},
+                            {'date':'2026-09-08','open':100,'close':102.8284271248}]
+        predictions = api.freeze_risk_sizing(base, histories, trade_date='2026-09-09',
+            frozen_at_et='2026-09-09T08:00:00-04:00', lookback=2)
         half = api.replay_day('2026-09-09', predictions, self.labels(), rules,
                               cash=10000, minute=self.minute())
         self.assertEqual(half['trades'][0]['quantity'], 4)
@@ -249,7 +252,7 @@ class VirtualAccountTests(unittest.TestCase):
         api = self.api()
         predictions = [{'symbol':'AAA','direction':'bullish'}]
         history = {'AAA': [
-            {'date':'2026-09-07','open':100,'close':101},
+            {'date':'2026-09-04','open':100,'close':101},
             {'date':'2026-09-08','open':100,'close':103},
             {'date':'2026-09-09','open':100,'close':50},
         ]}
@@ -306,6 +309,29 @@ class VirtualAccountTests(unittest.TestCase):
             with patch.object(index, 'batch_detail', side_effect=detail):
                 rows = index._daily_results(batches)
             self.assertEqual([r['batch_id'] for r in rows if r['score_eligible']], ['zzz-first'])
+
+    def test_dashboard_groups_verified_document_aliases_and_preserves_frozen_sizing(self):
+        from shaq_daily_oracle.research_dashboard import ResearchDashboardIndex
+        with tempfile.TemporaryDirectory() as tmp:
+            index = ResearchDashboardIndex(batches_root=Path(tmp)/'batches', database=Path(tmp)/'index.db')
+            batches = [dict(batch_id=name, trade_date='2026-09-09', source_valid=True)
+                       for name in ('first', 'later')]
+            sizing = {'sigma':.02, 'lookback':20, 'observation_count':20,
+                      'inputs_sha256':'frozen', 'frozen_at_et':'2026-09-09T08:00:00-04:00'}
+            def detail(batch):
+                key = 'old/alias' if batch == 'first' else 'team/current'
+                variant = {'variant':{'version_sha256':batch, 'label':key},
+                           'model_profile_sha256':'model', 'score_eligible':True,
+                           'completed_at_et':'2026-09-09T08:'+('00' if batch == 'first' else '30')+':00-04:00',
+                           'predictions':[{'symbol':'AAA','direction':'bullish','risk_sizing':sizing}]}
+                return {'evidence':{'cutoff_status':'on_time'}, 'variants':{key:variant},
+                        'skill_snapshots':{key:{'documents':{'skills/daily-oracle/SKILL.md':'same'}}},
+                        'labels':{'labels':{}}, 'status':{}}
+            with patch.object(index, 'batch_detail', side_effect=detail):
+                rows = index._daily_results(batches)
+            self.assertEqual(sum(row['score_eligible'] for row in rows), 1)
+            self.assertEqual(len({row['series_key'] for row in rows}), 1)
+            self.assertEqual(rows[0]['predictions'][0]['risk_sizing'], sizing)
 
 
 if __name__ == '__main__':

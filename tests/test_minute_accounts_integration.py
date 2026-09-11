@@ -53,6 +53,17 @@ class MinuteAccountIntegrationTests(unittest.TestCase):
         reviewed = self.fixture.row()
         self.assertEqual(settlement_due_dates([reviewed], datetime.fromisoformat('2026-09-10T16:05:00-04:00'), {}, app_open=True), [])
 
+    def test_late_open_consumes_each_retry_slot_once(self):
+        from shaq_daily_oracle.minute_settlements import record_settlement_attempt, load_settlement_attempts
+        row = self.fixture.row(); row['minute'] = {}
+        now = datetime.fromisoformat('2026-09-09T17:00:00-04:00')
+        for expected in (5, 15, 30, 60):
+            attempts = load_settlement_attempts(self.root)
+            self.assertEqual(settlement_due_dates([row], now, attempts), ['2026-09-09'])
+            updated = record_settlement_attempt(self.root, ['2026-09-09'], now)
+            self.assertIn(expected, updated['2026-09-09']['scheduled_offsets'])
+        self.assertEqual(settlement_due_dates([row], now, load_settlement_attempts(self.root)), [])
+
     def test_minute_refresh_filters_exact_due_dates_before_provider_call(self):
         rows = [self.fixture.row(), self.fixture.row('next', trade_date='2026-09-10')]
         class Provider:

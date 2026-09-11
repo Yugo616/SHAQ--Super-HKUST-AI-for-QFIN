@@ -308,6 +308,7 @@ class ResearchDashboardIndex:
         broker fill or feeds any result back into a premarket decision.
         """
         chronological = sorted(batches, key=lambda row: (str(row["trade_date"]), str(row["batch_id"])))
+        from .history_methods import method_document_identity
         details, first = {}, {}
         for batch in chronological:
             if not batch.get('source_valid'):
@@ -323,7 +324,9 @@ class ResearchDashboardIndex:
                 completed = variant.get('completed_at_et')
                 if not completed:
                     continue
-                identity = (batch['trade_date'], key, variant['variant'].get('version_sha256'), variant.get('model_profile_sha256'))
+                documents = detail.get('skill_snapshots', {}).get(key, {}).get('documents', {})
+                method_identity = method_document_identity(documents) or variant['variant'].get('version_sha256')
+                identity = (batch['trade_date'], method_identity, variant.get('model_profile_sha256'))
                 candidate = (datetime.fromisoformat(completed), batch['batch_id'])
                 if identity not in first or candidate < first[identity]:
                     first[identity] = candidate
@@ -347,10 +350,12 @@ class ResearchDashboardIndex:
             labels = detail.get("labels", {}).get("labels", {})
             for key, variant in sorted(detail.get("variants", {}).items()):
                 model_hash = str(variant.get("model_profile_sha256", ""))
-                series_key = key + ":" + str(variant.get("variant", {}).get("version_sha256", "")) + ":" + model_hash
+                documents = detail.get('skill_snapshots', {}).get(key, {}).get('documents', {})
+                method_identity = method_document_identity(documents) or variant.get('variant', {}).get('version_sha256')
+                series_key = str(method_identity) + ":" + model_hash
                 session_key = (str(batch["trade_date"]), series_key)
                 source_eligible = variant.get('score_eligible') is True and detail['evidence'].get('cutoff_status') == 'on_time'
-                identity = (batch['trade_date'], key, variant['variant'].get('version_sha256'), variant.get('model_profile_sha256'))
+                identity = (batch['trade_date'], method_identity, variant.get('model_profile_sha256'))
                 eligible = source_eligible and identity in first and first[identity][1] == batch['batch_id'] and session_key not in scored_sessions
                 if eligible:
                     scored_sessions.add(session_key)
@@ -396,7 +401,7 @@ class ResearchDashboardIndex:
                     "batch_id": batch["batch_id"], "trade_date": batch["trade_date"],
                     "variant_key": key, "label": variant.get("variant", {}).get("label", key),
                     "series_key": series_key, "score_eligible": eligible,
-                    "method_identity": variant.get('variant', {}).get('version_sha256'),
+                    "method_identity": method_identity,
                     "model_identity": variant.get('model_profile_sha256'),
                     "source_eligible": source_eligible,
                     "completed_at_et": variant.get('completed_at_et'),
@@ -404,7 +409,7 @@ class ResearchDashboardIndex:
                     "variant_result_sha256": variant.get('variant_result_sha256'),
                     "labels": {p['symbol']: labels.get(p['symbol'], {}) for p in predictions},
                     "model": variant.get("model_name") or next((x.get("response_model") for x in detail.get("model_calls", []) if x.get("response_model")), "未记录模型"),
-                    "predictions": [{"symbol": row.get("symbol"), "direction": row.get("direction")} for row in predictions],
+                    "predictions": [{key: row.get(key) for key in ('symbol', 'direction', 'risk_sizing') if key in row} for row in predictions],
                     "correct": correct, "incorrect": incorrect,
                     "daily_pnl": daily_pnl,
                     "cumulative_pnl": cumulative.get(series_key, previous),

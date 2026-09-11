@@ -105,9 +105,16 @@ def run_research_worker(paths):
         value = schedule_status(paths)
         lab = LabService(paths)
         refresh = lab.refresh_labels_if_due()
+        refresh_deadline = time.monotonic() + 180
         while refresh.get('status') in {'running', 'already_running'}:
             current = lab.result_refresh_status()
             if current.get('status') not in {'running', 'already_running'}:
+                break
+            if time.monotonic() >= refresh_deadline:
+                _atomic_json(paths.research_root / 'schedule_status.json', {
+                    'message': '收盘刷新等待超时；下次按持久化计划重试',
+                    'recorded_at': datetime.now(ET).isoformat(),
+                })
                 break
             time.sleep(.1)
         if not value["enabled"]:

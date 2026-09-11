@@ -203,6 +203,28 @@ class ResearchBatchTests(unittest.TestCase):
             self.assertEqual(variant["predictions"][0]["symbol"], "AAPL")
             self.assertEqual(variant["decision"]["audit"]["engine"], "quickjs-isolated")
 
+    def test_post_activation_new_result_persists_policy_bound_risk_sizing_and_reuse_is_identical(self):
+        from shaq_daily_oracle.virtual_accounts import AccountStore, experimental_risk_rules
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            registry = self.registry(root)
+            evidence = self.evidence(root)
+            activation = AccountStore(root/'virtual_accounts').activate(
+                experimental_risk_rules(lookback=2), '2026-09-04T08:00:00-04:00', continuity=True)
+            runner = ResearchBatchRunner(batches_root=root/'batches', cache_root=root/'cache',
+                registry=registry, integration_policy=self.policy())
+            first = runner.run(evidence=evidence, variants=[self.main_variant(registry)],
+                profile=self.profile(), secret='secret', caller=FakeModel())
+            result = next(iter(first['results'].values()))
+            sizing = result['predictions'][0]['risk_sizing']
+            self.assertEqual(sizing['policy_sha256'], sha256_payload(activation))
+            self.assertEqual(sizing['unavailable_reason'], 'insufficient_prior_trading_days')
+            saved = Path(first['batch_root'])/'variants'/'team--main'/'variant_result.json'
+            before = saved.read_bytes()
+            second = runner.run(evidence=evidence, variants=[self.main_variant(registry)],
+                profile=self.profile(), secret='secret', caller=FakeModel())
+            self.assertEqual(saved.read_bytes(), before)
+            self.assertEqual(next(iter(second['results'].values()))['predictions'], result['predictions'])
     def test_variant_order_does_not_change_batch_identity(self):
         with tempfile.TemporaryDirectory() as name:
             root = Path(name)

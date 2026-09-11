@@ -814,7 +814,7 @@ def run_variant(
                 histories[prediction['symbol']] = payload.get('daily', {}).get('bars', [])
             predictions = freeze_risk_sizing(
                 predictions, histories, trade_date=frozen_at[:10], frozen_at_et=frozen_at,
-                lookback=int(risk_rules['lookback']))
+                lookback=int(risk_rules['lookback']), policy_sha256=sha256_payload(activation))
     audit_by_symbol = integration_audit(
         reports_by_symbol=reports_by_symbol,
         adversary_by_symbol=adversary_by_symbol,

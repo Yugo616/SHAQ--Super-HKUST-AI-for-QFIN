@@ -55,6 +55,7 @@ class SessionInput:
     signals: tuple[Signal, ...]
     bars: Mapping[tuple[str, pd.Timestamp], Bar]
     ticket_budgets: Mapping[str, float] | None = None
+    fixed_shares: Mapping[str, int] | None = None
 
 
 def execution_schedule(session, rules):
@@ -267,8 +268,10 @@ def run_session(fixture, rules=Rules()):
             for value in fixture.ticket_budgets.values()
         ):
             raise ValueError("Ticket budgets require one finite nonnegative value per signal")
+        if math.fsum(fixture.ticket_budgets.values()) > rules.initial_cash + 1e-9:
+            raise ValueError("Ticket budgets cannot exceed opening cash")
     before = _direction_hash(fixture.signals)
-    result = _execute(fixture, rules)
+    result = _execute(fixture, rules, fixed_shares=fixture.fixed_shares)
     zero = _execute(fixture, replace(rules, commission=0., slippage=0.), fixed_shares=result["shares"])
     result.update({"engine": {"name": "zipline-reloaded", "version": zipline.__version__,
                               "blotter": "zipline.finance.blotter.simulation_blotter.SimulationBlotter",

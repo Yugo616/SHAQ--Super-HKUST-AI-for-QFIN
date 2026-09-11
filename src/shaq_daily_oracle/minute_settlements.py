@@ -214,7 +214,8 @@ def record_settlement_attempt(research_root, dates, now, *, app_open=False):
         item = attempts.setdefault(day_text, {'scheduled_offsets': []})
         session = market_session(date.fromisoformat(day_text))
         elapsed = (now - session.market_close).total_seconds() / 60 if session else 0
-        offset = next((value for value in reversed(RETRY_MINUTES) if elapsed >= value), None)
+        used = set(item['scheduled_offsets'])
+        offset = next((value for value in RETRY_MINUTES if elapsed >= value and value not in used), None)
         if offset in RETRY_MINUTES and offset not in item['scheduled_offsets']:
             item['scheduled_offsets'].append(offset)
             item['scheduled_offsets'].sort()

@@ -54,3 +54,21 @@ The full discovery test contains packaging/installer simulation tests; it emitte
 - `run_variant` calls `freeze_risk_sizing` before writing a genuinely new result only when the frozen evidence timestamp is at or after the risk-policy activation. It reads only that evidence bundle's archived stock bars; reused/old result documents return before this branch and remain byte-identical.
 - A predecessor price revision can change a pending successor's projected seed until that successor first settles. Once a successor settlement exists, controller review should require an explicit revision chain rather than silently changing its saved quantities.
 - No user runtime migration, activation, build, installation, dependency change, network/model call, or push was performed.
+
+## Review round 1
+
+Resolved the reviewer findings without activating or building:
+
+- Accounting method identity is now derived from normalized, hash-verified skill documents in the production dashboard path. Aliases with equivalent documents and the same model share the date/account identity; earliest eligible run selection no longer includes the raw version key.
+- Production dashboard rows retain the complete frozen `risk_sizing` object. A production `ResearchBatchRunner` integration test proves a new post-activation result persists the activation-policy hash and that reopening reuses the byte-identical result.
+- Volatility evidence now contains the actual observations, validates their content hash and recomputed sample sigma, accepts only distinct valid XNYS sessions before trade date, and rejects observations available after freeze time. The policy hash binds sizing to the activation that created it.
+- Price/confirmation revisions reuse the earliest saved integer quantities for the same source result and policy. Derived revisions record `sizing_source_settlement_hash` and `quantities_reused`; an exact repeat remains idempotent. Settlement integrity is checked before every refresh.
+- Historical unresolved rows mark the continuity account blocked, while the old-policy replay path remains available to settle that row. Preview applies source eligibility and earliest date/method/model selection before summing saved P/L.
+- Risk budgets are computed independently then scaled pro-rata to the gross cap; the execution boundary rejects supplied budgets exceeding opening cash.
+- Retry persistence consumes the same earliest unused +5/+15/+30/+60 slot selected by the due planner, preventing an infinite +5 retry. Post-batch automatic refresh routes through the same due gate. Worker refresh waiting is bounded.
+- The 60-second UI timer now calls only the local due endpoint and reloads the UI only when a refresh starts, preserving unsaved editor state during idle checks. Download and editor labels were standardized.
+- Local package identity was advanced from `0.6.2.dev2` to `0.6.2.dev3`; no release was published.
+
+Read-only real-data preview returned `applied: false` and exactly two projected method/model seed groups: `10023.397172171273` and `10000.0`.
+
+Fresh focused review verification: `Ran 91 tests in 4.808s — OK`, covering production research-batch sizing persistence, dashboard method equivalence/risk propagation, account revisions, scheduler persistence, worker/result refresh, UI account rendering, smoke, and Zipline execution. The controller-provided pre-review full suite result remains the authoritative 377-test baseline; it was not repeated because this fix round explicitly prohibited builds.
