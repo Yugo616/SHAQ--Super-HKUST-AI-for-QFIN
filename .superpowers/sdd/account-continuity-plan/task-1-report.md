@@ -72,3 +72,13 @@ Resolved the reviewer findings without activating or building:
 Read-only real-data preview returned `applied: false` and exactly two projected method/model seed groups: `10023.397172171273` and `10000.0`.
 
 Fresh focused review verification: `Ran 91 tests in 4.808s — OK`, covering production research-batch sizing persistence, dashboard method equivalence/risk propagation, account revisions, scheduler persistence, worker/result refresh, UI account rendering, smoke, and Zipline execution. The controller-provided pre-review full suite result remains the authoritative 377-test baseline; it was not repeated because this fix round explicitly prohibited builds.
+
+## Review round 2
+
+The second review was reproduced with behavior-level RED tests before changes. Historical pending rows now block their funded identity immediately during chronological processing, before any successor row is considered. Exact settlement matches are reconstructed from the immutable settlement and processing receipt without calling the execution engine. Revisions resolve the policy active at the row completion timestamp, select the earliest sizing receipt by `processing_started_at_et`, and reuse only quantities backed by a valid observed entry; an unavailable entry's zero does not prevent a later real entry from filling.
+
+Risk validation no longer trusts stored derived fields. It verifies timezone-aware freeze time, exact observation count, distinct dates, valid XNYS sessions, pre-trade dates, finite positive open/close, recomputed `close/open-1`, latest date, input hash and recomputed `ddof=1` sigma. Malformed data becomes a symbol-specific no-fill reason rather than aborting the day.
+
+Complete provisional dates no longer consume +15/+30/+60 missing-data retries and become due at the next trading session close+5 for independent confirmation. Late app-open confirmation is persisted separately. Owned refresh threads are joined before the batch or worker reports terminal completion; a bounded timeout writes a terminal `RefreshTimeout` receipt which a late thread cannot overwrite. Preview sums each selected settlement source exactly once even when its input row is repeated.
+
+Fresh round-2 focused verification: `Ran 98 tests in 4.733s — OK`. This included the new historical-pending ordering, exact no-replay, archived-policy revision, missing-entry recovery, malformed-risk, provisional confirmation, duplicate-preview and existing integration/smoke tests. No full build-bearing suite was run, per controller instruction.

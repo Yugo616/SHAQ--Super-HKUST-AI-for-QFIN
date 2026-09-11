@@ -105,8 +105,10 @@ def run_research_worker(paths):
         value = schedule_status(paths)
         lab = LabService(paths)
         refresh = lab.refresh_labels_if_due()
+        if refresh.get('status') == 'running':
+            refresh = lab.wait_result_refresh(refresh['operation_id'])
         refresh_deadline = time.monotonic() + 180
-        while refresh.get('status') in {'running', 'already_running'}:
+        while refresh.get('status') == 'already_running':
             current = lab.result_refresh_status()
             if current.get('status') not in {'running', 'already_running'}:
                 break

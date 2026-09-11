@@ -216,11 +216,13 @@ def record_settlement_attempt(research_root, dates, now, *, app_open=False):
         elapsed = (now - session.market_close).total_seconds() / 60 if session else 0
         used = set(item['scheduled_offsets'])
         offset = next((value for value in RETRY_MINUTES if elapsed >= value and value not in used), None)
-        if offset in RETRY_MINUTES and offset not in item['scheduled_offsets']:
+        if elapsed <= RETRY_MINUTES[-1] + 1 and offset in RETRY_MINUTES and offset not in item['scheduled_offsets']:
             item['scheduled_offsets'].append(offset)
             item['scheduled_offsets'].sort()
         if app_open:
             item['last_app_open_date'] = now.date().isoformat()
+        if session and now >= next_market_session(date.fromisoformat(day_text)).market_close + timedelta(minutes=5):
+            item['confirmation_attempted_at_et'] = now.isoformat()
         item['last_attempted_at_et'] = now.isoformat()
     _atomic_json(Path(research_root) / 'minute_refresh_attempts.json', attempts)
     return attempts
@@ -245,14 +247,21 @@ def settlement_due_dates(rows, now, attempts=None, *, app_open=False, manual=Fal
             continue
         if manual:
             due.append(day_text); continue
+        complete_provisional = all(
+            row.get('minute', {}).get('status') == 'provisional'
+            and all(value.get('status') in ('provisional', 'final')
+                    for value in row.get('labels', {}).values())
+            for row in day_rows)
         elapsed = (now - session.market_close).total_seconds() / 60
         used = set(attempts.get(day_text, {}).get('scheduled_offsets', []))
         offset = next((value for value in RETRY_MINUTES if elapsed >= value and value not in used), None)
-        if offset is not None and elapsed <= RETRY_MINUTES[-1] + 1:
+        if not complete_provisional and offset is not None and elapsed <= RETRY_MINUTES[-1] + 1:
             due.append(day_text); continue
         next_session = next_market_session(date.fromisoformat(day_text))
         confirmation_due = next_session.market_close + timedelta(minutes=5)
         local_day = now.date().isoformat()
+        if now >= confirmation_due and not attempts.get(day_text, {}).get('confirmation_attempted_at_et'):
+            due.append(day_text); continue
         if app_open and now >= confirmation_due and attempts.get(day_text, {}).get('last_app_open_date') != local_day:
             due.append(day_text)
     return due

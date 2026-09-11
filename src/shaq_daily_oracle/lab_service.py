@@ -210,14 +210,35 @@ class LabService:
             "eligible_dates": eligible_dates,
         }
         _atomic_json(self._result_refresh_receipt, running)
-        threading.Thread(
+        thread = threading.Thread(
             target=self._run_result_refresh,
             args=(lock, running, eligible_dates), daemon=True,
             name="shaq-result-refresh",
-        ).start()
+        )
+        self._owned_result_refresh = (operation_id, thread)
+        thread.start()
         return running
 
+    def wait_result_refresh(self, operation_id, timeout=180):
+        owned = getattr(self, '_owned_result_refresh', None)
+        if owned and owned[0] == operation_id:
+            owned[1].join(timeout)
+        value = self.result_refresh_status()
+        if value.get('operation_id') == operation_id and value.get('status') == 'running':
+            timed_out = {**value, 'status':'failed', 'error_type':'RefreshTimeout',
+                         'error':'Refresh exceeded bounded worker lifetime',
+                         'completed_at':datetime.now(ET).isoformat()}
+            _atomic_json(self._result_refresh_receipt, timed_out)
+            return timed_out
+        return value
+
     def _run_result_refresh(self, lock: FileLock, running: dict[str, Any], eligible_dates=None) -> None:
+        def finish(value):
+            current = self.result_refresh_status()
+            if (current.get('operation_id') == running['operation_id']
+                    and current.get('error_type') == 'RefreshTimeout'):
+                return
+            _atomic_json(self._result_refresh_receipt, value)
         try:
             profile = DataProfile.from_dict(self.settings.load()["data_profile"])
             if profile.market_provider != "yfinance":
@@ -235,12 +256,12 @@ class LabService:
             minute = result.get("minute_settlement", {})
             failures.extend(minute.get("failures", []))
             status = "partial_failure" if failures else "complete"
-            _atomic_json(self._result_refresh_receipt, {
+            finish({
                 **running, "status": status, "completed_at": datetime.now(ET).isoformat(),
                 "result": result, "failure_count": len(failures),
             })
         except Exception as exc:
-            _atomic_json(self._result_refresh_receipt, {
+            finish({
                 **running, "status": "failed", "completed_at": datetime.now(ET).isoformat(),
                 "error_type": type(exc).__name__, "error": str(exc),
             })
@@ -905,6 +926,8 @@ class LabService:
                 ).append,
             )
             label_refresh = self.start_result_refresh(manual=False)
+            if label_refresh.get('status') == 'running':
+                label_refresh = self.wait_result_refresh(label_refresh['operation_id'])
             completed = result["status"]["all_variants_completed"]
             self._set_job(
                 job_id, status="complete" if completed else "partial_failure",

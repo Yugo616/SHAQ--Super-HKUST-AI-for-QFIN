@@ -115,6 +115,46 @@ def _positive(value):
     return Decimal(str(value))
 
 
+def _risk_sizing_reason(sizing, rules, trade_date, entry_reference):
+    sigma = sizing.get('sigma')
+    if not isinstance(sigma, (int, float)) or isinstance(sigma, bool) or not math.isfinite(sigma) or sigma <= 0:
+        return 'missing_frozen_sigma'
+    observations = sizing.get('observations')
+    if (sizing.get('lookback') != rules.lookback or sizing.get('observation_count') != rules.lookback
+            or not isinstance(observations, list) or len(observations) != rules.lookback):
+        return 'invalid_frozen_lookback'
+    if not sizing.get('inputs_sha256') or not sizing.get('frozen_at_et'):
+        return 'missing_frozen_sizing_provenance'
+    if sha256_payload(observations) != sizing['inputs_sha256']:
+        return 'invalid_frozen_sizing_hash'
+    try:
+        frozen_at = _time(sizing['frozen_at_et'])
+        if frozen_at > _time(entry_reference):
+            return 'future_sizing_data_rejected'
+        dates, returns = [], []
+        for item in observations:
+            day_text = str(item['date'])
+            day = date.fromisoformat(day_text)
+            opening, closing, stated = item['open'], item['close'], item['return_value']
+            if (day_text >= trade_date or market_session(day) is None
+                    or any(isinstance(value, bool) or not isinstance(value, (int, float))
+                           or not math.isfinite(value) or value <= 0 for value in (opening, closing))):
+                return 'invalid_frozen_observation'
+            computed = closing / opening - 1
+            if not isinstance(stated, (int, float)) or not math.isclose(stated, computed, rel_tol=1e-12, abs_tol=1e-15):
+                return 'invalid_frozen_observation'
+            dates.append(day_text); returns.append(computed)
+        if len(set(dates)) != len(dates) or sizing.get('latest_observation_date') != max(dates):
+            return 'invalid_frozen_observation'
+    except (KeyError, TypeError, ValueError):
+        return 'invalid_frozen_observation'
+    mean = math.fsum(returns) / len(returns)
+    expected = math.sqrt(math.fsum((value - mean) ** 2 for value in returns) / (len(returns) - 1))
+    if not math.isclose(sigma, expected, rel_tol=1e-12, abs_tol=1e-15):
+        return 'invalid_frozen_sigma'
+    return None
+
+
 def replay_day(trade_date, predictions, labels, rules: AccountRules, *, cash=None, minute=None,
                fixed_quantities=None, policy_sha256=None):
     """Execute frozen directions only against dedicated minute observations."""
@@ -168,31 +208,9 @@ def replay_day(trade_date, predictions, labels, rules: AccountRules, *, cash=Non
         for prediction in predictions:
             sizing = prediction.get('risk_sizing') or {}
             sigma = sizing.get('sigma')
-            reason = None
-            if not isinstance(sigma, (int, float)) or isinstance(sigma, bool) or not math.isfinite(sigma) or sigma <= 0:
-                reason = 'missing_frozen_sigma'
-            elif sizing.get('lookback') != rules.lookback or sizing.get('observation_count') != rules.lookback:
-                reason = 'invalid_frozen_lookback'
-            elif not sizing.get('inputs_sha256') or not sizing.get('frozen_at_et'):
-                reason = 'missing_frozen_sizing_provenance'
-            elif policy_sha256 is not None and sizing.get('policy_sha256') != policy_sha256:
+            reason = _risk_sizing_reason(sizing, rules, trade_date, result['entry_reference_at_et'])
+            if reason is None and policy_sha256 is not None and sizing.get('policy_sha256') != policy_sha256:
                 reason = 'frozen_sizing_policy_mismatch'
-            elif sha256_payload(sizing.get('observations', [])) != sizing.get('inputs_sha256'):
-                reason = 'invalid_frozen_sizing_hash'
-            if reason is None:
-                returns = [item.get('return_value') for item in sizing['observations']]
-                if any(not isinstance(value, (int, float)) or not math.isfinite(value) for value in returns):
-                    reason = 'invalid_frozen_sigma'
-                else:
-                    mean = math.fsum(returns) / len(returns)
-                    expected_sigma = math.sqrt(math.fsum((value - mean) ** 2 for value in returns) /
-                                               (len(returns) - 1))
-                    if not math.isclose(sigma, expected_sigma, rel_tol=1e-12, abs_tol=1e-15):
-                        reason = 'invalid_frozen_sigma'
-            if reason is None and _time(sizing['frozen_at_et']) > _time(result['entry_reference_at_et']):
-                reason = 'future_sizing_data_rejected'
-            if reason is None and sizing.get('latest_observation_date', trade_date) >= trade_date:
-                reason = 'future_sizing_data_rejected'
             budget = 0. if reason else min(cash * rules.risk_fraction / sigma,
                                            cash * rules.per_symbol_cap)
             raw_budgets[prediction['symbol']] = max(0., budget)
@@ -372,12 +390,27 @@ class AccountStore:
             if (value.get('source_result_hash') == row.get('variant_result_sha256')
                     and value.get('rules_hash') == rules_hash
                     and value.get('status') in ('final', 'provisional', 'incomplete', 'unavailable')):
-                matches.append((value.get('processed_at_et', ''), path.stem, value))
+                receipt_path = self.root / 'processing' / (path.stem + '.json')
+                receipt = json.loads(receipt_path.read_text(encoding='utf-8')) if receipt_path.exists() else {}
+                started = receipt.get('processing_started_at_et')
+                if started:
+                    _time(started)
+                matches.append((started or '9999', path.stem, value))
         if not matches:
             return None
         _, digest, value = sorted(matches)[0]
         return digest, {trade['symbol']: int(trade.get('quantity') or 0)
-                        for trade in value.get('trades', [])}
+                        for trade in value.get('trades', [])
+                        if trade.get('entry_reference_open') is not None and int(trade.get('quantity') or 0) > 0}
+
+    def policy_for_row(self, row, fallback):
+        completion = _completion(row)
+        if completion is None:
+            return fallback
+        policies = [json.loads(path.read_text(encoding='utf-8'))
+                    for path in (self.root / 'policies').glob('*.json')]
+        eligible = [item for item in policies if _time(item['activated_at']) <= completion]
+        return max(eligible, key=lambda item: _time(item['activated_at'])) if eligible else fallback
 
     def view(self, rows):
         """Read cached aggregation only. Background reconciliation owns engine work."""
@@ -466,24 +499,32 @@ class AccountStore:
                     continue
                 cash = account['equity'] if account else rules.initial_cash
                 processing_started = datetime.now(ET).isoformat()
-                saved = (self.saved_settlement_for(row, exclude_rules_hash=rules_hash)
-                         if scope == 'historical' and policy.get('continuity') else None)
-                if saved:
+                applicable_policy = self.policy_for_row(row, policy) if scope == 'historical' else policy
+                applicable_rules = AccountRules(**applicable_policy['rules'])
+                applicable_hash = sha256_payload(applicable_policy)
+                exact_saved = self.saved_settlement_for(row, rules_hash=applicable_hash)
+                if exact_saved and exact_saved[1].get('opening_cash') != cash:
+                    exact_saved = None
+                saved = exact_saved
+                if not saved and scope == 'historical' and policy.get('continuity'):
+                    saved = self.saved_settlement_for(row, exclude_rules_hash=rules_hash)
+                if saved and (saved == exact_saved or scope == 'historical'):
                     source_hash, source_document = saved
                     replay = {key: value for key, value in source_document.items()
-                              if key not in base and key not in ('settlement_hash', 'rules_hash')}
-                    replay['source_settlement_hash'] = source_hash
-                    replay['replayed'] = False
+                              if key not in base and key not in ('settlement_hash', 'rules_hash',
+                                                                 'source_result_hash', 'labels_hash', 'minute_hash')}
+                    if saved != exact_saved or (scope == 'historical' and applicable_hash != rules_hash):
+                        replay['source_settlement_hash'] = source_hash
+                        replay['replayed'] = False
                 else:
                     try:
-                        replay_rules = rules if scope == 'forward' else replace(
-                            rules, risk_fraction=None, lookback=None, per_symbol_cap=None, gross_cap=None)
-                        exact_saved = self.saved_settlement_for(row, rules_hash=rules_hash)
-                        frozen = None if exact_saved else self.saved_quantities_for(row, rules_hash)
+                        replay_rules = applicable_rules if scope == 'forward' else replace(
+                            applicable_rules, risk_fraction=None, lookback=None, per_symbol_cap=None, gross_cap=None)
+                        frozen = self.saved_quantities_for(row, applicable_hash)
                         replay = replay_day(row['trade_date'], row['predictions'], row['labels'], replay_rules,
                                             cash=cash, minute=row.get('minute'),
                                             fixed_quantities=frozen[1] if frozen else None,
-                                            policy_sha256=rules_hash if scope == 'forward' else None)
+                                            policy_sha256=applicable_hash if scope == 'forward' else None)
                         if frozen:
                             replay.update(sizing_source_settlement_hash=frozen[0], quantities_reused=True)
                         elif exact_saved and exact_saved[1].get('quantities_reused'):
@@ -507,6 +548,8 @@ class AccountStore:
                         account['curve'].append(dict(date=row['trade_date'], equity=account['equity'], gross_equity=account['gross_equity']))
                     else:
                         account['blocked'] = True
+                elif scope == 'historical' and policy.get('continuity') and replay['status'] not in ('final', 'provisional', 'empty'):
+                    funded['blocked'] = True
                 entry['account_equity'] = account['equity'] if account else None
                 reference_balance = (
                     account['equity'] if account else replay.get('closing_cash')
@@ -595,23 +638,23 @@ def reconcile_activation(store, rows, *, activated_at, apply=False):
         saved = store.saved_settlement_for(row)
         if saved:
             digest, document = saved
+            projection_key = sha256_payload([row.get('method_identity', row['series_key']),
+                                             row.get('model_identity', row.get('model'))])
             sources.append({'trade_date': row['trade_date'], 'batch_id': row['batch_id'],
                             'variant_key': row['variant_key'], 'source_settlement_hash': digest,
-                            'source_scope': document.get('scope'), 'net_pnl': document.get('net_pnl')})
+                            'source_scope': document.get('scope'), 'net_pnl': document.get('net_pnl'),
+                            'projection_key': projection_key})
     preview = {'applied': False, 'activated_at': activated_at, 'rules': _rules_dict(rules),
                'row_count': len(rows), 'mode': 'simulation_cumulative',
                'source_settlements': sources,
                'projected_seed_by_method_model': {},
                'warning': 'Experimental defaults are not validated optimal.'}
-    for row in rows:
-        key = sha256_payload([row.get('method_identity', row['series_key']),
-                              row.get('model_identity', row.get('model'))])
-        matching = [item for item in sources if item['batch_id'] == row['batch_id']
-                    and item['variant_key'] == row['variant_key']]
-        if matching and matching[0]['net_pnl'] is not None:
+    for source in sources:
+        key = source['projection_key']
+        if source['net_pnl'] is not None:
             preview['projected_seed_by_method_model'][key] = (
                 preview['projected_seed_by_method_model'].get(key, rules.initial_cash)
-                + float(matching[0]['net_pnl']))
+                + float(source['net_pnl']))
     if not apply:
         return preview
     activation = store.activate(rules, activated_at, continuity=True)

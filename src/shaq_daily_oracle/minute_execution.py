@@ -177,7 +177,8 @@ def _execute(fixture, rules, fixed_shares=None):
                 # either input order or short-sale cash inflows financing tickets.
                 reserve_per_share = opening * (1 + rules.slippage) * (1 + rules.commission)
                 budget = (fixture.ticket_budgets or {}).get(signal.symbol, budgets)
-                shares = fixed_shares[signal.symbol] if fixed_shares is not None else math.floor(budget / reserve_per_share)
+                shares = (fixed_shares[signal.symbol] if fixed_shares is not None and signal.symbol in fixed_shares
+                          else math.floor(budget / reserve_per_share))
                 if shares:
                     order_id = blotter.order(assets[signal.symbol], shares * signal.direction,
                                              MarketOrder(), order_id=f"entry:{signal.symbol}")
