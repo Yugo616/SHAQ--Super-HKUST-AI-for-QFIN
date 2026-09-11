@@ -151,12 +151,34 @@ def uses_local_subscription(profile: ModelProfile) -> bool:
     return profile.protocol in {"codex-cli", "claude-code"}
 
 
+_IS_WINDOWS = os.name == "nt"
+
+# The only environment a local model CLI receives; never evidence or credentials.
+_LOCAL_CLI_ENV_KEYS = frozenset({"PATH", "HOME", "LANG", "LC_ALL", "TERM", "USER", "TMPDIR"})
+# Windows runtimes (Bun for Claude Code, Node/Rust for Codex) need these system
+# locations to open network sockets and resolve the user profile; without
+# SYSTEMROOT, Bun refuses every network request. os.environ upper-cases its keys
+# on Windows, so these names must be upper-case to match.
+_WINDOWS_CLI_ENV_KEYS = frozenset({
+    "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "USERPROFILE",
+    "APPDATA", "LOCALAPPDATA", "TEMP", "TMP", "PATHEXT", "COMSPEC",
+})
+# npm places an extension-less POSIX shell script beside its .cmd shim, which
+# CreateProcess cannot run, so on Windows only these launchers count.
+_WINDOWS_EXECUTABLE_SUFFIXES = (".exe", ".cmd", ".bat")
+
+
 def find_desktop_cli(executable: str, search_roots: list[Path]) -> str | None:
     """Native windows do not inherit a terminal's augmented PATH."""
+    names = (
+        [executable + suffix for suffix in _WINDOWS_EXECUTABLE_SUFFIXES]
+        if _IS_WINDOWS else [executable]
+    )
     for root in search_roots:
-        direct = root / executable
-        if direct.is_file() and os.access(direct, os.X_OK):
-            return str(direct)
+        for name in names:
+            direct = root / name
+            if direct.is_file() and os.access(direct, os.X_OK):
+                return str(direct)
         if executable != 'codex':
             continue
         for bundle in sorted(root.glob('*.app')):
@@ -172,10 +194,13 @@ def find_desktop_cli(executable: str, search_roots: list[Path]) -> str | None:
 
 def _local_cli(profile: ModelProfile) -> str:
     executable = "codex" if profile.protocol == "codex-cli" else "claude"
-    located = shutil.which(executable) or find_desktop_cli(executable, [
+    search_roots = [
         Path.home() / '.local/bin', Path('/opt/homebrew/bin'), Path('/usr/local/bin'),
         Path('/Applications'), Path.home() / 'Applications',
-    ])
+    ]
+    if _IS_WINDOWS and os.environ.get("APPDATA"):
+        search_roots.append(Path(os.environ["APPDATA"]) / "npm")
+    located = shutil.which(executable) or find_desktop_cli(executable, search_roots)
     if not located:
         raise ModelBackendError(
             f"未找到 {executable}。请在此电脑先安装并登录，再回到应用连接。"
@@ -186,10 +211,8 @@ def _local_cli(profile: ModelProfile) -> str:
 def _local_cli_environment() -> dict[str, str]:
     """Keep only ordinary locale/PATH values; never pass evidence through env vars."""
 
-    return {
-        key: value for key, value in os.environ.items()
-        if key in {"PATH", "HOME", "LANG", "LC_ALL", "TERM", "USER", "TMPDIR"}
-    }
+    allowed = _LOCAL_CLI_ENV_KEYS | (_WINDOWS_CLI_ENV_KEYS if _IS_WINDOWS else frozenset())
+    return {key: value for key, value in os.environ.items() if key in allowed}
 
 
 def _codex_cli_call(
