@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -12,19 +13,30 @@ class ResearchProgressLogTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "progress.jsonl"
             first = ResearchProgressLog(path, clock=lambda: "2026-09-11T08:00:00-04:00")
-            first.append(stage="domain_call_start", batch_id="B", variant_key="team/main",
+            start = first.append(stage="call_requested", batch_id="B", variant_key="team/main",
                          symbols=["AAPL", "MSFT"], domain="market", call_id="call-1",
                          attempt=1)
             second = ResearchProgressLog(path, clock=lambda: "2026-09-11T08:00:03-04:00")
-            second.append(stage="domain_call_return", batch_id="B", variant_key="team/main",
+            second.append(stage="model_returned", batch_id="B", variant_key="team/main",
                           symbols=["AAPL", "MSFT"], domain="market", call_id="call-1",
-                          attempt=1, status="complete", elapsed_seconds=3.0)
+                          attempt=start["attempt"], status="complete", elapsed_seconds=3.0)
 
             rows = second.read()
             self.assertEqual([row["sequence"] for row in rows], [1, 2])
             self.assertEqual(rows[0]["symbols"], ["AAPL", "MSFT"])
             self.assertEqual(rows[0]["occurred_at_et"], "2026-09-11T08:00:00-04:00")
             self.assertEqual(rows[1]["elapsed_seconds"], 3.0)
+            self.assertEqual(rows[0]["attempt"], rows[1]["attempt"])
+
+    def test_locked_sidecar_returns_immediately(self):
+        from filelock import FileLock
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "progress.jsonl"
+            lock = FileLock(str(path) + ".lock"); lock.acquire()
+            started = time.monotonic()
+            self.assertIsNone(ResearchProgressLog(path).append(stage="preparation"))
+            self.assertLess(time.monotonic() - started, 0.1)
+            lock.release()
 
     def test_bad_observer_and_unreadable_tail_are_nonblocking(self):
         safe_observe(lambda **event: (_ for _ in ()).throw(OSError("disk")), stage="preparation")

@@ -302,8 +302,8 @@ class ResearchBatchTests(unittest.TestCase):
         self.assertEqual(observed["results"]["team/main"]["model_profile_sha256"],
                          ignored["results"]["team/main"]["model_profile_sha256"])
         stages = {event["stage"] for event in events}
-        self.assertTrue({"preparation", "screening", "domain_call_start",
-                         "domain_call_return", "report_validated", "adversary",
+        self.assertTrue({"preparation", "screening", "call_requested",
+                         "model_started", "model_returned", "report_validated", "adversary",
                          "decision_complete"}.issubset(stages))
         self.assertTrue(all(event.get("variant_key") in (None, "team/main") for event in events))
         self.assertFalse(any("raw_output" in event for event in events))

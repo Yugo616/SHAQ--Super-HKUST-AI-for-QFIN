@@ -1,5 +1,5 @@
 // Three work surfaces share the existing desktop bridge and immutable records.
-const wb={filters:{},selectedModule:'',draft:'',base:null,scheduleSelectionsLoaded:false};
+const wb={filters:{},selectedModule:'',draft:'',base:null,scheduleSelectionsLoaded:false,researchSelections:{}};
 const formalState=s=>({waiting:'等待开始',workflow_running:'正式流程运行中',workflow_complete:'正式流程完成',workflow_failed:'正式流程失败',connected_to_existing_worker:'已连接原后台',missed_daily_cutoff:'已错过盘前截止',session_already_recorded:'今日已完成',configuration_error:'配置错误',setup_required:'需要完成连接'}[s]||s||'等待后台回应');
 async function showFormalRun(id){try{const run=await api('get_run',id);const target=q('#formal-detail');target.innerHTML=`<h3>${esc(run.trade_date)} · 正式模拟盘</h3><p>${run.predictions.map(p=>`${esc(p.symbol)} ${dir(p.direction)}`).join('、')||'没有发布预测'} · 模拟订单 ${run.orders.length} 笔</p><label>股票 <select id="formal-symbol">${Object.keys(run.reports_by_symbol).map(s=>`<option>${esc(s)}</option>`).join('')}</select></label><div id="formal-analysis"></div>`;const draw=()=>{const symbol=q('#formal-symbol').value;q('#formal-analysis').innerHTML=(run.reports_by_symbol[symbol]||[]).map(r=>`<h4>${esc(moduleName(r.domain))} · ${dir(r.verdict)}</h4><p>${esc(r.thesis||'')}</p><p>反方：${esc(r.antithesis||'')}</p>`).join('')};q('#formal-symbol').onchange=draw;draw()}catch(e){notice(e.message,true)}}
 const moduleName=id=>({decision:'最终决策',screening:'候选筛选',market:'市场环境',relationships:'行业与关系传导',event:'公司催化事件',capital:'买卖压力与流动性',derivatives:'期权定价与仓位线索',price_volume:'价格走势与参与度',adversary:'反方审查'}[id]||(state.data?.skill_explanations?.[id]||id).split(' · ')[0]);
@@ -14,12 +14,13 @@ function openUtility(page,title){let layer=q('#utility');if(!layer){layer=docume
 function teamSync(){openUtility('upload','团队同步');const bar=document.createElement('div');bar.className='editor-tabs';bar.innerHTML='<button class="secondary" id="sync-upload">上传我的版本</button><button class="secondary" id="sync-download">获取团队版本</button>';q('#utility-content').prepend(bar);q('#sync-upload').onclick=()=>teamSync();q('#sync-download').onclick=()=>{q('#upload').classList.remove('active');document.querySelector('main').append(q('#upload'));q('#utility-content').append(q('#updates'));q('#updates').classList.add('active');renderUpdates()}}
 renderRun=function(){
   const s=state.data.settings, versions=state.data.versions||[], profiles=s.model_profiles||[];
+  const progressJobs=(state.data.jobs||[]).map(job=>({...job,research_selection:wb.researchSelections[job.job_id]||{}}));
   if(state.runSelections===null)state.runSelections=new Set(versions.filter(v=>v.status_badge==='正式基准').map(versionKey));
   const rows=versions.map(v=>`<tr><td><input class="version-check" type="checkbox" data-author="${esc(v.author||'team')}" data-version="${esc(v.version_id)}" ${state.runSelections.has(versionKey(v))?'checked':''}></td><td>${esc(versionName(v))} <span class="method-badge">${esc(v.status_badge||'本地版本')}</span><br><small>${esc(v.description||'')}</small></td><td>${esc(v.author||'团队')}</td><td>${esc(changed(v))}</td></tr>`).join('');
   q('#run').innerHTML=`<div class="run-toolbar"><span></span><button class="text-button" id="show-data">查看数据时间</button><label>模型 <select id="run-profile">${profiles.map(p=>`<option value="${esc(p.profile_id)}" ${p.profile_id===s.active_model_profile_id?'selected':''}>${esc(p.model)} · ${esc(p.profile_id)}</option>`).join('')}</select></label></div>
     <div class="sheet"><table class="table"><thead><tr><th></th><th>方法版本</th><th>作者</th><th>修改模块</th></tr></thead><tbody>${rows}</tbody></table><div class="run-actions"><button class="secondary" id="select-all">全选</button><button class="primary" id="start-batch" ${profiles.length?'':'disabled'}>运行选中版本</button></div><div id="estimate" class="estimate"></div></div>
     <details class="sheet" id="automatic-panel"><summary id="automatic-summary">读取自动运行设置…</summary><div id="automatic-settings"></div></details>
-    <section class="sheet"><h3>当日运行进度</h3><div id="today-progress">${SHAQProgress.progressHtml(state.data.jobs||[],versions,state.data.clock?.et||new Date().toISOString())}</div></section>`;
+    <section class="sheet"><h3>当日运行进度</h3><div id="today-progress">${SHAQProgress.progressHtml(progressJobs,versions,state.data.clock?.et||new Date().toISOString())}</div></section>`;
   q('#start-batch').onclick=startBatch;
   q('#select-all').onclick=()=>{const boxes=qa('.version-check'),on=boxes.some(b=>!b.checked);boxes.forEach(b=>b.checked=on);rememberSelections();estimate()};
   qa('.version-check').forEach(b=>b.onchange=()=>{rememberSelections();estimate()});
@@ -38,10 +39,14 @@ renderRun=function(){
     const article=select.closest('[data-progress-job]');
     const job=(state.data.jobs||[]).find(row=>row.job_id===article?.dataset.progressJob);
     if(!job)return;
-    job.research_selection={variant:article.querySelector('[data-research-variant]')?.value,
+    wb.researchSelections[job.job_id]={variant:article.querySelector('[data-research-variant]')?.value,
       symbol:article.querySelector('[data-research-symbol]')?.value,
-      open:[...article.querySelectorAll('[data-research-section][open]')].map(row=>row.dataset.researchSection)};
+      open:[...article.querySelectorAll('[data-research-section][open]')].map(row=>row.dataset.researchSection),outerOpen:true};
     renderRun();
+  });
+  qa('[data-progress-job] > .research-progress').forEach(panel=>panel.ontoggle=()=>{
+    const id=panel.closest('[data-progress-job]').dataset.progressJob;
+    wb.researchSelections[id]={...(wb.researchSelections[id]||{}),outerOpen:panel.open};
   });
   const panel=q('#automatic-panel');panel.open=Boolean(wb.autoPanelOpen);panel.ontoggle=()=>{wb.autoPanelOpen=panel.open};
   renderAutomatic();estimate();

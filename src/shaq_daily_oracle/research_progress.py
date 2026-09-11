@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Callable
 from zoneinfo import ZoneInfo
 
-from filelock import FileLock
+from filelock import FileLock, Timeout
 
 
 ET = ZoneInfo("America/New_York")
@@ -22,18 +22,29 @@ class ResearchProgressLog:
         self.clock = clock or (lambda: datetime.now(ET).isoformat())
         self._thread_lock = threading.Lock()
 
-    def append(self, *, stage: str, batch_id: str = "", **fields: Any) -> None:
+    def append(self, *, stage: str, batch_id: str = "", **fields: Any) -> dict[str, Any] | None:
         if _FORBIDDEN & fields.keys():
             raise ValueError("raw model inputs or outputs cannot be progress events")
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            return None
         lock = FileLock(str(self.path) + ".lock")
-        with self._thread_lock, lock:
+        if not self._thread_lock.acquire(blocking=False):
+            return None
+        try:
+            lock.acquire(timeout=0)
+        except Timeout:
+            self._thread_lock.release()
+            return None
+        try:
             previous = self.read()
             sequence = len(previous) + 1
             if fields.get("call_id") and "attempt" not in fields:
                 fields["attempt"] = 1 + sum(
-                    row.get("stage") == "domain_call_start"
-                    and row.get("call_id") == fields["call_id"] for row in previous
+                    row.get("stage") == "call_requested"
+                    and row.get("call_id") == fields["call_id"]
+                    and row.get("variant_key") == fields.get("variant_key") for row in previous
                 )
             event = {
                 "schema_version": 1,
@@ -46,6 +57,10 @@ class ResearchProgressLog:
             with self.path.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(event, sort_keys=True, ensure_ascii=False) + "\n")
                 handle.flush()
+            return event
+        finally:
+            lock.release()
+            self._thread_lock.release()
 
     def read(self) -> list[dict[str, Any]]:
         try:
@@ -63,10 +78,10 @@ class ResearchProgressLog:
         return sorted(rows, key=lambda row: row["sequence"])
 
 
-def safe_observe(observer: Callable[..., None] | None, **event: Any) -> None:
+def safe_observe(observer: Callable[..., None] | None, **event: Any) -> Any:
     if observer is None:
-        return
+        return None
     try:
-        observer(**event)
+        return observer(**event)
     except Exception:
-        pass
+        return None

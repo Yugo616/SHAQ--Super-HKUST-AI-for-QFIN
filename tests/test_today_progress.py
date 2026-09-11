@@ -12,7 +12,7 @@ class TodayProgressTests(unittest.TestCase):
                                        text=True, encoding='utf-8')
 
     def test_new_york_day_hides_yesterday_but_keeps_unfinished_work(self):
-        self.run_js("""
+        self.run_js(r"""
 const assert=require('node:assert/strict');
 const jobs=[
  {job_id:'old',status:'complete',started_at_et:'2026-09-09T08:00:00-04:00'},
@@ -41,7 +41,7 @@ console.log(ui.progressHtml([
         self.assertNotIn('<unsafe>', html)
 
     def test_only_failed_versions_are_selected_for_retry(self):
-        self.run_js("""
+        self.run_js(r"""
 const assert=require('node:assert/strict');
 assert.deepEqual(ui.retryVersions({variant_progress:{'team/main':'complete','bob/new':'failed'}}), [{author:'bob',version_id:'new'}]);
 assert.deepEqual(ui.retryVersions({status:'failed',variant_progress:{'team/main':'queued'}}), [{author:'team',version_id:'main'}]);
@@ -51,10 +51,10 @@ assert.doesNotMatch(ui.scheduleText({enabled:false,local_start:'下次启动：�
 """)
 
     def test_research_timeline_is_honest_escaped_and_keeps_selection(self):
-        self.run_js("""
+        self.run_js(r"""
 const assert=require('node:assert/strict');
 const events=[
- {sequence:1,stage:'domain_call_start',variant_key:'team/main',domain:'market',symbols:['AAPL','MSFT'],occurred_at_et:'2026-09-11T08:00:00-04:00'},
+ {sequence:1,stage:'call_requested',variant_key:'team/main',domain:'market',symbols:['AAPL','MSFT'],call_id:'c',attempt:1,status:'requested',occurred_at_et:'2026-09-11T08:00:00-04:00'},
  {sequence:2,stage:'report_validated',variant_key:'team/main',domain:'market',symbol:'AAPL',status:'complete',occurred_at_et:'2026-09-11T08:00:02-04:00',report:{thesis:'<b>x</b>',antithesis:'counter',unknowns:['u'],invalidation:['i'],evidence:[{provider:'SEC',captured_at:'08:00',source_uri:'https://example.test'}]}}
 ];
 const html=ui.researchHtml(events,[],{variant:'team/main',symbol:'AAPL',open:['domain-market']});

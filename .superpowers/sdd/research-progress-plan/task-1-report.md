@@ -75,3 +75,22 @@ Observed: `status=passed`, `fixture_kind=deterministic-model-fixture`, 30 events
 
 - The controller should remove or exclude the pre-existing `local-results-plan.md` from the release candidate before treating `scripts/validate_release.py` as green.
 - Native rendering/build review remains controller-owned. Use the deterministic smoke output for the new timeline; today's real completed batch is correctly treated as legacy and must not be backfilled with fabricated timestamps.
+
+## Reviewer round 1 fixes
+
+- Made both the in-process lock and JSONL file lock zero-wait; contention or filesystem failure now drops only the observer event.
+- Replaced ambiguous call start/return events with `call_requested`, `model_started`, `model_returned`, and `cache_hit`. Cache hits never claim that a model started.
+- Bound the exact content-addressed cache key to every group/task and reused the explicit attempt from request through the lifecycle. Whole-variant reuse emits reuse and validated-report events without fabricated calls.
+- Emitted deterministic no-data reports even in mixed model/no-data candidate groups.
+- Moved live selector, inner-section, and outer-section state into `wb.researchSelections`, which survives service-state replacement during polling.
+- Reworked counts around distinct call/report/stage task identities, terminal states and in-flight requests; wall elapsed is derived from event timestamps rather than summing overlapping stages. Timeline now includes all lifecycle, validation, adversary, decision, reuse and failure rows.
+- Added frozen observed evidence values alongside source, capture time, and unit in the primary report layout; no derived financial signal is calculated.
+- Removed the Python invalid-escape warning and added a zero-wait locked-sidecar regression.
+
+Round 1 verification:
+
+```text
+PYTHONPATH=src:tests .../venv-nolzo/bin/python -m unittest discover -s tests
+Ran 367 tests in 9.225s
+OK
+```

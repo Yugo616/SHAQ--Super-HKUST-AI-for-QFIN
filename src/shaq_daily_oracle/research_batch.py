@@ -373,6 +373,7 @@ class ContentAddressedModelCache:
         prompt: str,
         schema: dict[str, Any],
         caller: Callable[..., tuple[dict[str, Any], dict[str, Any]]] = call_structured,
+        on_model_start: Callable[[], None] | None = None,
     ) -> tuple[dict[str, Any], dict[str, Any], bool]:
         key_document = {
             "cache_schema_version": 2,
@@ -389,6 +390,8 @@ class ContentAddressedModelCache:
                 if document["prompt"] != prompt or document["schema"] != schema:
                     raise ResearchBatchError("model cache input differs from its content key")
                 return document["result"], self._public_audit(document), True
+            if on_model_start:
+                on_model_start()
             self._wait_for_rate_slot(profile)
             result, audit = caller(
                 profile=profile, secret=secret, prompt=prompt, schema=schema
@@ -548,24 +551,32 @@ def _run_domain(
         group.append(task)
     if group:
         groups.append(group)
-    rows, audits = [], []
+    rows, audits, call_by_task = [], [], {}
     for group in groups:
         schema = _report_schema()
         schema['properties']['results']['items']['properties']['task_id']['enum'] = [task['task_id'] for task in group]
         prompt = _domain_prompt(domain=domain, tasks=group, documents=documents)
-        call_id = sha256_payload({"profile": profile.identity(), "prompt": hashlib.sha256(prompt.encode("utf-8")).hexdigest(), "schema": sha256_payload(schema)})
+        call_id = sha256_payload({"cache_schema_version": 2, "profile_sha256": profile.identity(), "prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(), "schema_sha256": sha256_payload(schema)})
+        for task in group:
+            call_by_task[task["task_id"]] = call_id
         started = time.monotonic()
-        safe_observe(observer, stage="domain_call_start", batch_id=batch_id,
+        requested = safe_observe(observer, stage="call_requested", batch_id=batch_id,
                      variant_key=variant_key, domain=domain,
                      symbols=[task["symbol"] for task in group], call_id=call_id,
-                     status="running")
+                     status="requested", elapsed_seconds=0.0)
+        attempt = requested.get("attempt", 1) if isinstance(requested, dict) else 1
+        def model_start() -> None:
+            safe_observe(observer, stage="model_started", batch_id=batch_id,
+                         variant_key=variant_key, domain=domain,
+                         symbols=[task["symbol"] for task in group], call_id=call_id,
+                         attempt=attempt, status="running", elapsed_seconds=round(time.monotonic()-started, 3))
         result, audit, cache_hit = cache.call(profile=profile, secret=secret,
             prompt=prompt,
-            schema=schema, caller=caller)
-        safe_observe(observer, stage="domain_call_return", batch_id=batch_id,
+            schema=schema, caller=caller, on_model_start=model_start)
+        safe_observe(observer, stage="cache_hit" if cache_hit else "model_returned", batch_id=batch_id,
                      variant_key=variant_key, domain=domain,
                      symbols=[task["symbol"] for task in group], call_id=call_id,
-                     status="cache_hit" if cache_hit else "complete",
+                     attempt=attempt, status="cache_hit" if cache_hit else "complete",
                      elapsed_seconds=round(time.monotonic() - started, 3))
         group_rows = result.get('results') if isinstance(result, dict) else None
         if not isinstance(group_rows, list):
@@ -599,15 +610,25 @@ def _run_domain(
             raise
         report = reports[-1]
         catalog = {row["evidence_id"]: row for row in evidence.lineage["records"]}
+        observed = {row["evidence_id"]: row.get("content") for row in task["evidence"]}
         safe_observe(observer, stage="report_validated", batch_id=batch_id,
                      variant_key=variant_key, symbol=task["symbol"], domain=domain,
-                     call_id=next((row.get("cache_key") for row in audits[-1:] if row), ""),
+                     call_id=call_by_task.get(task["task_id"], ""),
                      status="validated", report={**report, "original": report,
-                         "evidence": [{key: catalog[eid].get(key) for key in
-                             ("evidence_id", "provider", "source_uri", "captured_at", "unit")}
+                         "evidence": [{**{key: catalog[eid].get(key) for key in
+                             ("evidence_id", "provider", "source_uri", "captured_at", "unit")},
+                             "observed": observed.get(eid)}
                              for eid in report.get("evidence_ids", []) if eid in catalog]})
     valid_reports = {task['task_id']: report for task, report in zip(tasks, reports, strict=True)}
     valid_reports.update(empty_reports)
+    for task in all_tasks:
+        if task["task_id"] not in empty_reports:
+            continue
+        report = empty_reports[task["task_id"]]
+        safe_observe(observer, stage="report_validated", batch_id=batch_id,
+                     variant_key=variant_key, symbol=task["symbol"], domain=domain,
+                     status="no_data", elapsed_seconds=round(time.monotonic()-domain_started, 3),
+                     report={**report, "original": report, "evidence": []})
     return [valid_reports[task['task_id']] for task in all_tasks], audits
 
 
@@ -664,6 +685,15 @@ def run_variant(
         unsigned = {key: value for key, value in result.items() if key != "variant_result_sha256"}
         if declared != sha256_payload(unsigned):
             raise ResearchBatchError("stored variant result hash mismatch")
+        safe_observe(observer, stage="variant_reused", batch_id=batch_id,
+                     variant_key=variant_key, symbols=sorted(result.get("reports_by_symbol", {})),
+                     status="complete", elapsed_seconds=round(time.monotonic()-stage_started, 3))
+        for symbol, reports in result.get("reports_by_symbol", {}).items():
+            for report in reports:
+                safe_observe(observer, stage="report_validated", batch_id=batch_id,
+                             variant_key=variant_key, symbol=symbol, domain=report.get("domain", ""),
+                             status="reused", elapsed_seconds=0.0,
+                             report={**report, "original": report, "evidence": []})
         return result
     documents = registry.effective_skills(variant.version_id, variant.author)
     screening_path = evidence.root / "raw/screening.json"
