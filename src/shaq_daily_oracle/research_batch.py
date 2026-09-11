@@ -23,6 +23,7 @@ from .decision_sandbox import build_decision_input, execute_decision_script, dec
 from .hashing import sha256_file, sha256_payload
 from .lineage import build_lineage_graph
 from .model_backends import ModelProfile, call_structured
+from .research_progress import safe_observe
 from .sandboxed_codex import (
     DOMAIN_SKILLS,
     _adversary_schema,
@@ -515,7 +516,11 @@ def _run_domain(
     secret: str,
     cache: ContentAddressedModelCache,
     caller: Callable[..., tuple[dict[str, Any], dict[str, Any]]],
+    observer: Callable[..., None] | None = None,
+    batch_id: str = "",
+    variant_key: str = "",
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    domain_started = time.monotonic()
     tasks = _tasks_for_domain(evidence, domain)
     from .module_rules import default_rule, execute_rule
     code = documents.get(f"modules/{domain}/compute.js")
@@ -527,6 +532,12 @@ def _run_domain(
                      if not task['evidence'] or task['collection_status'] != 'collected'}
     tasks = [task for task in tasks if task['task_id'] not in empty_reports]
     if not tasks:
+        for task in all_tasks:
+            report = empty_reports[task['task_id']]
+            safe_observe(observer, stage="report_validated", batch_id=batch_id,
+                         variant_key=variant_key, symbol=task["symbol"], domain=domain,
+                         status="no_data", elapsed_seconds=round(time.monotonic()-domain_started, 3),
+                         report={**report, "original": report, "evidence": []})
         return [empty_reports[task['task_id']] for task in all_tasks], []
     groups, group = [], []
     for task in tasks:
@@ -541,9 +552,21 @@ def _run_domain(
     for group in groups:
         schema = _report_schema()
         schema['properties']['results']['items']['properties']['task_id']['enum'] = [task['task_id'] for task in group]
+        prompt = _domain_prompt(domain=domain, tasks=group, documents=documents)
+        call_id = sha256_payload({"profile": profile.identity(), "prompt": hashlib.sha256(prompt.encode("utf-8")).hexdigest(), "schema": sha256_payload(schema)})
+        started = time.monotonic()
+        safe_observe(observer, stage="domain_call_start", batch_id=batch_id,
+                     variant_key=variant_key, domain=domain,
+                     symbols=[task["symbol"] for task in group], call_id=call_id,
+                     status="running")
         result, audit, cache_hit = cache.call(profile=profile, secret=secret,
-            prompt=_domain_prompt(domain=domain, tasks=group, documents=documents),
+            prompt=prompt,
             schema=schema, caller=caller)
+        safe_observe(observer, stage="domain_call_return", batch_id=batch_id,
+                     variant_key=variant_key, domain=domain,
+                     symbols=[task["symbol"] for task in group], call_id=call_id,
+                     status="cache_hit" if cache_hit else "complete",
+                     elapsed_seconds=round(time.monotonic() - started, 3))
         group_rows = result.get('results') if isinstance(result, dict) else None
         if not isinstance(group_rows, list):
             raise ResearchBatchError(f"{domain} model output has no result list")
@@ -564,9 +587,25 @@ def _run_domain(
         if raw.get("domain") != domain or raw.get("as_of_et") != task["as_of_et"]:
             raise ResearchBatchError(f"{domain} changed its frozen task identity")
         bound = _bind_verified_lineage(raw, evidence.lineage["evidence_to_roots"])
-        reports.append(validate_domain_report(
-            bound, evidence.lineage["evidence_to_roots"], evidence_domains
-        ))
+        try:
+            reports.append(validate_domain_report(
+                bound, evidence.lineage["evidence_to_roots"], evidence_domains
+            ))
+        except Exception as exc:
+            safe_observe(observer, stage="validation_failure", batch_id=batch_id,
+                         variant_key=variant_key, symbol=task["symbol"], domain=domain,
+                         status="failed", error_type=type(exc).__name__, message=str(exc),
+                         elapsed_seconds=round(time.monotonic()-domain_started, 3))
+            raise
+        report = reports[-1]
+        catalog = {row["evidence_id"]: row for row in evidence.lineage["records"]}
+        safe_observe(observer, stage="report_validated", batch_id=batch_id,
+                     variant_key=variant_key, symbol=task["symbol"], domain=domain,
+                     call_id=next((row.get("cache_key") for row in audits[-1:] if row), ""),
+                     status="validated", report={**report, "original": report,
+                         "evidence": [{key: catalog[eid].get(key) for key in
+                             ("evidence_id", "provider", "source_uri", "captured_at", "unit")}
+                             for eid in report.get("evidence_ids", []) if eid in catalog]})
     valid_reports = {task['task_id']: report for task, report in zip(tasks, reports, strict=True)}
     valid_reports.update(empty_reports)
     return [valid_reports[task['task_id']] for task in all_tasks], audits
@@ -610,7 +649,13 @@ def run_variant(
     integration_policy: dict[str, Any],
     output_root: Path,
     caller: Callable[..., tuple[dict[str, Any], dict[str, Any]]] = call_structured,
+    observer: Callable[..., None] | None = None,
+    batch_id: str = "",
 ) -> dict[str, Any]:
+    variant_key = f"{variant.author}/{variant.version_id}"
+    stage_started = time.monotonic()
+    safe_observe(observer, stage="preparation", batch_id=batch_id,
+                 variant_key=variant_key, status="complete", elapsed_seconds=round(time.monotonic()-stage_started, 3))
     variant_root = output_root / f"{_safe_name(variant.author)}--{_safe_name(variant.version_id)}"
     result_path = variant_root / "variant_result.json"
     if result_path.is_file():
@@ -630,6 +675,10 @@ def run_variant(
         if symbols is None:
             raise ResearchBatchError("此筛选版本没有共享的候选证据，请重新采集")
         evidence = replace(evidence, candidate_intake={**evidence.candidate_intake, "candidates": [c for c in evidence.candidate_intake["candidates"] if c["symbol"] in symbols]})
+    safe_observe(observer, stage="screening", batch_id=batch_id,
+                 variant_key=variant_key,
+                 symbols=[str(row["symbol"]).upper() for row in evidence.candidate_intake["candidates"]],
+                 status="complete", elapsed_seconds=round(time.monotonic()-stage_started, 3))
     reports_by_symbol = {
         str(row["symbol"]).upper(): [] for row in evidence.candidate_intake["candidates"]
     }
@@ -638,6 +687,7 @@ def run_variant(
         reports, domain_audits = _run_domain(
             domain=domain, evidence=evidence, documents=documents,
             profile=profile, secret=secret, cache=cache, caller=caller,
+            observer=observer, batch_id=batch_id, variant_key=variant_key,
         )
         for candidate, report in zip(evidence.candidate_intake["candidates"], reports, strict=True):
             reports_by_symbol[str(candidate["symbol"]).upper()].append(report)
@@ -646,6 +696,9 @@ def run_variant(
         reports_by_symbol=reports_by_symbol, documents=documents
     )
     if reports_by_symbol:
+        adversary_started = time.monotonic()
+        safe_observe(observer, stage="adversary", batch_id=batch_id,
+                     variant_key=variant_key, symbols=sorted(reports_by_symbol), status="running")
         adversary_result, adversary_audit, cache_hit = cache.call(
             profile=profile, secret=secret, prompt=adversary_prompt,
             schema=_adversary_schema(), caller=caller,
@@ -665,6 +718,9 @@ def run_variant(
         adversary_by_symbol[symbol] = validate_adversary_report(row.get("report", {}))
     if set(adversary_by_symbol) != set(reports_by_symbol):
         raise ResearchBatchError("adversary output does not match frozen candidates")
+    safe_observe(observer, stage="adversary", batch_id=batch_id,
+                 variant_key=variant_key, symbols=sorted(reports_by_symbol), status="complete",
+                 elapsed_seconds=round(time.monotonic() - adversary_started, 3) if reports_by_symbol else 0.0)
     if reports_by_symbol:
         audits.append({**adversary_audit, "domain": "adversary", "cache_hit": cache_hit})
     del integration_policy  # Decision policy is versioned code, not a hidden Python threshold.
@@ -708,6 +764,9 @@ def run_variant(
         audit["decision_evidence_root_ids"] = row["evidence_root_ids"]
         if row["action"] == "reject":
             audit["rejection_reasons"] = [row["reason"]]
+    safe_observe(observer, stage="decision_complete", batch_id=batch_id,
+                 variant_key=variant_key, symbols=sorted(reports_by_symbol),
+                 status="complete")
     completed_at = datetime.now(ZoneInfo("America/New_York"))
     cutoff = datetime.fromisoformat(evidence.manifest["scheduled_cutoff_et"])
     deadline = cutoff.replace(hour=9, minute=0, second=0, microsecond=0)
@@ -770,6 +829,7 @@ class ResearchBatchRunner:
         secret: str,
         caller: Callable[..., tuple[dict[str, Any], dict[str, Any]]] = call_structured,
         progress: Callable[[str, str], None] | None = None,
+        observer: Callable[..., None] | None = None,
     ) -> dict[str, Any]:
         if not variants:
             raise ResearchBatchError("select at least one Skill version")
@@ -860,6 +920,7 @@ class ResearchBatchRunner:
                 profile=profile, secret=secret, cache=self.cache,
                 integration_policy=self.integration_policy,
                 output_root=root / "variants", caller=caller,
+                observer=observer, batch_id=batch_id,
             )
             self.cache.snapshot_calls(
                 value.get("model_call_audits", []),
@@ -883,6 +944,9 @@ class ResearchBatchRunner:
                     if progress:
                         progress(completed_key, 'complete')
                 except Exception as exc:
+                    safe_observe(observer, stage="failure", batch_id=batch_id,
+                                 variant_key=key, status="failed",
+                                 error_type=type(exc).__name__, message=str(exc))
                     failures[key] = {
                         "error_type": type(exc).__name__, "message": str(exc)
                     }

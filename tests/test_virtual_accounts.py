@@ -138,6 +138,18 @@ class VirtualAccountTests(unittest.TestCase):
             store.activate(api.AccountRules(commission_rate=0), '2026-09-10T07:00:00-04:00')
             self.assertNotEqual(store.refresh(rows)['rules_hash'], first_id)
 
+    def test_same_version_and_model_inherits_next_day_opening_balance(self):
+        api = self.api()
+        with tempfile.TemporaryDirectory() as tmp:
+            store = api.AccountStore(Path(tmp)); store.activate(api.AccountRules(), '2026-09-09T07:00:00-04:00')
+            first = self.row()
+            second = self.row('day-two', '2026-09-10T08:00:00-04:00', trade_date='2026-09-10')
+            result = store.refresh([first, second])
+            rows = {row['batch_id']: row for row in result['results']}
+            self.assertAlmostEqual(rows['day-two']['opening_cash'], rows['zzz-first']['closing_cash'])
+            self.assertAlmostEqual(rows['day-two']['account_balance'], rows['day-two']['closing_cash'])
+            self.assertEqual(len(result['accounts']), 1)
+
     def test_future_completion_and_practice_never_enter_forward_account(self):
         api = self.api()
         with tempfile.TemporaryDirectory() as tmp:

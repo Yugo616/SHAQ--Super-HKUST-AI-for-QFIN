@@ -34,6 +34,15 @@ renderRun=function(){
     estimate(); notice('已选择失败版本，请确认上方模型后点击运行；成功分析会复用。');
     q('#start-batch').focus();
   });
+  qa('[data-research-variant],[data-research-symbol]').forEach(select=>select.onchange=()=>{
+    const article=select.closest('[data-progress-job]');
+    const job=(state.data.jobs||[]).find(row=>row.job_id===article?.dataset.progressJob);
+    if(!job)return;
+    job.research_selection={variant:article.querySelector('[data-research-variant]')?.value,
+      symbol:article.querySelector('[data-research-symbol]')?.value,
+      open:[...article.querySelectorAll('[data-research-section][open]')].map(row=>row.dataset.researchSection)};
+    renderRun();
+  });
   const panel=q('#automatic-panel');panel.open=Boolean(wb.autoPanelOpen);panel.ontoggle=()=>{wb.autoPanelOpen=panel.open};
   renderAutomatic();estimate();
 };
@@ -146,4 +155,24 @@ window.showCandidate=function(batchId,key,symbol){
   const section=document.createElement('section');section.className='synthesis-detail';
   section.innerHTML=`<h3>最终综合判断 · ${dir(row.direction)}</h3><p><b>主要依据：</b>${esc(row.thesis)}</p><p><b>最强反方：</b>${esc(row.antithesis)}</p><p><b>最终取舍：</b>${esc(row.resolution)}</p><p><b>为什么选择或放弃它：</b>${esc(row.comparison)}</p><p><b>还不知道：</b>${esc((row.unknowns||[]).join('；')||'无')}</p><p><b>何时失效：</b>${esc((row.invalidation||[]).join('；')||'未列明')}</p><details><summary>所引用的证据</summary>${(row.evidence_ids||[]).map(id=>`<p>${esc(id)}</p>`).join('')}</details>`;
   q('#candidate-analysis .aftermarket').before(section);
+};
+
+const renderBatchWithResearchProgress=renderBatch;
+renderBatch=function(batch,key,symbol){
+  const chosen=key&&batch.variants?.[key]?key:Object.keys(batch.variants||{})[0];
+  const chosenSymbol=symbol||state.replay?.symbol||Object.keys(batch.variants?.[chosen]?.reports_by_symbol||{})[0];
+  renderBatchWithResearchProgress(batch,chosen,chosenSymbol);
+  const reports=batch.variants?.[chosen]?.reports_by_symbol?.[chosenSymbol]||[];
+  const selection={variant:chosen,symbol:chosenSymbol,open:state.researchOpen||[]};
+  const box=document.createElement('details');box.className='card research-progress';box.open=true;
+  box.innerHTML=`<summary>研究执行明细</summary>${SHAQProgress.researchHtml(batch.research_progress||[],reports,selection)}`;
+  const head=q('.batch-head');
+  if(head?.parentNode)head.parentNode.insertBefore(box,head.nextSibling||null);
+  if(typeof box.querySelector==='function'){
+    box.querySelector('[data-research-variant]')?.addEventListener('change',e=>renderBatch(batch,e.target.value,chosenSymbol));
+    box.querySelector('[data-research-symbol]')?.addEventListener('change',e=>renderBatch(batch,chosen,e.target.value));
+  }
+  if(typeof box.querySelectorAll==='function')box.querySelectorAll('[data-research-section]').forEach(row=>row.addEventListener('toggle',()=>{
+    state.researchOpen=[...box.querySelectorAll('[data-research-section][open]')].map(item=>item.dataset.researchSection);
+  }));
 };

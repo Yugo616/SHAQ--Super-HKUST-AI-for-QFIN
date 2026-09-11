@@ -49,3 +49,23 @@ assert.deepEqual(ui.retryVersions({status:'complete',variant_progress:{'team/mai
 assert.match(ui.scheduleText({enabled:false}), /未开启/);
 assert.doesNotMatch(ui.scheduleText({enabled:false,local_start:'下次启动：明天'}), /明天/);
 """)
+
+    def test_research_timeline_is_honest_escaped_and_keeps_selection(self):
+        self.run_js("""
+const assert=require('node:assert/strict');
+const events=[
+ {sequence:1,stage:'domain_call_start',variant_key:'team/main',domain:'market',symbols:['AAPL','MSFT'],occurred_at_et:'2026-09-11T08:00:00-04:00'},
+ {sequence:2,stage:'report_validated',variant_key:'team/main',domain:'market',symbol:'AAPL',status:'complete',occurred_at_et:'2026-09-11T08:00:02-04:00',report:{thesis:'<b>x</b>',antithesis:'counter',unknowns:['u'],invalidation:['i'],evidence:[{provider:'SEC',captured_at:'08:00',source_uri:'https://example.test'}]}}
+];
+const html=ui.researchHtml(events,[],{variant:'team/main',symbol:'AAPL',open:['domain-market']});
+assert.match(html,/AAPL、MSFT/);
+assert.match(html,/实际任务 2/);
+assert.match(html,/&lt;b&gt;x&lt;\/b&gt;/);
+assert.doesNotMatch(html,/<b>x<\/b>/);
+assert.match(html,/data-research-symbol="AAPL"[^>]*selected/);
+assert.match(html,/data-research-section="domain-market" open/);
+assert.doesNotMatch(html,/%/);
+const legacy=ui.researchHtml([], [{domain:'event',thesis:'saved'}], {});
+assert.match(legacy,/旧记录没有执行时间线/);
+assert.match(legacy,/saved/);
+""")

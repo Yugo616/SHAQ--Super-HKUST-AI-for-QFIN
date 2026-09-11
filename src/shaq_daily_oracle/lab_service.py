@@ -29,6 +29,7 @@ from .research_batch import (
 from .research_collection import collect_research_evidence
 from .research_dashboard import ResearchDashboardIndex
 from .research_labels import refresh_research_labels
+from .research_progress import ResearchProgressLog
 from .research_settings import ResearchSettingsStore
 from .settings import _atomic_json
 from .skill_versions import (
@@ -881,6 +882,9 @@ class LabService:
             result = runner.run(
                 evidence=evidence, variants=variants, profile=profile, secret=secret,
                 progress=lambda key, status: self._variant_progress(job_id, key, status),
+                observer=ResearchProgressLog(
+                    self.paths.research_root / "jobs" / f"{job_id}-research.jsonl"
+                ).append,
             )
             try:
                 label_refresh = refresh_research_labels(
@@ -984,10 +988,18 @@ class LabService:
                     continue
         with self.jobs_lock:
             stored.update({key: dict(value) for key, value in self.jobs.items()})
+        for job_id, row in stored.items():
+            row["research_progress"] = ResearchProgressLog(
+                self.paths.research_root / "jobs" / f"{job_id}-research.jsonl"
+            ).read()
         return sorted(stored.values(), key=lambda row: str(row.get("started_at_et") or ""), reverse=True)
 
     def batch_detail(self, batch_id: str) -> dict[str, Any]:
         detail = self.dashboard.batch_detail(batch_id)
         accounts = self.dashboard.overview()['virtual_accounts']
         detail['virtual_accounts'] = dict(accounts, results=[r for r in accounts['results'] if r['batch_id'] == batch_id])
+        detail["research_progress"] = [
+            event for job in self.job_statuses() if job.get("batch_id") == batch_id
+            for event in job.get("research_progress", []) if event.get("batch_id") == batch_id
+        ]
         return detail

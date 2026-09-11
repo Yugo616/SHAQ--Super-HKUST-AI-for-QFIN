@@ -253,9 +253,11 @@ def run_lab_smoke(*, package_root: Path, output_root: Path) -> dict[str, Any]:
             (package_root / "config/integration.json").read_text(encoding="utf-8")
         ),
     )
+    from .research_progress import ResearchProgressLog
+    progress = ResearchProgressLog(output_root / "research-progress.jsonl")
     batch = runner.run(
         evidence=evidence, variants=variants, profile=profile, secret="",
-        caller=_DeterministicModel(),
+        caller=_DeterministicModel(), observer=progress.append,
     )
     batch_root = Path(batch["batch_root"])
     _atomic_json(batch_root / "labels.json", _signed_labels())
@@ -435,7 +437,8 @@ def run_lab_smoke(*, package_root: Path, output_root: Path) -> dict[str, Any]:
         "final_statuses": [row["status"] for row in final["results"]],
         "reopen_matches": reopened["accounts"] == final["accounts"] and reopened["results"] == final["results"],
         "account_contract": account_contract, "contract_checks": contract_checks,
-        "view_cases": view_cases, "browser_state": browser_state, "batch_detail": detail,
+        "view_cases": view_cases, "browser_state": browser_state,
+        "batch_detail": dict(detail, research_progress=progress.read()),
     }
     _atomic_json(output_root / "browser-state.json", browser_state)
     _atomic_json(output_root / "lab-smoke-result.json", value)

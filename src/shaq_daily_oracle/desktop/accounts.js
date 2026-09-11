@@ -127,7 +127,7 @@ const SHAQAccounts = (() => {
     const incomplete = row.status === 'incomplete'
       ? `<p class="incomplete-note">未完成：退出分钟缺失，仍有模拟持仓 ${e(JSON.stringify(row.closing_positions || {}))}；不伪造退出成交或最终盈亏。</p>` : '';
     const summary = row.status === 'empty' ? '<p>本日空榜，没有模拟交易或成本。</p>' :
-      `<p>零成本盈亏 ${usd(row.gross_pnl)} − 手续费 ${usd(row.fees)} − 滑点影响 ${usd(row.slippage_cost)} = 净盈亏 <b>${usd(row.net_pnl)}</b>${['provisional','final'].includes(row.status) ? ` · 账户余额 ${usd(row.closing_cash)}` : ''}</p>`;
+      `<p>零成本盈亏 ${usd(row.gross_pnl)} − 手续费 ${usd(row.fees)} − 滑点影响 ${usd(row.slippage_cost)} = 净盈亏 <b>${usd(row.net_pnl)}</b>${['provisional','final'].includes(row.status) ? ` · 期初 ${usd(row.opening_cash)} · 期末 ${usd(row.closing_cash)}` : ''}</p>`;
     const rows = tradeRows(row.trades, row);
     return intro + unavailable + refresh + provisional + incomplete + summary + (rows ? `
       <div class="account-scroll"><table class="table trade-detail"><thead><tr><th>股票</th><th>方向 / 数量</th><th>分钟参考</th><th>Zipline 模拟成交</th><th>官方 O→C 方向成绩</th><th>成本 / 净盈亏</th></tr></thead><tbody>${rows}</tbody></table></div>` : '') + `

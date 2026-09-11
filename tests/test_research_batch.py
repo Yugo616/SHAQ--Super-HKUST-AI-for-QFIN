@@ -278,6 +278,36 @@ class ResearchBatchTests(unittest.TestCase):
         self.assertIn("alice/bad-market", result["status"]["failed_variants"])
         self.assertEqual(result["results"]["team/main"]["orders"], [])
 
+    def test_progress_observer_is_isolated_and_does_not_change_predictions(self):
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            registry = self.registry(root)
+            evidence = self.evidence(root)
+            main = self.main_variant(registry)
+            runner = ResearchBatchRunner(
+                batches_root=root / "batches", cache_root=root / "cache",
+                registry=registry, integration_policy=self.policy(),
+            )
+            events = []
+            observed = runner.run(
+                evidence=evidence, variants=[main], profile=self.profile(), secret="secret",
+                caller=FakeModel(), observer=lambda **event: events.append(event),
+            )
+            ignored = runner.run(
+                evidence=evidence, variants=[main], profile=self.profile(), secret="secret",
+                caller=FakeModel(), observer=lambda **event: (_ for _ in ()).throw(OSError("disk")),
+            )
+        self.assertEqual(observed["results"]["team/main"]["predictions"],
+                         ignored["results"]["team/main"]["predictions"])
+        self.assertEqual(observed["results"]["team/main"]["model_profile_sha256"],
+                         ignored["results"]["team/main"]["model_profile_sha256"])
+        stages = {event["stage"] for event in events}
+        self.assertTrue({"preparation", "screening", "domain_call_start",
+                         "domain_call_return", "report_validated", "adversary",
+                         "decision_complete"}.issubset(stages))
+        self.assertTrue(all(event.get("variant_key") in (None, "team/main") for event in events))
+        self.assertFalse(any("raw_output" in event for event in events))
+
     def test_tampering_with_frozen_evidence_fails_before_analysis(self):
         with tempfile.TemporaryDirectory() as name:
             root = Path(name)
