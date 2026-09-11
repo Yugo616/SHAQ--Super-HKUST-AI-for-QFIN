@@ -278,7 +278,7 @@ def run_lab_smoke(*, package_root: Path, output_root: Path) -> dict[str, Any]:
     provisional = accounts.refresh(provisional_rows)
     final_minute = minute_store.observe(
         TRADE_DATE, ["AAPL"], _minute_records(), provider="yfinance",
-        observed_at="2026-09-10T16:10:00-04:00",
+        observed_at=f"{TRADE_DATE}T16:20:00-04:00",
     )
     final_rows = _account_rows(batch["results"], final_minute, batch_id=batch_id)
     final = accounts.refresh(final_rows)

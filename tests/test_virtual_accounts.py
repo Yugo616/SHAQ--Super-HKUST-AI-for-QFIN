@@ -115,7 +115,11 @@ class VirtualAccountTests(unittest.TestCase):
             self.assertAlmostEqual(account['equity'], 10176.400045)
             chosen = [x for x in r['results'] if x['scope'] == 'forward']
             self.assertEqual([x['batch_id'] for x in chosen], ['zzz-first'])
-            self.assertEqual(len([x for x in r['results'] if x['scope'] == 'historical']), 1)
+            historical = [x for x in r['results'] if x['scope'] == 'historical']
+            self.assertEqual(len(historical), 1)
+            self.assertAlmostEqual(historical[0]['account_balance'], 10176.400045)
+            self.assertAlmostEqual(historical[0]['account_cumulative_net_pnl'], 176.400045)
+            self.assertEqual(account['sessions'], 1, 'historical replay must not enter forward account')
             before = {p.name: p.read_bytes() for p in Path(tmp).rglob('*.json')}
             self.assertEqual(api.AccountStore(Path(tmp)).refresh(list(reversed(rows))), r)
             self.assertEqual(before, {p.name: p.read_bytes() for p in Path(tmp).rglob('*.json')})

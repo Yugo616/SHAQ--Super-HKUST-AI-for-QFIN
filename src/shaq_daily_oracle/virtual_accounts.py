@@ -64,7 +64,7 @@ def replay_day(trade_date, predictions, labels, rules: AccountRules, *, cash=Non
     if len(set(symbols)) != len(symbols) or any(p['direction'] not in ('bullish', 'bearish') for p in predictions):
         raise ValueError('Duplicate symbols or invalid directions')
     for label in labels.values():
-        if label.get('status') == 'final':
+        if label.get('status') in ('provisional', 'final'):
             _positive(label.get('official_unadjusted_open'))
             _positive(label.get('official_unadjusted_close'))
     result = dict(engine=ENGINE_ID, engine_version=ENGINE_VERSION, policy_id=POLICY_ID,
@@ -112,8 +112,8 @@ def replay_day(trade_date, predictions, labels, rules: AccountRules, *, cash=Non
         quantity = abs(entry['shares']) if entry else 0
         sign = 1 if direction == 'bullish' else -1
         label = labels.get(symbol, {})
-        official_open = label.get('official_unadjusted_open') if label.get('status') == 'final' else None
-        official_close = label.get('official_unadjusted_close') if label.get('status') == 'final' else None
+        official_open = label.get('official_unadjusted_open') if label.get('status') in ('provisional', 'final') else None
+        official_close = label.get('official_unadjusted_close') if label.get('status') in ('provisional', 'final') else None
         gross = sign * quantity * (exit_fill['reference_open'] - entry['reference_open']) if exit_fill else (None if entry else 0.)
         fees = math.fsum(f['commission'] for f in fills)
         slippage = math.fsum(abs(f['shares']) * f['reference_open'] * rules.slippage_rate for f in fills)
@@ -123,6 +123,10 @@ def replay_day(trade_date, predictions, labels, rules: AccountRules, *, cash=Non
                    'unfilled_volume' if not targets[symbol]['entry']['usable_volume'] else 'unfilled_budget',
             budget=min(rules.per_prediction_budget, max(0., cash)/len(symbols)),
             official_open=official_open, official_close=official_close,
+            official_open_to_close_return=(official_close / official_open - 1)
+                if official_open is not None and official_close is not None else None,
+            direction_adjusted_return=(sign * (official_close / official_open - 1))
+                if official_open is not None and official_close is not None else None,
             direction_correct=sign*(official_close-official_open)>0 if official_open is not None and official_close is not None else None,
             entry_reference_open=entry['reference_open'] if entry else None,
             exit_reference_open=exit_fill['reference_open'] if exit_fill else None,
@@ -304,9 +308,7 @@ class AccountStore:
                     replay = {'status': 'error', 'error': str(exc), 'orders': [], 'trades': []}
                 entry = dict(base, **replay)
                 if account:
-                    if replay['status'] not in ('final', 'empty'):
-                        account['blocked'] = True
-                    else:
+                    if replay['status'] in ('final', 'provisional', 'empty'):
                         account['equity'] = replay['closing_cash']
                         account['gross_equity'] += replay['gross_pnl']
                         account['fees'] += replay['fees']
@@ -315,7 +317,18 @@ class AccountStore:
                         account['peak'] = max(account['peak'], account['equity'])
                         account['max_drawdown'] = max(account['max_drawdown'], 1 - account['equity'] / account['peak'])
                         account['curve'].append(dict(date=row['trade_date'], equity=account['equity'], gross_equity=account['gross_equity']))
+                    else:
+                        account['blocked'] = True
                 entry['account_equity'] = account['equity'] if account else None
+                reference_balance = (
+                    account['equity'] if account else replay.get('closing_cash')
+                    if scope == 'historical' and replay.get('status') in ('final', 'provisional', 'empty')
+                    else None
+                )
+                entry['account_balance'] = reference_balance
+                entry['account_cumulative_net_pnl'] = (
+                    reference_balance - rules.initial_cash if reference_balance is not None else None
+                )
                 if replay['status'] in ('final', 'empty', 'provisional', 'incomplete', 'unavailable'):
                     document = dict(entry, rules_hash=rules_hash, source_result_hash=row['variant_result_sha256'], labels_hash=sha256_payload(row['labels']),
                                     minute_hash=sha256_payload(row.get('minute', {})))

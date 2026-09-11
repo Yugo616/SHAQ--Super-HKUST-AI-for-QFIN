@@ -50,7 +50,10 @@ class MinuteAccountIntegrationTests(unittest.TestCase):
             return minute_store.observe('2026-09-09', ['AAA', 'BBB'], values, provider='yfinance',
                                         observed_at=datetime.fromisoformat(at))
         row['minute'] = observe('2026-09-09T16:10:00-04:00', data)
-        self.assertEqual(self.store.refresh([row])['accounts'][0]['sessions'], 0)
+        provisional = self.store.refresh([row])
+        self.assertEqual(provisional['accounts'][0]['sessions'], 1)
+        self.assertEqual(provisional['results'][0]['status'], 'provisional')
+        self.assertAlmostEqual(provisional['results'][0]['account_equity'], 10176.400045)
         row['minute'] = observe('2026-09-10T09:00:00-04:00', data)
         next_row = self.fixture.row('next', '2026-09-10T08:00:00-04:00', trade_date='2026-09-10')
         final = self.store.refresh([row, next_row])
@@ -59,7 +62,7 @@ class MinuteAccountIntegrationTests(unittest.TestCase):
         data = copy.deepcopy(data); data['AAA'][1]['open'] = 120
         row['minute'] = observe('2026-09-10T10:00:00-04:00', data)
         revised = self.store.refresh([row, next_row])
-        self.assertEqual(revised['accounts'][0]['sessions'], 0)
+        self.assertEqual(revised['accounts'][0]['sessions'], 2)
         row['minute'] = observe('2026-09-11T09:00:00-04:00', data)
         duplicate = dict(row, batch_id='later', completed_at_et='2026-09-09T08:30:00-04:00')
         corrected = self.store.refresh([next_row, duplicate, row])

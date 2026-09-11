@@ -60,7 +60,7 @@ class AccountViewTests(unittest.TestCase):
         html = self.render('dayHtml', {'status':'final', 'scope':'forward', 'orders':[], 'trades':[],
             'latest_refresh':{'status':'unavailable', 'captured_at_et':'2026-09-21T09:00:00-04:00',
                               'missing_targets':{'AAA':['entry', 'exit']}}})
-        self.assertIn('最终确认', html)
+        self.assertIn('已复核', html)
         self.assertIn('刷新', html)
         self.assertIn('2026-09-21', html)
         self.assertIn('AAA', html)
@@ -226,11 +226,26 @@ const setInterval=()=>{{}};
                 'status':'open_incomplete','net_pnl':None,
             }], 'orders':[], 'closing_positions':{'AAA':3},
         })
-        self.assertIn('暂定', provisional)
-        self.assertIn('尚未计入持续账户净值', provisional)
+        self.assertIn('初步', provisional)
+        self.assertIn('已计入持续账户净值', provisional)
         self.assertNotIn('最终确认', provisional)
         self.assertIn('未完成', incomplete)
         self.assertIn('仍有模拟持仓', incomplete)
+
+    def test_daily_account_row_shows_score_net_cumulative_and_balance(self):
+        html = self.render('overviewHtml', {
+            'rules':{'initial_cash':10000,'per_prediction_budget':1000,
+                     'commission_rate':0.0005,'slippage_rate':0.0005},
+            'accounts':[], 'legacy':{'results':[]},
+            'results':[{'batch_id':'b','variant_key':'team/main','scope':'forward',
+                'trade_date':'2026-09-09','status':'provisional','net_pnl':8,
+                'account_cumulative_net_pnl':8,'account_balance':10008,
+                'gross_pnl':10,'fees':1,'slippage_cost':1,
+                'trades':[{'direction_correct':True},{'direction_correct':False}]}],
+        })
+        self.assertIn('正确 / 错误', html)
+        self.assertIn('$8.00', html)
+        self.assertIn('$10,008.00', html)
 
     def test_account_overview_separates_forward_research_and_legacy(self):
         versions = [

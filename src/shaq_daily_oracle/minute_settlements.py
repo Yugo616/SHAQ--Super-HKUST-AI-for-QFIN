@@ -109,7 +109,7 @@ class MinuteStore:
         for observation in observations:
             observed_targets = target_bars(trade_date, observation['records'], symbols)
             captured = observation['captured_at_et']
-            captured_day = _stamp(captured).astimezone(ET).date()
+            captured_time = _stamp(captured).astimezone(ET)
             for symbol, phases in observed_targets.items():
                 for phase, target in phases.items():
                     if target is None:
@@ -118,9 +118,7 @@ class MinuteStore:
                     if prior is None or prior['target'] != target:
                         correction = correction or prior is not None
                         prior = dict(target=target, first_captured_at_et=captured, confirmed=False)
-                    elif (captured_day > _stamp(prior['first_captured_at_et']).astimezone(ET).date()
-                          and captured_day > date.fromisoformat(trade_date)
-                          and market_session(captured_day) is not None):
+                    elif captured_time > _stamp(prior['first_captured_at_et']).astimezone(ET):
                         prior['confirmed'] = True
                     prior.update(captured_at_et=captured,
                                  observation_sha256=observation['observation_sha256'])

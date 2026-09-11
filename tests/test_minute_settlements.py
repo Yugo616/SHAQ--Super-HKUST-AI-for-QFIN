@@ -26,17 +26,18 @@ class MinuteStoreTests(unittest.TestCase):
         return self.store.observe(day, ['AAA'], records(day) if data is None else data,
                                   provider='yfinance', observed_at=datetime.fromisoformat(at))
 
-    def test_independent_later_trading_day_required_and_all_observations_retained(self):
+    def test_independent_same_day_read_confirms_and_all_observations_retained(self):
         self.assertEqual(self.observe()['status'], 'provisional')
-        self.assertEqual(self.observe(at='2026-09-09T17:00:00-04:00')['status'], 'provisional')
-        final = self.observe(at='2026-09-10T09:00:00-04:00')
+        final = self.observe(at='2026-09-09T17:00:00-04:00')
         self.assertEqual(final['status'], 'final')
-        self.assertEqual(len(list(Path(self.tmp.name).rglob('observations/*.json'))), 3)
-        self.assertEqual(self.observe(at='2026-09-10T10:00:00-04:00')['status'], 'final')
+        self.assertEqual(len(list(Path(self.tmp.name).rglob('observations/*.json'))), 2)
+        self.assertEqual(self.observe(at='2026-09-09T18:00:00-04:00')['status'], 'final')
 
-    def test_weekend_is_not_independent_trading_day(self):
-        self.observe()
-        self.assertEqual(self.observe(at='2026-09-12T10:00:00-04:00')['status'], 'provisional')
+    def test_duplicate_receipt_does_not_confirm(self):
+        first = self.observe()
+        duplicate = self.observe()
+        self.assertEqual(duplicate['status'], 'provisional')
+        self.assertEqual(duplicate['observation_hashes'], first['observation_hashes'])
 
     def test_future_fields_irrelevant_but_target_revision_requires_new_confirmation(self):
         self.observe()

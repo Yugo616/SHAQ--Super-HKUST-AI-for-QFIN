@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 from .data_providers import DataProfile, OpenBBProviderAdapter, YFinanceProvider
 from .hashing import sha256_payload
 from .research_batch import load_frozen_evidence
-from .market_calendar import market_session, next_market_session
+from .market_calendar import market_session
 
 
 class ResearchLabelError(ValueError):
@@ -91,6 +91,7 @@ def recompute_label(existing: dict[str, Any]) -> dict[str, Any]:
         key=lambda row: (_observation_time(row), str(row.get("observation_sha256", ""))),
     )
     result = dict(existing)
+    result.pop("earliest_eligible_confirmation_trading_day", None)
     result["observations"] = observations
     if not observations:
         result.update(status="provisional", confirmed_by_independent_reobservation=False)
@@ -124,8 +125,7 @@ def recompute_label(existing: dict[str, Any]) -> dict[str, Any]:
         segment.append(row)
     segment.reverse()
     first_time = _observation_time(segment[0])
-    eligible_day = next_market_session(first_time.date()).session_date
-    confirmed = any(_observation_time(row).date() >= eligible_day for row in segment[1:])
+    confirmed = any(_observation_time(row) > first_time for row in segment[1:])
     latest = observations[-1]
     result.update({key: latest[key] for key in (
         "official_unadjusted_open", "official_unadjusted_close",
@@ -136,10 +136,10 @@ def recompute_label(existing: dict[str, Any]) -> dict[str, Any]:
         "status": "final" if confirmed else "provisional",
         "confirmed_by_independent_reobservation": confirmed,
         "last_checked_at_et": latest["observed_at_et"],
-        "earliest_eligible_confirmation_trading_day": eligible_day.isoformat(),
+        "earliest_eligible_confirmation_at_et": first_time.isoformat(),
         "confirmation_reason": (
-            "matching_price_observed_on_later_trading_day" if confirmed
-            else "waiting_for_matching_observation_on_later_trading_day"
+            "matching_price_observed_in_later_provider_read" if confirmed
+            else "waiting_for_later_matching_provider_read"
         ),
     })
     return result

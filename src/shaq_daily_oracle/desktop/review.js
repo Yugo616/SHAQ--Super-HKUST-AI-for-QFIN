@@ -12,6 +12,23 @@ window.showCandidate = function(batchId, key, symbol) {
   q('#candidate-analysis .aftermarket').after(section);
 };
 
+// Price results count as soon as the first complete post-close bar is saved.
+// A later matching provider read only upgrades the wording to reviewed.
+const showCandidateWithImmediateResults=window.showCandidate;
+window.showCandidate=function(batchId,key,symbol){
+  showCandidateWithImmediateResults(batchId,key,symbol);
+  const batch=state.selectedBatch,label=batch?.labels?.labels?.[symbol]||{};
+  if(!['provisional','final'].includes(label.status))return;
+  const prediction=batch?.variants?.[key]?.predictions?.find(row=>row.symbol===symbol);
+  const panel=q('#candidate-analysis .aftermarket p');
+  if(!panel)return;
+  const pnl=prediction ? (prediction.direction==='bearish'
+    ? Number(label.official_unadjusted_open)-Number(label.official_unadjusted_close)
+    : Number(label.official_unadjusted_close)-Number(label.official_unadjusted_open)) : null;
+  const phase=label.status==='final'?'已复核':'初步';
+  panel.textContent=`${phase}：官方未复权开盘 $${Number(label.official_unadjusted_open).toFixed(2)}，收盘 $${Number(label.official_unadjusted_close).toFixed(2)}；实际${dir(label.actual_direction)}。${prediction?`一股方向回放 ${money(pnl)}。`:''}`;
+};
+
 const batchBeforeReview = renderBatch;
 renderBatch = function(batch, key, symbol) {
   batchBeforeReview(batch, key, symbol);
@@ -57,7 +74,26 @@ renderBatch = function(batch, key, symbol) {
       <p>同一批冻结数据；${comparison.same_model ? '相同模型配置。' : '模型配置不同，不能只把结果差异归因于方法。'}</p>
       <table class="table"><thead><tr><th>股票</th><th>当前版本最终决定</th><th>对照版本最终决定</th></tr></thead><tbody>${comparison.stocks.map(r => `<tr><td>${esc(r.symbol)}</td><td>${esc(pick(left, r.symbol))}</td><td>${esc(pick(right, r.symbol))}</td></tr>`).join('')}</tbody></table>
       <table class="table"><thead><tr><th>同日收盘后模拟回放</th><th>状态与结果</th></tr></thead><tbody><tr><td>${esc(leftMeta.method_name)}</td><td>${esc(outcome(selected))}</td></tr><tr><td>${esc(rightMeta.method_name)}</td><td>${esc(outcome(other))}</td></tr></tbody></table>
-      <p>官方 O→C 正确／错误和扣费净盈亏分开显示；未核验结果不提前计分。</p>`;
+      <p>官方 O→C 正确／错误和扣费净盈亏分开显示；初步完整结果立即计分，后续读取负责复核或修订。</p>`;
     q('#version-comparison').prepend(box);
   };
 };
+
+if(typeof renderHistory!=='undefined'){
+const renderHistoryWithImmediateResults=renderHistory;
+renderHistory=function(){
+  renderHistoryWithImmediateResults();
+  const rows=state.data.dashboard.daily_results||[];
+  for(const tr of qa('.result-table tr[data-batch]')){
+    const row=rows.find(item=>item.batch_id===tr.dataset.batch&&item.variant_key===tr.dataset.variantKey);
+    if(row&&['provisional','final'].includes(row.status)&&tr.children[3]){
+      tr.children[3].textContent=`${row.correct} / ${row.incorrect}`;
+    }
+  }
+  const scored=rows.filter(row=>row.score_eligible!==false&&['provisional','final'].includes(row.status));
+  const good=scored.reduce((sum,row)=>sum+Number(row.correct||0),0);
+  const bad=scored.reduce((sum,row)=>sum+Number(row.incorrect||0),0);
+  const summary=q('#history .result-summary');
+  if(summary)summary.firstChild.textContent=`已有结果 ${good+bad} 次 · 正确 ${good} / 错误 ${bad} · 命中率 ${good+bad?(100*good/(good+bad)).toFixed(1)+'%':'—'} · `;
+};
+}

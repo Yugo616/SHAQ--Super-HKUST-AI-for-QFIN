@@ -68,7 +68,7 @@ class ResearchLabelTests(unittest.TestCase):
             "2026-09-08T10:00:00-04:00",
         ])
 
-    def test_revision_is_retained_and_requires_new_trading_day_confirmation(self):
+    def test_revision_is_retained_and_same_day_matching_read_confirms(self):
         original = [
             self.observation("2026-09-04T16:05:00-04:00"),
             self.observation("2026-09-08T09:00:00-04:00"),
@@ -78,10 +78,10 @@ class ResearchLabelTests(unittest.TestCase):
         ]})
         self.assertEqual(revised["status"], "provisional")
         self.assertEqual(len(revised["corrections"]), 1)
-        self.assertEqual(revised["earliest_eligible_confirmation_trading_day"], "2026-09-09")
+        self.assertEqual(revised["earliest_eligible_confirmation_at_et"], "2026-09-08T10:00:00-04:00")
         reconfirmed = self.recompute({
             "observations": revised["observations"] + [
-                self.observation("2026-09-09T09:00:00-04:00", closing=101.0),
+                self.observation("2026-09-08T10:01:00-04:00", closing=101.0),
             ],
             "corrections": revised["corrections"],
         })
@@ -242,6 +242,27 @@ class ResearchLabelTests(unittest.TestCase):
             self.assertTrue(path.exists())
             self.assertEqual(json.loads(path.read_text())['labels']['AAPL']['status'], 'provisional')
 
+    def test_first_provisional_prices_count_immediately_and_duplicate_receipt_does_not_confirm(self):
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name) / "research"
+            batch_id = self.setup_batch(root)
+            profile = DataProfile(profile_id="test", universe_file="unused.csv")
+            observed = datetime(2026, 9, 4, 16, 5, tzinfo=ZoneInfo("America/New_York"))
+            refresh_research_labels(research_root=root, batches_root=root / "batches",
+                profile=profile, observed_at=observed, market_provider=LabelMarket())
+            refresh_research_labels(research_root=root, batches_root=root / "batches",
+                profile=profile, observed_at=observed, market_provider=LabelMarket())
+            overview = ResearchDashboardIndex(
+                batches_root=root / "batches", database=root / "index.sqlite3"
+            ).overview()
+            label = json.loads((root / "batches" / batch_id / "labels.json").read_text(
+                encoding="utf-8"))["labels"]["AAPL"]
+        self.assertEqual(label["status"], "provisional")
+        self.assertEqual(len(label["observations"]), 1)
+        self.assertEqual(overview["performance"][0]["evaluated"], 1)
+        self.assertEqual(overview["daily_results"][0]["status"], "provisional")
+        self.assertAlmostEqual(overview["daily_results"][0]["daily_pnl"], 2.0)
+
     def test_label_requires_later_independent_matching_observation(self):
         with tempfile.TemporaryDirectory() as name:
             root = Path(name) / "research"
@@ -271,7 +292,7 @@ class ResearchLabelTests(unittest.TestCase):
         self.assertEqual(final["status"], "final")
         self.assertEqual(final["actual_direction"], "bullish")
         self.assertAlmostEqual(final["open_to_close_return"], 0.02)
-        self.assertEqual(before["performance"][0]["evaluated"], 0)
+        self.assertEqual(before["performance"][0]["evaluated"], 1)
         self.assertEqual(after["performance"][0]["evaluated"], 1)
         self.assertEqual(after["performance"][0]["correct"], 1)
         replay = after["daily_results"]

@@ -232,10 +232,9 @@ class ResearchDashboardIndex:
                     for prediction in result.get("predictions", []):
                         symbol = prediction["symbol"]
                         label = labels.get(symbol, {})
-                        actual = (
-                            label.get("actual_direction")
-                            if label.get("status") == "final" else None
-                        )
+                        actual = label.get("actual_direction") if label.get("status") in {
+                            "provisional", "final"
+                        } else None
                         correct = None
                         if actual in {"bullish", "bearish", "neutral"}:
                             correct = 1 if actual == prediction["direction"] else 0
@@ -356,37 +355,39 @@ class ResearchDashboardIndex:
                 if eligible:
                     scored_sessions.add(session_key)
                 predictions = list(variant.get("predictions", []))
-                final = []
+                available = []
                 pending = False
+                statuses = set()
                 for prediction in predictions:
                     label = labels.get(str(prediction.get("symbol", "")), {})
-                    if label.get("status") != "final":
+                    if label.get("status") not in {"provisional", "final"}:
                         pending = True
                         continue
                     if not isinstance(label.get("official_unadjusted_open"), (int, float)) or not isinstance(label.get("official_unadjusted_close"), (int, float)):
                         pending = True
                         continue
-                    final.append((prediction, label))
+                    available.append((prediction, label))
+                    statuses.add(label.get("status"))
                 if not predictions:
                     state = "empty"
                     correct = incorrect = 0
                     daily_pnl: float | None = 0.0
-                elif pending or len(final) != len(predictions):
+                elif pending or len(available) != len(predictions):
                     state = "pending"
                     correct = incorrect = 0
                     daily_pnl = None
                 else:
-                    state = "final"
+                    state = "provisional" if "provisional" in statuses else "final"
                     correct = sum(
-                        1 for prediction, label in final
+                        1 for prediction, label in available
                         if prediction.get("direction") == label.get("actual_direction")
                     )
-                    incorrect = len(final) - correct  # a flat outcome is intentionally incorrect
+                    incorrect = len(available) - correct  # a flat outcome is intentionally incorrect
                     daily_pnl = round(sum(
                         float(label["official_unadjusted_close"]) - float(label["official_unadjusted_open"])
                         if prediction.get("direction") == "bullish"
                         else float(label["official_unadjusted_open"]) - float(label["official_unadjusted_close"])
-                        for prediction, label in final
+                        for prediction, label in available
                     ), 6)
                 previous = cumulative.get(series_key, 0.0)
                 if daily_pnl is not None and eligible:
