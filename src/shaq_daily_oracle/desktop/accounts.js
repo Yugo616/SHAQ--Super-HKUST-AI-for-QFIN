@@ -32,8 +32,8 @@ const SHAQAccounts = (() => {
     const [author='team', versionId=''] = key.split('/', 2);
     const row = (versions || []).find(version => {
       const rowAuthor = String(version.author || 'team');
-      return rowAuthor === author && (String(version.version_id) === versionId ||
-        (version.aliases || []).map(String).includes(versionId));
+      return (version.history_keys || []).includes(key) || (rowAuthor === author && (String(version.version_id) === versionId ||
+        (version.aliases || []).map(String).includes(versionId)));
     });
     return row ? {
       author: String(row.author || 'team'), version_id: String(row.version_id),
@@ -209,7 +209,7 @@ if (typeof document !== 'undefined') {
     if (!data?.rules) return;
     const section=document.createElement('details');
     section.className='sheet virtual-accounts';
-    section.innerHTML='<summary>虚拟账户汇总与成本</summary>'+SHAQAccounts.overviewHtml(data, state.data.versions || [], wb.filters || {});
+    section.innerHTML='<summary>账户余额、手续费与滑点明细</summary><p>这里是按实际模拟股数计算的资金账户；与下方一股零费用对照分开，不相加。</p>'+SHAQAccounts.overviewHtml(data, state.data.versions || [], wb.filters || {});
     q('#history .result-summary')?.insertAdjacentElement('afterend', section);
     qa('[data-account-batch]').forEach(row => row.onclick=async() => {
       const details=q('.official-direction-history');

@@ -257,7 +257,7 @@ class LabService:
                 "requires_separate_setup": True,
             },
             "settings": settings,
-            "versions": self.registry.selectable_versions(),
+            "versions": self.history_linked_versions(),
             "drafts": drafts,
             "skill_explanations": SKILL_EXPLANATIONS,
             "storage": {
@@ -975,6 +975,27 @@ class LabService:
             job = dict(self.jobs[job_id])
         jobs_root = self.paths.research_root / "jobs"
         _atomic_json(jobs_root / f"{job_id}.json", job)
+
+    def history_linked_versions(self):
+        from .history_methods import equivalent_method_documents
+        from .research_dashboard import _verified_skill_snapshot
+        versions = self.registry.selectable_versions()
+        documents = [(row, self.registry.effective_skills(row['version_id'], row['author']))
+                     for row in versions]
+        for path in self.paths.batches_root.glob('*/skills/*.json'):
+            try:
+                snapshot = _verified_skill_snapshot(path)
+                variant = snapshot['variant']
+                key = f"{variant['author']}/{variant['version_id']}"
+                matches = [row for row, docs in documents
+                           if equivalent_method_documents(snapshot['documents'], docs)]
+                if len(matches) == 1:
+                    aliases = matches[0].setdefault('history_keys', [])
+                    if key not in aliases:
+                        aliases.append(key)
+            except (ValueError, KeyError, OSError):
+                continue
+        return versions
 
     def job_statuses(self) -> list[dict[str, Any]]:
         stored = {}
