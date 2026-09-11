@@ -258,6 +258,8 @@ def replay_day(trade_date, predictions, labels, rules: AccountRules, *, cash=Non
                 if official_open is not None and official_close is not None else None,
             direction_correct=sign*(official_close-official_open)>0 if official_open is not None and official_close is not None else None,
             entry_reference_open=entry['reference_open'] if entry else None,
+            sizing_entry_reference_open=(targets[symbol]['entry']['open']
+                                         if targets[symbol]['entry'] is not None else None),
             exit_reference_open=exit_fill['reference_open'] if exit_fill else None,
             entry_price=entry['price'] if entry else None, exit_price=exit_fill['price'] if exit_fill else None,
             entry_reference_at_et=result['entry_reference_at_et'],
@@ -374,7 +376,7 @@ class AccountStore:
                 raise ValueError('Settlement revision was modified')
             if (value.get('source_result_hash') == row.get('variant_result_sha256')
                     and value.get('rules_hash') != exclude_rules_hash
-                    and (rules_hash is None or value.get('rules_hash') == rules_hash)
+                    and (rules_hash is None or value.get('execution_policy_hash', value.get('rules_hash')) == rules_hash)
                     and value.get('labels_hash') == sha256_payload(row.get('labels', {}))
                     and value.get('minute_hash') == sha256_payload(row.get('minute', {}))
                     and value.get('status') in ('final', 'provisional', 'empty', 'incomplete', 'unavailable')):
@@ -388,7 +390,7 @@ class AccountStore:
             if sha256_payload(value) != path.stem:
                 raise ValueError('Settlement revision was modified')
             if (value.get('source_result_hash') == row.get('variant_result_sha256')
-                    and value.get('rules_hash') == rules_hash
+                    and value.get('execution_policy_hash', value.get('rules_hash')) == rules_hash
                     and value.get('status') in ('final', 'provisional', 'incomplete', 'unavailable')):
                 receipt_path = self.root / 'processing' / (path.stem + '.json')
                 receipt = json.loads(receipt_path.read_text(encoding='utf-8')) if receipt_path.exists() else {}
@@ -398,10 +400,19 @@ class AccountStore:
                 matches.append((started or '9999', path.stem, value))
         if not matches:
             return None
-        _, digest, value = sorted(matches)[0]
-        return digest, {trade['symbol']: int(trade.get('quantity') or 0)
-                        for trade in value.get('trades', [])
-                        if trade.get('entry_reference_open') is not None and int(trade.get('quantity') or 0) > 0}
+        quantities, sources = {}, {}
+        for _, digest, value in sorted(matches):
+            for trade in value.get('trades', []):
+                symbol = trade.get('symbol')
+                if symbol not in quantities and (trade.get('entry_reference_open') is not None
+                                                  or trade.get('sizing_entry_reference_open') is not None):
+                    quantities[symbol] = int(trade.get('quantity') or 0)
+                    sources[symbol] = digest
+        if not quantities:
+            return None
+        unique_sources = sorted(set(sources.values()))
+        provenance = unique_sources[0] if len(unique_sources) == 1 else sha256_payload(sources)
+        return provenance, quantities, sources
 
     def policy_for_row(self, row, fallback):
         completion = _completion(row)
@@ -502,6 +513,7 @@ class AccountStore:
                 applicable_policy = self.policy_for_row(row, policy) if scope == 'historical' else policy
                 applicable_rules = AccountRules(**applicable_policy['rules'])
                 applicable_hash = sha256_payload(applicable_policy)
+                base['execution_policy_hash'] = applicable_hash
                 exact_saved = self.saved_settlement_for(row, rules_hash=applicable_hash)
                 if exact_saved and exact_saved[1].get('opening_cash') != cash:
                     exact_saved = None
@@ -513,7 +525,7 @@ class AccountStore:
                     replay = {key: value for key, value in source_document.items()
                               if key not in base and key not in ('settlement_hash', 'rules_hash',
                                                                  'source_result_hash', 'labels_hash', 'minute_hash')}
-                    if saved != exact_saved or (scope == 'historical' and applicable_hash != rules_hash):
+                    if saved != exact_saved or source_document.get('rules_hash') != rules_hash:
                         replay['source_settlement_hash'] = source_hash
                         replay['replayed'] = False
                 else:
@@ -526,7 +538,8 @@ class AccountStore:
                                             fixed_quantities=frozen[1] if frozen else None,
                                             policy_sha256=applicable_hash if scope == 'forward' else None)
                         if frozen:
-                            replay.update(sizing_source_settlement_hash=frozen[0], quantities_reused=True)
+                            replay.update(sizing_source_settlement_hash=frozen[0],
+                                          sizing_source_settlement_hashes=frozen[2], quantities_reused=True)
                         elif exact_saved and exact_saved[1].get('quantities_reused'):
                             replay.update(
                                 sizing_source_settlement_hash=exact_saved[1]['sizing_source_settlement_hash'],

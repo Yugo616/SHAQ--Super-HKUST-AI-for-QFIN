@@ -317,6 +317,23 @@ class VirtualAccountTests(unittest.TestCase):
             self.assertTrue(revised['quantities_reused'])
             self.assertEqual(revised['sizing_source_settlement_hash'], old['settlement_hash'])
 
+    def test_legacy_pending_first_settlement_binds_execution_policy_across_repeat_and_revision(self):
+        api = self.api()
+        with tempfile.TemporaryDirectory() as tmp:
+            store = api.AccountStore(Path(tmp)); row = self.row(minute={}, method_identity='same', model_identity='model')
+            old = store.activate(api.AccountRules(), '2026-09-09T07:00:00-04:00')
+            store.refresh([row])
+            store.activate(api.experimental_risk_rules(), '2026-09-10T07:00:00-04:00', continuity=True)
+            row['minute'] = self.minute()
+            settled = store.refresh([row])['results'][0]
+            self.assertEqual(settled['execution_policy_hash'], api.sha256_payload(old))
+            with patch('shaq_daily_oracle.virtual_accounts.replay_day', side_effect=AssertionError('exact replay')):
+                self.assertEqual(store.refresh([row])['results'][0], settled)
+            row['minute'] = self.minute(a=120, b=80)
+            revised = store.refresh([row])['results'][0]
+            self.assertEqual([trade['quantity'] for trade in revised['trades']],
+                             [trade['quantity'] for trade in settled['trades']])
+
     def test_historical_pending_blocks_later_forward_during_same_pass(self):
         api = self.api()
         with tempfile.TemporaryDirectory() as tmp:

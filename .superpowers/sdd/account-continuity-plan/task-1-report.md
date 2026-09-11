@@ -82,3 +82,11 @@ Risk validation no longer trusts stored derived fields. It verifies timezone-awa
 Complete provisional dates no longer consume +15/+30/+60 missing-data retries and become due at the next trading session close+5 for independent confirmation. Late app-open confirmation is persisted separately. Owned refresh threads are joined before the batch or worker reports terminal completion; a bounded timeout writes a terminal `RefreshTimeout` receipt which a late thread cannot overwrite. Preview sums each selected settlement source exactly once even when its input row is repeated.
 
 Fresh round-2 focused verification: `Ran 98 tests in 4.733s — OK`. This included the new historical-pending ordering, exact no-replay, archived-policy revision, missing-entry recovery, malformed-risk, provisional confirmation, duplicate-preview and existing integration/smoke tests. No full build-bearing suite was run, per controller instruction.
+
+## Review round 3
+
+Two final lifecycle blockers were reproduced RED and fixed without broadening scope. Settlement projections now persist `execution_policy_hash` separately from the current projection policy/rules hash. Exact lookup and quantity provenance consistently use this execution identity, so an old-policy pending day that first settles after continuity activation remains exactly reusable and later price revisions retain its old-policy quantities.
+
+Quantity provenance is assembled per symbol across all hash-verified settlements ordered by the real `processing/<settlement>.json` `processing_started_at_et`. The first document with an observed valid entry establishes that symbol's immutable quantity. Missing-entry zero does not establish it, allowing a later observation to fill; observed-entry zero caused by insufficient budget does establish zero and remains zero even if a later revised entry price becomes affordable. Multi-document provenance retains a per-symbol settlement-hash map.
+
+Fresh round-3 focused verification: `Ran 100 tests in 4.754s — OK`, including the two exact lifecycle regressions and adjacent account, minute-integration, scheduler, UI, research-batch, smoke and Zipline execution tests. The controller reported the complete 387-test suite passing before this narrow round; it was not repeated because builds were prohibited.

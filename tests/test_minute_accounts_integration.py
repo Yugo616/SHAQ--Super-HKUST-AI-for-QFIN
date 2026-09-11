@@ -78,6 +78,21 @@ class MinuteAccountIntegrationTests(unittest.TestCase):
         row = self.fixture.row()
         recovered = self.store.refresh([row])['results'][0]
         self.assertGreater(recovered['trades'][0]['quantity'], 0)
+        recovered_quantity = recovered['trades'][0]['quantity']
+        row['minute'] = self.fixture.minute(a=130, b=70)
+        row['minute']['records']['AAA'][0]['open'] = 50
+        revised = self.store.refresh([row])['results'][0]
+        self.assertEqual(revised['trades'][0]['quantity'], recovered_quantity)
+
+    def test_observed_entry_budget_zero_is_immutable_on_affordable_revision(self):
+        row = self.fixture.row()
+        row['minute']['records']['AAA'][0]['open'] = 20000
+        first = self.store.refresh([row])['results'][0]
+        self.assertEqual(first['trades'][0]['quantity'], 0)
+        row['minute']['records']['AAA'][0]['open'] = 10
+        revised = self.store.refresh([row])['results'][0]
+        self.assertEqual(revised['trades'][0]['quantity'], 0)
+        self.assertTrue(revised['quantities_reused'])
 
     def test_minute_refresh_filters_exact_due_dates_before_provider_call(self):
         rows = [self.fixture.row(), self.fixture.row('next', trade_date='2026-09-10')]
