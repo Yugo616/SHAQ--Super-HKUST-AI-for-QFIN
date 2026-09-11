@@ -9,15 +9,19 @@ class ReviewViewTests(unittest.TestCase):
         source = (Path(__file__).parents[1] / 'src/shaq_daily_oracle/desktop/review.js').read_text(encoding="utf-8")
         harness = '''
 const window={showCandidate(){}};let renderBatch=()=>{},reference='';
-const cells=Array.from({length:7},()=>({textContent:'',innerHTML:''}));
+let buttonClicks=0;
+const button={onclick:()=>buttonClicks++},details={children:[button]};
+const statusCell={_text:'已复核',children:[details],get textContent(){return [this._text,...this.children.map(x=>x.textContent||'')].join('')},set textContent(value){this._text=value;this.children=[]},querySelector(selector){return selector==='.account-result-status'?this.children.find(x=>x.className==='account-result-status')||null:null},appendChild(node){this.children.push(node)}};
+const cells=[...Array.from({length:6},()=>({textContent:'',innerHTML:''})),statusCell];
 const tr={dataset:{batch:'b',variantKey:'team/main'},children:cells,insertBefore(node,before){this.children.splice(this.children.indexOf(before),0,node)}};
 const header={innerHTML:''},table={insertAdjacentHTML:(where,html)=>reference=html};
 let renderHistory=()=>{};
 const esc=x=>String(x??''),moduleName=x=>x,dir=x=>x,money=x=>x==null?'—':`${Number(x)>=0?'+':''}$${Number(x).toFixed(2)}`;
-const document={createElement:tag=>tag==='td'?{textContent:''}:{innerHTML:''}},notice=()=>{},api=async()=>{};
+const document={createElement:tag=>tag==='td'?{textContent:''}:{className:'',textContent:''}},notice=()=>{},api=async()=>{};
 const SHAQAccounts={methodMeta:()=>({}),statusName:x=>x,usd:x=>x==null?'—':'$'+Number(x).toFixed(2),scopeName:x=>x==='historical'?'历史回放 · 不入前瞻账户':x};
 const wb={filters:{}},historyIdentity=row=>({filter_key:row.variant_key});
 const historyMethod=row=>row.variant_key;
+const replayStatus=x=>x;
 const daily={batch_id:'b',variant_key:'team/main',trade_date:'2026-09-09',model:'m',status:'final',score_eligible:false,correct:1,incorrect:0,daily_pnl:4.23,cumulative_pnl:4.23};
 const account={batch_id:'b',variant_key:'team/main',scope:'historical',status:'final',net_pnl:23.40,account_cumulative_net_pnl:23.40,account_balance:10023.40};
 const state={data:{dashboard:{daily_results:[daily],virtual_accounts:{results:[account]}}}};
@@ -26,12 +30,16 @@ const q=s=>s==='#history .result-summary'?summary:s==='.result-table thead tr'?h
 const qa=s=>s==='.result-table tr[data-batch]'?[tr]:[];
 '''
         output = subprocess.check_output(['node', '-'], input=harness + source + '''
-renderHistory();console.log(JSON.stringify({header:header.innerHTML,cells:tr.children.map(x=>x.textContent),reference}));
+renderHistory();button.onclick();console.log(JSON.stringify({header:header.innerHTML,cells:tr.children.map(x=>x.textContent),reference,detailsKept:statusCell.children.includes(details),buttonClicks}));
 ''', text=True, encoding='utf-8')
         value = json.loads(output)
         self.assertIn('账户当日净盈亏', value['header'])
         self.assertEqual(value['cells'][4:7], ['$23.40', '$23.40', '$10023.40'])
         self.assertIn('历史回放', value['cells'][-1])
+        self.assertIn('方向状态：final', value['cells'][-1])
+        self.assertIn('账户状态：final', value['cells'][-1])
+        self.assertTrue(value['detailsKept'])
+        self.assertEqual(value['buttonClicks'], 1)
         self.assertIn('一股零成本参考', value['reference'])
         self.assertIn('+\u00244.23', value['reference'])
 

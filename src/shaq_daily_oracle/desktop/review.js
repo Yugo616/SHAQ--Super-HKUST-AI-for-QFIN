@@ -103,12 +103,13 @@ renderHistory=function(){
       const balance=document.createElement('td');
       balance.textContent=SHAQAccounts.usd(account?.account_balance);
       tr.insertBefore(balance,tr.children[6]);
-      if(account){
-        const scope=account.scope==='historical'
-          ? `${SHAQAccounts.scopeName(account.scope)} · 不进入前瞻账户`
-          : SHAQAccounts.scopeName(account.scope);
-        tr.children[7].textContent=`${tr.children[7].textContent||''}${tr.children[7].textContent?' · ':''}${scope}`;
-      }
+      const statusCell=tr.children[7];
+      let accountStatus=statusCell.querySelector('.account-result-status');
+      if(!accountStatus){accountStatus=document.createElement('small');accountStatus.className='account-result-status';statusCell.appendChild(accountStatus)}
+      const scope=!account?'':account.scope==='historical'
+        ? `${SHAQAccounts.scopeName(account.scope)} · 不进入前瞻账户`
+        : SHAQAccounts.scopeName(account.scope);
+      accountStatus.textContent=`方向状态：${replayStatus(row.status)} · 账户状态：${account?SHAQAccounts.statusName(account.status):'尚无账户回放'}${scope?` · 范围：${scope}`:''}`;
     }
   }
   const table=q('.result-table');
