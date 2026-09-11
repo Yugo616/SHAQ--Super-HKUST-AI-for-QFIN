@@ -49,10 +49,12 @@ const SHAQAccounts = (() => {
   function historyIdentity(value, versions) {
     const meta = methodMeta(value, versions);
     const rawKey = typeof value === 'string' ? value : canonicalKey(value);
+    const linked=(versions||[]).some(v=>(v.history_keys||[]).includes(rawKey));
     return {
       ...meta,
       filter_key: `${meta.author}/${meta.version_id}`,
       series_key: String(value?.series_key || rawKey || `${meta.author}/${meta.version_id}`),
+      comparison_key: linked ? `${meta.author}/${meta.version_id}:${value?.model_identity||value?.model||''}` : String(value?.series_key||rawKey),
     };
   }
 

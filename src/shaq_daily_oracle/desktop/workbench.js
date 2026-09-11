@@ -81,9 +81,12 @@ saveDraft=async function(){const id=q('#draft-id').value.trim();if(!id)return no
 function plotResults(rows){
   const groups={};
   for(const row of rows.filter(r=>r.score_eligible!==false&&r.daily_pnl!=null).slice().reverse()){
-    (groups[historyIdentity(row).series_key]??=[]).push(row);
+    (groups[historyIdentity(row).comparison_key]??=[]).push({...row});
   }
-  const series=Object.values(groups), all=series.flat();
+  const series=Object.values(groups).map(rs=>{
+    const seen=new Set();let total=0;
+    return rs.sort((a,b)=>a.trade_date.localeCompare(b.trade_date)).filter(r=>{if(seen.has(r.trade_date))return false;seen.add(r.trade_date);return true}).map(r=>({...r,cumulative_pnl:total+=Number(r.daily_pnl||0)}));
+  }), all=series.flat();
   if(!all.length)return '<p>一股零费用对照：尚无可评价结果。</p>';
   const values=all.map(r=>Number(r.cumulative_pnl||0));
   let lo=Math.min(0,...values),hi=Math.max(0,...values);
