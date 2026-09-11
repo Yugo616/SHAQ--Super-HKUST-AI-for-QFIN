@@ -68,4 +68,10 @@ assert.doesNotMatch(html,/%/);
 const legacy=ui.researchHtml([], [{domain:'event',thesis:'saved'}], {});
 assert.match(legacy,/旧记录没有执行时间线/);
 assert.match(legacy,/saved/);
+const failed=ui.researchHtml([
+ {stage:'call_requested',variant_key:'team/main',domain:'market',symbols:['AAPL'],call_id:'bad',attempt:1,status:'requested',occurred_at_et:'2026-09-11T08:00:00-04:00'},
+ {stage:'failure',variant_key:'team/main',domain:'market',symbols:['AAPL'],call_id:'bad',attempt:1,status:'failed',occurred_at_et:'2026-09-11T08:00:01-04:00'}
+],[],{variant:'team/main',symbol:'AAPL'});
+assert.match(failed,/进行中 0/);
+assert.match(failed,/失败/);
 """)

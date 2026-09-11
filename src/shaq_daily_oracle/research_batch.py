@@ -390,9 +390,9 @@ class ContentAddressedModelCache:
                 if document["prompt"] != prompt or document["schema"] != schema:
                     raise ResearchBatchError("model cache input differs from its content key")
                 return document["result"], self._public_audit(document), True
+            self._wait_for_rate_slot(profile)
             if on_model_start:
                 on_model_start()
-            self._wait_for_rate_slot(profile)
             result, audit = caller(
                 profile=profile, secret=secret, prompt=prompt, schema=schema
             )
@@ -558,21 +558,30 @@ def _run_domain(
         prompt = _domain_prompt(domain=domain, tasks=group, documents=documents)
         call_id = sha256_payload({"cache_schema_version": 2, "profile_sha256": profile.identity(), "prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(), "schema_sha256": sha256_payload(schema)})
         for task in group:
-            call_by_task[task["task_id"]] = call_id
+            call_by_task[task["task_id"]] = (call_id, None)
         started = time.monotonic()
         requested = safe_observe(observer, stage="call_requested", batch_id=batch_id,
                      variant_key=variant_key, domain=domain,
                      symbols=[task["symbol"] for task in group], call_id=call_id,
                      status="requested", elapsed_seconds=0.0)
         attempt = requested.get("attempt", 1) if isinstance(requested, dict) else 1
+        for task in group:
+            call_by_task[task["task_id"]] = (call_id, attempt)
         def model_start() -> None:
             safe_observe(observer, stage="model_started", batch_id=batch_id,
                          variant_key=variant_key, domain=domain,
                          symbols=[task["symbol"] for task in group], call_id=call_id,
                          attempt=attempt, status="running", elapsed_seconds=round(time.monotonic()-started, 3))
-        result, audit, cache_hit = cache.call(profile=profile, secret=secret,
-            prompt=prompt,
-            schema=schema, caller=caller, on_model_start=model_start)
+        try:
+            result, audit, cache_hit = cache.call(profile=profile, secret=secret,
+                prompt=prompt, schema=schema, caller=caller, on_model_start=model_start)
+        except Exception as exc:
+            safe_observe(observer, stage="failure", batch_id=batch_id,
+                         variant_key=variant_key, domain=domain,
+                         symbols=[task["symbol"] for task in group], call_id=call_id,
+                         attempt=attempt, status="failed", error_type=type(exc).__name__,
+                         message=str(exc), elapsed_seconds=round(time.monotonic()-started, 3))
+            raise
         safe_observe(observer, stage="cache_hit" if cache_hit else "model_returned", batch_id=batch_id,
                      variant_key=variant_key, domain=domain,
                      symbols=[task["symbol"] for task in group], call_id=call_id,
@@ -605,6 +614,8 @@ def _run_domain(
         except Exception as exc:
             safe_observe(observer, stage="validation_failure", batch_id=batch_id,
                          variant_key=variant_key, symbol=task["symbol"], domain=domain,
+                         call_id=call_by_task.get(task["task_id"], ("", 1))[0],
+                         attempt=call_by_task.get(task["task_id"], ("", 1))[1],
                          status="failed", error_type=type(exc).__name__, message=str(exc),
                          elapsed_seconds=round(time.monotonic()-domain_started, 3))
             raise
@@ -613,7 +624,8 @@ def _run_domain(
         observed = {row["evidence_id"]: row.get("content") for row in task["evidence"]}
         safe_observe(observer, stage="report_validated", batch_id=batch_id,
                      variant_key=variant_key, symbol=task["symbol"], domain=domain,
-                     call_id=call_by_task.get(task["task_id"], ""),
+                     call_id=call_by_task.get(task["task_id"], ("", 1))[0],
+                     attempt=call_by_task.get(task["task_id"], ("", 1))[1],
                      status="validated", report={**report, "original": report,
                          "evidence": [{**{key: catalog[eid].get(key) for key in
                              ("evidence_id", "provider", "source_uri", "captured_at", "unit")},

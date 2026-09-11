@@ -307,6 +307,11 @@ class ResearchBatchTests(unittest.TestCase):
                          "decision_complete"}.issubset(stages))
         self.assertTrue(all(event.get("variant_key") in (None, "team/main") for event in events))
         self.assertFalse(any("raw_output" in event for event in events))
+        requested = {event["call_id"]: event.get("attempt", 1) for event in events
+                     if event["stage"] == "call_requested"}
+        for event in events:
+            if event["stage"] == "report_validated" and event.get("call_id"):
+                self.assertEqual(event["attempt"], requested[event["call_id"]])
 
     def test_tampering_with_frozen_evidence_fails_before_analysis(self):
         with tempfile.TemporaryDirectory() as name:

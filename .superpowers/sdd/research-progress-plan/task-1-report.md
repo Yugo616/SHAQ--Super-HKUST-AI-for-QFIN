@@ -94,3 +94,18 @@ PYTHONPATH=src:tests .../venv-nolzo/bin/python -m unittest discover -s tests
 Ran 367 tests in 9.225s
 OK
 ```
+
+## Reviewer round 2 fixes
+
+- Validated and validation-failure events now carry the exact originating group call ID and the same explicit attempt as request/start/return.
+- Domain-call failures carry the affected symbol list, call ID and attempt, so a selected-stock view shows the failure and closes the in-flight task.
+- Live inner foldouts persist immediately on toggle, independently of selector changes and service polling; the outer research foldout remains persisted as well.
+- `model_started` is emitted only after the rate-limit wait, immediately before invoking the caller. The preceding requested state honestly represents queued/waiting work.
+- Report rows use report identity before call identity in task counts, avoiding phantom model attempts. Active wall time advances using the current clock until a terminal event arrives.
+
+Targeted verification: 22 tests passed. Full verification:
+
+```text
+Ran 367 tests in 9.658s
+OK
+```

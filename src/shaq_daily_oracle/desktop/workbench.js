@@ -44,6 +44,13 @@ renderRun=function(){
       open:[...article.querySelectorAll('[data-research-section][open]')].map(row=>row.dataset.researchSection),outerOpen:true};
     renderRun();
   });
+  qa('[data-progress-job] [data-research-section]').forEach(section=>section.ontoggle=()=>{
+    const article=section.closest('[data-progress-job]'),id=article?.dataset.progressJob;
+    if(!id)return;
+    wb.researchSelections[id]={...(wb.researchSelections[id]||{}),
+      open:[...article.querySelectorAll('[data-research-section][open]')].map(row=>row.dataset.researchSection),
+      outerOpen:article.querySelector('.research-progress')?.open===true};
+  });
   qa('[data-progress-job] > .research-progress').forEach(panel=>panel.ontoggle=()=>{
     const id=panel.closest('[data-progress-job]').dataset.progressJob;
     wb.researchSelections[id]={...(wb.researchSelections[id]||{}),outerOpen:panel.open};
