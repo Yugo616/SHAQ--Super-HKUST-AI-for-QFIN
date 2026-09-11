@@ -104,7 +104,12 @@ def run_research_worker(paths):
     try:
         value = schedule_status(paths)
         lab = LabService(paths)
-        lab.refresh_labels_if_due()
+        refresh = lab.refresh_labels_if_due()
+        while refresh.get('status') in {'running', 'already_running'}:
+            current = lab.result_refresh_status()
+            if current.get('status') not in {'running', 'already_running'}:
+                break
+            time.sleep(.1)
         if not value["enabled"]:
             return 0
         now = datetime.now(ET)

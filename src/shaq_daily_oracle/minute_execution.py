@@ -54,6 +54,7 @@ class SessionInput:
     session: str
     signals: tuple[Signal, ...]
     bars: Mapping[tuple[str, pd.Timestamp], Bar]
+    ticket_budgets: Mapping[str, float] | None = None
 
 
 def execution_schedule(session, rules):
@@ -174,7 +175,8 @@ def _execute(fixture, rules, fixed_shares=None):
                 # Same conservative buy-side reserve for both directions prevents
                 # either input order or short-sale cash inflows financing tickets.
                 reserve_per_share = opening * (1 + rules.slippage) * (1 + rules.commission)
-                shares = fixed_shares[signal.symbol] if fixed_shares is not None else math.floor(budgets / reserve_per_share)
+                budget = (fixture.ticket_budgets or {}).get(signal.symbol, budgets)
+                shares = fixed_shares[signal.symbol] if fixed_shares is not None else math.floor(budget / reserve_per_share)
                 if shares:
                     order_id = blotter.order(assets[signal.symbol], shares * signal.direction,
                                              MarketOrder(), order_id=f"entry:{signal.symbol}")
@@ -259,6 +261,12 @@ def run_session(fixture, rules=Rules()):
     symbols = [signal.symbol for signal in fixture.signals]
     if len(set(symbols)) != len(symbols) or any(signal.direction not in (-1, 1) for signal in fixture.signals):
         raise ValueError("Signals require unique symbols and direction +1 or -1")
+    if fixture.ticket_budgets is not None:
+        if set(fixture.ticket_budgets) != set(symbols) or any(
+            isinstance(value, bool) or not math.isfinite(value) or value < 0
+            for value in fixture.ticket_budgets.values()
+        ):
+            raise ValueError("Ticket budgets require one finite nonnegative value per signal")
     before = _direction_hash(fixture.signals)
     result = _execute(fixture, rules)
     zero = _execute(fixture, replace(rules, commission=0., slippage=0.), fixed_shares=result["shares"])

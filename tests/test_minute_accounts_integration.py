@@ -9,6 +9,7 @@ from unittest.mock import patch
 import test_virtual_accounts as fixtures
 from shaq_daily_oracle.virtual_accounts import AccountStore, AccountRules
 from shaq_daily_oracle.minute_settlements import MINUTE_NAMESPACE, MinuteStore, refresh_minute_observations
+from shaq_daily_oracle.minute_settlements import settlement_due_dates
 from shaq_daily_oracle.data_providers import DataProfile
 from shaq_daily_oracle.hashing import sha256_payload
 
@@ -41,6 +42,30 @@ class MinuteAccountIntegrationTests(unittest.TestCase):
         rows[0] = self.fixture.row()
         recovered = self.store.refresh(rows)
         self.assertEqual(next(a for a in recovered['accounts'] if a['series_key'] == 'skill:model')['sessions'], 2)
+
+    def test_due_schedule_is_postclose_finite_and_reviewed_rows_never_fetch(self):
+        row = self.fixture.row()
+        row['minute'] = {}
+        self.assertEqual(settlement_due_dates([row], datetime.fromisoformat('2026-09-09T15:59:00-04:00')), [])
+        self.assertEqual(settlement_due_dates([row], datetime.fromisoformat('2026-09-09T16:05:00-04:00')), ['2026-09-09'])
+        attempts = {'2026-09-09': {'scheduled_offsets':[5,15,30,60]}}
+        self.assertEqual(settlement_due_dates([row], datetime.fromisoformat('2026-09-09T17:01:00-04:00'), attempts), [])
+        reviewed = self.fixture.row()
+        self.assertEqual(settlement_due_dates([reviewed], datetime.fromisoformat('2026-09-10T16:05:00-04:00'), {}, app_open=True), [])
+
+    def test_minute_refresh_filters_exact_due_dates_before_provider_call(self):
+        rows = [self.fixture.row(), self.fixture.row('next', trade_date='2026-09-10')]
+        class Provider:
+            calls = []
+            def history(self, symbols, **kwargs):
+                self.calls.append(kwargs['start'].isoformat())
+                return self_fixture.minute(kwargs['start'].isoformat())['records']
+        self_fixture = self.fixture
+        provider = Provider()
+        refresh_minute_observations(research_root=self.root, rows=rows,
+            profile=DataProfile('test','test.csv'), observed_at=datetime.fromisoformat('2026-09-10T16:10:00-04:00'),
+            market_provider=provider, eligible_dates={'2026-09-10'})
+        self.assertEqual(provider.calls, ['2026-09-10'])
 
     def test_confirmation_revision_rebuild_and_duplicate_order_invariance(self):
         minute_store = MinuteStore(self.root / 'minutes')
@@ -199,6 +224,8 @@ class MinuteAccountIntegrationTests(unittest.TestCase):
         import test_research_lab_foundation as lab_fixtures
         paths = lab_fixtures.ResearchLabFoundationTests().paths(self.root/'service')
         lab = LabService(paths)
+        AccountStore(paths.research_root/'virtual_accounts').activate(
+            AccountRules(), '2026-09-09T07:00:00-04:00')
         row = self.fixture.row(predictions=[], labels={})
         with patch.object(lab.dashboard, 'overview', return_value={'daily_results':[row]}):
             result = lab._refresh_minute_accounts(DataProfile('test','test.csv'))

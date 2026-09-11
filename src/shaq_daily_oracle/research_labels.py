@@ -169,6 +169,7 @@ def refresh_research_labels(
     observed_at: datetime | None = None,
     market_provider: Any | None = None,
     openbb_api_key: str = "",
+    eligible_dates: set[str] | None = None,
 ) -> dict[str, Any]:
     now = (observed_at or datetime.now(ET)).astimezone(ET)
     if market_provider is None:
@@ -188,6 +189,8 @@ def refresh_research_labels(
                 continue
             batch_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             trade_date = date.fromisoformat(str(batch_root.name[4:14]))
+            if eligible_dates is not None and trade_date.isoformat() not in eligible_dates:
+                continue
             session = market_session(trade_date)
             if session is None or now <= session.market_close:
                 continue

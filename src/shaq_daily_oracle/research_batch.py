@@ -795,6 +795,26 @@ def run_variant(
     decision_result = execute_decision_script(script=documents["decision/decision.js"],
         decision_input=decision_input, citation_policy="available" if mode == "synthesis" else "directional")
     predictions = decision_result["predictions"]
+    activation_path = (output_root.parents[2] / 'virtual_accounts' /
+                       'zipline_minute_v2' / 'activation.json')
+    if activation_path.is_file():
+        activation = json.loads(activation_path.read_text(encoding='utf-8'))
+        risk_rules = activation.get('rules', {})
+        frozen_at = str(evidence.manifest['as_of_et'])
+        if (risk_rules.get('risk_fraction') is not None
+                and datetime.fromisoformat(frozen_at) >= datetime.fromisoformat(activation['activated_at'])):
+            from .virtual_accounts import freeze_risk_sizing
+            histories = {}
+            for prediction in predictions:
+                source = evidence.root / 'raw' / 'stocks' / f"{prediction['symbol']}.json"
+                try:
+                    payload = json.loads(source.read_text(encoding='utf-8'))
+                except (FileNotFoundError, json.JSONDecodeError):
+                    payload = {}
+                histories[prediction['symbol']] = payload.get('daily', {}).get('bars', [])
+            predictions = freeze_risk_sizing(
+                predictions, histories, trade_date=frozen_at[:10], frozen_at_et=frozen_at,
+                lookback=int(risk_rules['lookback']))
     audit_by_symbol = integration_audit(
         reports_by_symbol=reports_by_symbol,
         adversary_by_symbol=adversary_by_symbol,

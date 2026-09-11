@@ -136,9 +136,12 @@ class LabService:
         from .virtual_accounts import AccountStore, AccountRules
         account_store = AccountStore(paths.research_root / 'virtual_accounts')
         if not (account_store.root / 'activation.json').exists():
+            # Local legacy default for a brand-new profile. This uses no
+            # credential and the experimental continuity policy still requires
+            # the reviewed controller entrypoint.
             account_store.activate(AccountRules())
 
-    def _refresh_minute_accounts(self, profile):
+    def _refresh_minute_accounts(self, profile, eligible_dates=None):
         from .minute_settlements import refresh_minute_observations
         from .virtual_accounts import AccountStore
         try:
@@ -147,7 +150,7 @@ class LabService:
                 # The whole collect/reconcile pair is one background operation.
                 rows = self.dashboard.overview()['daily_results']
                 result = refresh_minute_observations(research_root=self.paths.research_root,
-                            rows=rows, profile=profile)
+                            rows=rows, profile=profile, eligible_dates=eligible_dates)
                 rows = self.dashboard.account_rows(rows)
                 AccountStore(self.paths.research_root / 'virtual_accounts').refresh(rows)
                 return result
@@ -164,9 +167,19 @@ class LabService:
         except (FileNotFoundError, json.JSONDecodeError):
             return {"status": "idle", "operation_id": "", "result": {}}
 
-    def start_result_refresh(self, *, manual: bool = False) -> dict[str, Any]:
+    def start_result_refresh(self, *, manual: bool = False, eligible_dates=None) -> dict[str, Any]:
         """Start one credential-free price/result refresh across app instances."""
         now = datetime.now(ET)
+        if not manual and eligible_dates is None and hasattr(self, 'dashboard'):
+            from .minute_settlements import (load_settlement_attempts,
+                                             record_settlement_attempt,
+                                             settlement_due_dates)
+            rows = self.dashboard.overview().get('daily_results', [])
+            eligible_dates = settlement_due_dates(
+                self.dashboard.account_rows(rows), now,
+                load_settlement_attempts(self.paths.research_root), app_open=True)
+            if not eligible_dates:
+                return {'status': 'not_due', 'eligible_dates': []}
         prior = self.result_refresh_status()
         lock = FileLock(
             str(self.paths.research_root / "result_refresh.lock"),
@@ -177,7 +190,10 @@ class LabService:
         except LockTimeout:
             current = self.result_refresh_status()
             return {**current, "status": "already_running"}
-        if not manual and prior.get("attempted_at"):
+        if not manual and eligible_dates is not None:
+            from .minute_settlements import record_settlement_attempt
+            record_settlement_attempt(self.paths.research_root, eligible_dates, now, app_open=True)
+        if not manual and eligible_dates is None and prior.get("attempted_at"):
             try:
                 attempted = datetime.fromisoformat(str(prior["attempted_at"])).astimezone(ET)
             except ValueError:
@@ -191,16 +207,17 @@ class LabService:
         running = {
             "status": "running", "operation_id": operation_id,
             "attempted_at": now.isoformat(), "manual": manual,
+            "eligible_dates": eligible_dates,
         }
         _atomic_json(self._result_refresh_receipt, running)
         threading.Thread(
             target=self._run_result_refresh,
-            args=(lock, running), daemon=True,
+            args=(lock, running, eligible_dates), daemon=True,
             name="shaq-result-refresh",
         ).start()
         return running
 
-    def _run_result_refresh(self, lock: FileLock, running: dict[str, Any]) -> None:
+    def _run_result_refresh(self, lock: FileLock, running: dict[str, Any], eligible_dates=None) -> None:
         try:
             profile = DataProfile.from_dict(self.settings.load()["data_profile"])
             if profile.market_provider != "yfinance":
@@ -211,8 +228,9 @@ class LabService:
                 research_root=self.paths.research_root,
                 batches_root=self.paths.batches_root,
                 profile=profile,
+                eligible_dates=set(eligible_dates) if eligible_dates is not None else None,
             )
-            result["minute_settlement"] = self._refresh_minute_accounts(profile)
+            result["minute_settlement"] = self._refresh_minute_accounts(profile, eligible_dates=eligible_dates)
             failures = list(result.get("failures", []))
             minute = result.get("minute_settlement", {})
             failures.extend(minute.get("failures", []))

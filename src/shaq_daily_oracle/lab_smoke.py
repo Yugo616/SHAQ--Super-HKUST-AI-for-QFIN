@@ -365,7 +365,7 @@ def run_lab_smoke(*, package_root: Path, output_root: Path) -> dict[str, Any]:
     long_contract = _contract_trade(long_case)
     short_contract = _contract_trade(reserved_short_case)
     account_contract = {
-        "rules": asdict(rules),
+        "rules": {key: value for key, value in asdict(rules).items() if value is not None},
         "policy_id": long_case["policy_id"],
         "entry_reference_at_et": long_case["entry_reference_at_et"],
         "exit_reference_at_et": long_case["exit_reference_at_et"],

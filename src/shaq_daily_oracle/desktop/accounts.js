@@ -83,7 +83,7 @@ const SHAQAccounts = (() => {
   const localTime = value => value ? e(String(value).replace('T', ' ').slice(0, 22)) : '—';
 
   function rulesText(r) {
-    return r ? `每账户 ${usd(r.initial_cash)} · 每票最多 ${usd(r.per_prediction_budget)} · 09:31 ET 分钟开盘参考进入 · 收盘前5分钟开盘参考退出 · 单边手续费 ${(Number(r.commission_rate)*100).toFixed(2)}% · 单边不利滑点 ${(Number(r.slippage_rate)*100).toFixed(2)}%`
+    return r ? `${r.risk_fraction == null ? `旧规则每票最多 ${usd(r.per_prediction_budget)}` : `实验风险定仓（非最优性保证）：期初模拟余额 × ${(Number(r.risk_fraction)*100).toFixed(2)}% ÷ 各股票冻结波动率；单票上限 ${(Number(r.per_symbol_cap)*100).toFixed(0)}%，总开仓上限 ${(Number(r.gross_cap)*100).toFixed(0)}%，回看 ${e(r.lookback)} 个有效交易日`} · 09:31 ET 分钟开盘参考进入 · 收盘前5分钟开盘参考退出 · 单边手续费 ${(Number(r.commission_rate)*100).toFixed(2)}% · 单边不利滑点 ${(Number(r.slippage_rate)*100).toFixed(2)}%`
       : '分钟回放账户尚未启用';
   }
 
@@ -178,14 +178,14 @@ const SHAQAccounts = (() => {
       const rules=account.rules || data.rules || {};
       const engine=account.engine === 'zipline-reloaded' ? 'Zipline-reloaded' : account.engine;
       return `<tr><td>${method(account, versions)}<br><small>${e(account.model)} · ${e(engine)} ${e(account.engine_version)}</small></td>
-        <td>${usd(account.equity)}</td><td>${usd(Number(account.equity)-Number(rules.initial_cash))}</td>
+        <td>${usd(account.opening_simulation_balance ?? rules.initial_cash)}</td><td>${usd(account.equity)}</td><td>${usd(Number(account.equity)-Number(account.opening_simulation_balance ?? rules.initial_cash))}</td>
         <td>${usd(Number(account.gross_equity)-Number(rules.initial_cash))}</td><td>${usd(account.fees)}</td>
         <td>${usd(account.slippage_cost)}</td><td>${account.max_drawdown == null ? '—' : (Number(account.max_drawdown)*100).toFixed(2)+'%'}</td></tr>`;
     }).join('');
     const legacyRows=(legacy.results || []).map(row => `<tr><td>${e(row.trade_date || '—')}</td><td>${e(row.engine === 'backtrader' ? 'Backtrader' : row.engine || '旧引擎')}</td><td>${e(row.status || 'saved-only')}</td><td>${usd(row.net_pnl)}</td></tr>`).join('');
     return `<h2>独立分钟回放账户</h2><p>${rulesText(data.rules)}</p>
       <p class="account-note">收盘后模拟回放。方法、模型、引擎和规则各自绑定账户；初步完整结算立即计入，后续读取仅复核或修订。卖空仅作可借券研究假设。</p>${plot(accounts)}
-      <h3>持续账户</h3><div class="account-scroll"><table class="table"><thead><tr><th>方法 / 模型 / 引擎</th><th>账户净值</th><th>累计净盈亏</th><th>零成本对照</th><th>手续费</th><th>滑点影响</th><th>最大收盘回撤</th></tr></thead><tbody>${accountRows || '<tr><td colspan="7">等待首个合格的持续账户结果。</td></tr>'}</tbody></table></div>
+      <h3>持续账户</h3><div class="account-scroll"><table class="table"><thead><tr><th>方法 / 模型 / 引擎</th><th>期初模拟余额</th><th>当前余额</th><th>净盈亏</th><th>零成本对照</th><th>手续费</th><th>滑点影响</th><th>最大收盘回撤</th></tr></thead><tbody>${accountRows || '<tr><td colspan="8">等待首个合格的持续账户结果。</td></tr>'}</tbody></table></div>
       <h3>持续账户每日记录</h3><div class="account-scroll"><table class="table"><thead><tr><th>日期 / 方法</th><th>范围</th><th>状态</th><th>正确 / 错误</th><th>当日净盈亏</th><th>累计净盈亏</th><th>账户余额</th><th>零成本盈亏</th><th>手续费</th><th>滑点影响</th></tr></thead><tbody>${resultRows(forward, versions) || '<tr><td colspan="10">尚无持续账户记录。</td></tr>'}</tbody></table></div>
       <details class="account-secondary"><summary>历史 / 练习（不入账）</summary><div class="account-scroll"><table class="table"><thead><tr><th>日期 / 方法</th><th>范围</th><th>状态</th><th>正确 / 错误</th><th>当日净盈亏</th><th>累计净盈亏</th><th>账户余额</th><th>零成本盈亏</th><th>手续费</th><th>滑点影响</th></tr></thead><tbody>${resultRows(research, versions) || '<tr><td colspan="10">没有历史或练习回放。</td></tr>'}</tbody></table></div></details>
       <details class="account-secondary"><summary>旧版已保存结果（只读） · ${e(legacy.status === 'saved_only' ? 'saved-only' : legacy.status || 'unavailable')}</summary><p>旧引擎记录仅显示已保存文件，不重算、不并入 Zipline 分钟账户。</p><div class="account-scroll"><table class="table"><thead><tr><th>日期</th><th>旧引擎</th><th>保存状态</th><th>净盈亏</th></tr></thead><tbody>${legacyRows || '<tr><td colspan="4">没有可核验的旧版已保存结果。</td></tr>'}</tbody></table></div></details>`;

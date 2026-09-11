@@ -1,7 +1,7 @@
 """Brokerless minute accounts and read-only persisted legacy settlements."""
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 import json
@@ -29,6 +29,10 @@ class AccountRules:
     commission_rate: float = 0.0005
     slippage_rate: float = 0.0005
     schema_version: int = 2
+    risk_fraction: float | None = None
+    lookback: int | None = None
+    per_symbol_cap: float | None = None
+    gross_cap: float | None = None
 
     def __post_init__(self):
         if self.schema_version != 2:
@@ -39,6 +43,59 @@ class AccountRules:
                 raise ValueError('Invalid account rule: ' + name)
         if self.initial_cash <= 0 or self.per_prediction_budget <= 0 or self.slippage_rate >= 1:
             raise ValueError('Invalid cash, budget or slippage')
+        optional = ('risk_fraction', 'per_symbol_cap', 'gross_cap')
+        if any(getattr(self, name) is not None and (not math.isfinite(getattr(self, name)) or getattr(self, name) <= 0)
+               for name in optional):
+            raise ValueError('Invalid risk sizing rule')
+        if self.lookback is not None and (isinstance(self.lookback, bool) or self.lookback < 2):
+            raise ValueError('Risk lookback must be at least two trading days')
+
+
+def experimental_risk_rules(**changes):
+    """Approved experimental defaults; they are not claimed to be optimal."""
+    values = dict(risk_fraction=.002, lookback=20, per_symbol_cap=.10, gross_cap=.30)
+    values.update(changes)
+    return AccountRules(**values)
+
+
+def _rules_dict(rules):
+    return {key: value for key, value in asdict(rules).items() if value is not None}
+
+
+def freeze_risk_sizing(predictions, history, *, trade_date, frozen_at_et, lookback=20):
+    """Attach point-in-time volatility evidence to a new prediction copy."""
+    _time(frozen_at_et)
+    output = []
+    for prediction in predictions:
+        by_date = {}
+        for row in history.get(prediction['symbol'], []):
+            day_text = str(row.get('date') or row.get('timestamp') or '')[:10]
+            if not day_text or day_text >= trade_date:
+                continue
+            opening, closing = row.get('open'), row.get('close')
+            if all(isinstance(value, (int, float)) and not isinstance(value, bool)
+                   and math.isfinite(value) and value > 0 for value in (opening, closing)):
+                value = dict(date=day_text, open=opening, close=closing,
+                             return_value=closing / opening - 1)
+                if day_text in by_date and by_date[day_text] != value:
+                    by_date[day_text] = None
+                else:
+                    by_date[day_text] = value
+        eligible = [value for value in by_date.values() if value is not None]
+        eligible = sorted(eligible, key=lambda row: row['date'])[-lookback:]
+        sizing = dict(lookback=lookback, observation_count=len(eligible),
+                      latest_observation_date=eligible[-1]['date'] if eligible else None,
+                      frozen_at_et=frozen_at_et, price_basis='unadjusted_same_day_close/open-1')
+        if len(eligible) == lookback:
+            mean = math.fsum(row['return_value'] for row in eligible) / lookback
+            sizing['sigma'] = math.sqrt(math.fsum((row['return_value'] - mean) ** 2
+                                                  for row in eligible) / (lookback - 1))
+        else:
+            sizing['sigma'] = None
+            sizing['unavailable_reason'] = 'insufficient_prior_trading_days'
+        sizing['inputs_sha256'] = sha256_payload(eligible)
+        output.append({**prediction, 'risk_sizing': sizing})
+    return output
 
 
 def _positive(value):
@@ -91,9 +148,32 @@ def replay_day(trade_date, predictions, labels, rules: AccountRules, *, cash=Non
                 price = target['open']
                 bars[symbol, pd.Timestamp(target['timestamp'])] = Bar(
                     price, price, price, price, 1.0 if target['usable_volume'] else 0.0)
+    ticket_budgets = None
+    unavailable = {}
+    if rules.risk_fraction is not None:
+        ticket_budgets = {}
+        gross_remaining = cash * rules.gross_cap
+        for prediction in predictions:
+            sizing = prediction.get('risk_sizing') or {}
+            sigma = sizing.get('sigma')
+            reason = None
+            if not isinstance(sigma, (int, float)) or isinstance(sigma, bool) or not math.isfinite(sigma) or sigma <= 0:
+                reason = 'missing_frozen_sigma'
+            elif sizing.get('lookback') != rules.lookback:
+                reason = 'invalid_frozen_lookback'
+            elif not sizing.get('inputs_sha256') or not sizing.get('frozen_at_et'):
+                reason = 'missing_frozen_sizing_provenance'
+            elif sizing.get('latest_observation_date', trade_date) >= trade_date:
+                reason = 'future_sizing_data_rejected'
+            budget = 0. if reason else min(cash * rules.risk_fraction / sigma,
+                                           cash * rules.per_symbol_cap, gross_remaining)
+            ticket_budgets[prediction['symbol']] = max(0., budget)
+            gross_remaining -= ticket_budgets[prediction['symbol']]
+            if reason:
+                unavailable[prediction['symbol']] = reason
     engine = run_session(SessionInput(trade_date, tuple(
         Signal(p['symbol'], 1 if p['direction'] == 'bullish' else -1)
-        for p in predictions), bars),
+        for p in predictions), bars, ticket_budgets=ticket_budgets),
         Rules(initial_cash=max(0., cash), ticket_budget=rules.per_prediction_budget,
               commission=rules.commission_rate, slippage=rules.slippage_rate))
     if not engine['reconciled'] or not engine['zero_cost']['reconciled']:
@@ -121,7 +201,8 @@ def replay_day(trade_date, predictions, labels, rules: AccountRules, *, cash=Non
             status='closed' if exit_fill else 'open_incomplete' if entry else
                    'unavailable_entry' if targets[symbol]['entry'] is None else
                    'unfilled_volume' if not targets[symbol]['entry']['usable_volume'] else 'unfilled_budget',
-            budget=min(rules.per_prediction_budget, max(0., cash)/len(symbols)),
+            budget=(ticket_budgets or {}).get(symbol, min(rules.per_prediction_budget, max(0., cash)/len(symbols))),
+            sizing_unavailable_reason=unavailable.get(symbol), risk_sizing=prediction.get('risk_sizing'),
             official_open=official_open, official_close=official_close,
             official_open_to_close_return=(official_close / official_open - 1)
                 if official_open is not None and official_close is not None else None,
@@ -182,17 +263,20 @@ class AccountStore:
         self.legacy_root = root
         self.root = root / ACCOUNT_NAMESPACE
 
-    def activate(self, rules: AccountRules, activated_at=None):
+    def activate(self, rules: AccountRules, activated_at=None, *, continuity=False):
         self.root.mkdir(parents=True, exist_ok=True)
         with FileLock(str(self.root / '.lock')):
             path = self.root / 'activation.json'
             if path.exists():
                 prior = json.loads(path.read_text(encoding="utf-8"))
-                if prior['rules'] == asdict(rules):
+                if prior['rules'] == _rules_dict(rules):
                     return prior
                 if activated_at and _time(activated_at) <= _time(prior['activated_at']):
                     raise ValueError('A changed account policy must activate after its predecessor')
-            value = {'engine': ENGINE_ID, 'engine_version': ENGINE_VERSION, 'policy_id': POLICY_ID, 'rules': asdict(rules), 'activated_at': activated_at or datetime.now(ET).isoformat()}
+            predecessor = sha256_payload(prior) if path.exists() else None
+            value = {'engine': ENGINE_ID, 'engine_version': ENGINE_VERSION, 'policy_id': POLICY_ID,
+                     'rules': _rules_dict(rules), 'activated_at': activated_at or datetime.now(ET).isoformat(),
+                     'continuity': bool(continuity), 'predecessor_activation_sha256': predecessor}
             _time(value['activated_at'])
             archive = self.root / 'policies' / (sha256_payload(value) + '.json')
             _atomic_json(archive, value)
@@ -208,6 +292,8 @@ class AccountStore:
                           key=lambda p: _time(p['activated_at']))
         result = self._refresh_policy(rows, current)
         for i, policy in enumerate(policies):
+            if current.get('continuity'):
+                break
             if _time(policy['activated_at']) >= _time(current['activated_at']):
                 continue
             end = _time(policies[i+1]['activated_at']) if i+1 < len(policies) else _time(current['activated_at'])
@@ -228,6 +314,21 @@ class AccountStore:
     @staticmethod
     def _row_key(row):
         return sha256_payload([row['batch_id'], row['variant_key'], row['series_key']])
+
+    def saved_settlement_for(self, row, *, exclude_rules_hash=None, rules_hash=None):
+        matches = []
+        for path in (self.root / 'settlements').glob('*.json'):
+            value = json.loads(path.read_text(encoding='utf-8'))
+            if sha256_payload(value) != path.stem:
+                raise ValueError('Settlement revision was modified')
+            if (value.get('source_result_hash') == row.get('variant_result_sha256')
+                    and value.get('rules_hash') != exclude_rules_hash
+                    and (rules_hash is None or value.get('rules_hash') == rules_hash)
+                    and value.get('labels_hash') == sha256_payload(row.get('labels', {}))
+                    and value.get('minute_hash') == sha256_payload(row.get('minute', {}))
+                    and value.get('status') in ('final', 'provisional', 'empty')):
+                matches.append((path.stem, value))
+        return sorted(matches, key=lambda pair: pair[0])[-1] if matches else None
 
     def view(self, rows):
         """Read cached aggregation only. Background reconciliation owns engine work."""
@@ -279,34 +380,62 @@ class AccountStore:
                 if source_eligible:
                     selected.add(key)
                 scope = 'duplicate' if duplicate else 'late' if late or (row.get('source_eligible') is True and not source_eligible) else 'practice' if not source_eligible else 'historical' if _completion(row) is None or _completion(row) < _time(policy['activated_at']) else 'forward'
-                identity = sha256_payload([row['series_key'], ENGINE_ID, ENGINE_VERSION, POLICY_ID, rules_hash])
+                continuity_key = [row.get('method_identity', row['series_key']),
+                                  row.get('model_identity', row.get('model'))]
+                identity = sha256_payload([continuity_key if policy.get('continuity') else row['series_key'],
+                                           ENGINE_ID, ENGINE_VERSION, POLICY_ID, rules_hash])
                 base = dict(batch_id=row['batch_id'], variant_key=row['variant_key'], trade_date=row['trade_date'],
                             label=row['label'], model=row.get('model'), scope=scope, source_scope=scope,
-                            account_id=identity, rules=asdict(rules), policy_id=POLICY_ID, legacy=False,
+                            series_key=row['series_key'], method_identity=row.get('method_identity', row['series_key']),
+                            model_identity=row.get('model_identity', row.get('model')),
+                            account_id=identity, rules=_rules_dict(rules), policy_id=POLICY_ID, legacy=False,
                             engine=ENGINE_ID, engine_version=ENGINE_VERSION)
                 if duplicate:
                     results.append(dict(base, status='duplicate', trades=[], orders=[]))
                     continue
                 account = None
                 if scope in ('forward', 'historical'):
+                    historical_net = math.fsum(
+                        float(item.get('net_pnl') or 0) for item in results
+                        if item.get('account_id') == identity and item.get('scope') == 'historical'
+                        and item.get('status') in ('final', 'provisional', 'empty')) if policy.get('continuity') else 0.
+                    opening_equity = rules.initial_cash + historical_net
                     funded = accounts.setdefault(identity, dict(account_id=identity, series_key=row['series_key'],
                         label=row['label'], model=row.get('model'), engine=ENGINE_ID, engine_version=ENGINE_VERSION,
                         policy_id=POLICY_ID, method_identity=row.get('method_identity', row['series_key']),
-                        model_identity=row.get('model_identity', row.get('model')), legacy=False, equity=rules.initial_cash, gross_equity=rules.initial_cash,
-                        rules=asdict(rules), activated_at=policy['activated_at'],
-                        peak=rules.initial_cash, max_drawdown=0.0, fees=0.0, slippage_cost=0.0, sessions=0, curve=[], blocked=False))
+                        model_identity=row.get('model_identity', row.get('model')), legacy=False, equity=opening_equity, gross_equity=opening_equity,
+                        rules=_rules_dict(rules), activated_at=policy['activated_at'],
+                        opening_simulation_balance=opening_equity, source_scope='simulation_cumulative' if policy.get('continuity') else 'forward',
+                        peak=opening_equity, max_drawdown=0.0, fees=0.0, slippage_cost=0.0, sessions=0, curve=[], blocked=False))
                     if scope == 'forward':
+                        if policy.get('continuity') and not funded['sessions'] and not funded['curve']:
+                            funded.update(equity=opening_equity, gross_equity=opening_equity,
+                                          opening_simulation_balance=opening_equity, peak=opening_equity)
                         account = funded
                 if account and account['blocked']:
                     results.append(dict(base, status='blocked_previous', trades=[], orders=[]))
                     continue
                 cash = account['equity'] if account else rules.initial_cash
                 processing_started = datetime.now(ET).isoformat()
-                try:
-                    replay = replay_day(row['trade_date'], row['predictions'], row['labels'], rules, cash=cash, minute=row.get('minute'))
-                except (ValueError, RuntimeError) as exc:
-                    replay = {'status': 'error', 'error': str(exc), 'orders': [], 'trades': []}
+                saved = (self.saved_settlement_for(row, exclude_rules_hash=rules_hash)
+                         if scope == 'historical' and policy.get('continuity') else None)
+                if saved:
+                    source_hash, source_document = saved
+                    replay = {key: value for key, value in source_document.items()
+                              if key not in base and key not in ('settlement_hash', 'rules_hash')}
+                    replay['source_settlement_hash'] = source_hash
+                    replay['replayed'] = False
+                else:
+                    try:
+                        replay_rules = rules if scope == 'forward' else replace(
+                            rules, risk_fraction=None, lookback=None, per_symbol_cap=None, gross_cap=None)
+                        replay = replay_day(row['trade_date'], row['predictions'], row['labels'], replay_rules,
+                                            cash=cash, minute=row.get('minute'))
+                    except (ValueError, RuntimeError) as exc:
+                        replay = {'status': 'error', 'error': str(exc), 'orders': [], 'trades': []}
                 entry = dict(base, **replay)
+                if policy.get('continuity') and scope == 'forward':
+                    entry['source_scope'] = 'simulation_cumulative'
                 if account:
                     if replay['status'] in ('final', 'provisional', 'empty'):
                         account['equity'] = replay['closing_cash']
@@ -352,7 +481,23 @@ class AccountStore:
                     entry.update(processing_started_at_et=receipt['processing_started_at_et'],
                                  processed_at_et=receipt['processed_at_et'])
                 results.append(entry)
-            return dict(rules=asdict(rules), rules_hash=rules_hash, activated_at=policy['activated_at'],
+            if policy.get('continuity'):
+                for account in accounts.values():
+                    if account['sessions'] or account['curve']:
+                        continue
+                    seed = rules.initial_cash + math.fsum(
+                        float(item.get('net_pnl') or 0) for item in results
+                        if item.get('account_id') == account['account_id']
+                        and item.get('scope') == 'historical'
+                        and item.get('status') in ('final', 'provisional', 'empty'))
+                    account.update(equity=seed, gross_equity=seed,
+                                   opening_simulation_balance=seed, peak=seed)
+                for item in results:
+                    if item.get('account_id') in accounts and item.get('status') == 'pending':
+                        item['source_scope'] = 'simulation_cumulative'
+                        item['account_balance'] = accounts[item['account_id']]['equity']
+                        item['account_cumulative_net_pnl'] = item['account_balance'] - rules.initial_cash
+            return dict(rules=_rules_dict(rules), rules_hash=rules_hash, activated_at=policy['activated_at'],
                         accounts=sorted(accounts.values(), key=lambda r: r['account_id']), results=results)
 
     def read_legacy(self):
@@ -367,3 +512,35 @@ class AccountStore:
         return dict(status='saved_only' if documents else 'unavailable',
                     engine='backtrader', read_only=True, results=documents,
                     missing_settlement_policy='unavailable_no_recalculation')
+
+
+def reconcile_activation(store, rows, *, activated_at, apply=False):
+    """One reviewed controller entrypoint. Preview performs no filesystem writes."""
+    rules = experimental_risk_rules()
+    sources = []
+    for row in rows:
+        saved = store.saved_settlement_for(row)
+        if saved:
+            digest, document = saved
+            sources.append({'trade_date': row['trade_date'], 'batch_id': row['batch_id'],
+                            'variant_key': row['variant_key'], 'source_settlement_hash': digest,
+                            'source_scope': document.get('scope'), 'net_pnl': document.get('net_pnl')})
+    preview = {'applied': False, 'activated_at': activated_at, 'rules': _rules_dict(rules),
+               'row_count': len(rows), 'mode': 'simulation_cumulative',
+               'source_settlements': sources,
+               'projected_seed_by_method_model': {},
+               'warning': 'Experimental defaults are not validated optimal.'}
+    for row in rows:
+        key = sha256_payload([row.get('method_identity', row['series_key']),
+                              row.get('model_identity', row.get('model'))])
+        matching = [item for item in sources if item['batch_id'] == row['batch_id']
+                    and item['variant_key'] == row['variant_key']]
+        if matching and matching[0]['net_pnl'] is not None:
+            preview['projected_seed_by_method_model'][key] = (
+                preview['projected_seed_by_method_model'].get(key, rules.initial_cash)
+                + float(matching[0]['net_pnl']))
+    if not apply:
+        return preview
+    activation = store.activate(rules, activated_at, continuity=True)
+    result = store.refresh(rows)
+    return {**preview, 'applied': True, 'activation': activation, 'result': result}

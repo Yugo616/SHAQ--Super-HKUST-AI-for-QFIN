@@ -3,6 +3,7 @@ import importlib.util
 import json
 import tempfile
 import unittest
+from unittest.mock import patch
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -188,6 +189,93 @@ class VirtualAccountTests(unittest.TestCase):
             self.assertIsNotNone(retained)
             self.assertEqual(retained['curve'], old['curve'])
             self.assertEqual(retained['fees'], old['fees'])
+
+    def test_explicit_continuity_activation_seeds_saved_history_once_and_links_alias(self):
+        api = self.api()
+        with tempfile.TemporaryDirectory() as tmp:
+            store = api.AccountStore(Path(tmp))
+            rules = api.experimental_risk_rules()
+            store.activate(rules, '2026-09-11T12:00:00-04:00', continuity=True)
+            history = self.row('history', '2026-09-09T08:00:00-04:00',
+                               method_identity='same-method', model_identity='same-model')
+            history['minute'] = self.minute(a=102, b=100)
+            pending = self.row('pending', '2026-09-11T08:00:00-04:00', trade_date='2026-09-11',
+                               series_key='alias-name:model', method_identity='same-method',
+                               model_identity='same-model', minute={})
+            first = store.refresh([history, pending])
+            account = first['accounts'][0]
+            self.assertAlmostEqual(account['opening_simulation_balance'], 10014.3820045)
+            self.assertAlmostEqual(account['equity'], 10014.3820045)
+            self.assertEqual(first['results'][1]['status'], 'pending')
+            self.assertEqual(first['results'][1]['source_scope'], 'simulation_cumulative')
+            self.assertEqual(store.refresh([history, pending]), first)
+
+    def test_risk_sizing_uses_frozen_prior_volatility_and_rejects_missing(self):
+        api = self.api()
+        rules = api.experimental_risk_rules(lookback=2)
+        predictions = [
+            {'symbol':'AAA','direction':'bullish','risk_sizing':{
+                'sigma':.02, 'lookback':2, 'latest_observation_date':'2026-09-08',
+                'frozen_at_et':'2026-09-09T08:00:00-04:00', 'inputs_sha256':'aaa'}},
+            {'symbol':'BBB','direction':'bearish'},
+        ]
+        result = api.replay_day('2026-09-09', predictions, self.labels(), rules,
+                                cash=10000, minute=self.minute())
+        self.assertEqual(result['trades'][0]['quantity'], 9)
+        self.assertEqual(result['trades'][1]['quantity'], 0)
+        self.assertEqual(result['trades'][1]['sizing_unavailable_reason'], 'missing_frozen_sigma')
+        doubled = api.replay_day('2026-09-09', predictions, self.labels(), rules,
+                                 cash=20000, minute=self.minute())
+        self.assertEqual(doubled['trades'][0]['quantity'], 19)
+        predictions[0]['risk_sizing']['sigma'] = .04
+        half = api.replay_day('2026-09-09', predictions, self.labels(), rules,
+                              cash=10000, minute=self.minute())
+        self.assertEqual(half['trades'][0]['quantity'], 4)
+
+    def test_activation_preview_is_read_only_and_activation_records_predecessor(self):
+        api = self.api()
+        with tempfile.TemporaryDirectory() as tmp:
+            store = api.AccountStore(Path(tmp))
+            before = list(Path(tmp).rglob('*'))
+            preview = api.reconcile_activation(store, [], activated_at='2026-09-11T12:00:00-04:00', apply=False)
+            self.assertEqual(list(Path(tmp).rglob('*')), before)
+            self.assertFalse(preview['applied'])
+            applied = api.reconcile_activation(store, [], activated_at='2026-09-11T12:00:00-04:00', apply=True)
+            self.assertTrue(applied['applied'])
+            self.assertEqual(applied['activation']['predecessor_activation_sha256'], None)
+            self.assertEqual(applied['activation']['rules']['risk_fraction'], .002)
+
+    def test_freeze_sizing_uses_only_prior_unadjusted_open_close_rows(self):
+        api = self.api()
+        predictions = [{'symbol':'AAA','direction':'bullish'}]
+        history = {'AAA': [
+            {'date':'2026-09-07','open':100,'close':101},
+            {'date':'2026-09-08','open':100,'close':103},
+            {'date':'2026-09-09','open':100,'close':50},
+        ]}
+        frozen = api.freeze_risk_sizing(predictions, history, trade_date='2026-09-09',
+            frozen_at_et='2026-09-09T08:00:00-04:00', lookback=2)
+        self.assertAlmostEqual(frozen[0]['risk_sizing']['sigma'], 0.01414213562373095)
+        self.assertEqual(frozen[0]['risk_sizing']['latest_observation_date'], '2026-09-08')
+        self.assertEqual(predictions, [{'symbol':'AAA','direction':'bullish'}])
+
+    def test_continuity_reads_saved_old_fill_without_replaying_or_resizing(self):
+        api = self.api()
+        with tempfile.TemporaryDirectory() as tmp:
+            store = api.AccountStore(Path(tmp))
+            row = self.row(method_identity='same', model_identity='model')
+            store.activate(api.AccountRules(), '2026-09-09T07:00:00-04:00')
+            old = store.refresh([row])['results'][0]
+            old_files = {p: p.read_bytes() for p in (store.root/'settlements').glob('*.json')}
+            store.activate(api.experimental_risk_rules(), '2026-09-10T07:00:00-04:00', continuity=True)
+            with patch('shaq_daily_oracle.virtual_accounts.replay_day',
+                       side_effect=AssertionError('old fill replayed')):
+                projected = store.refresh([row])['results'][0]
+            self.assertEqual([x['quantity'] for x in projected['trades']],
+                             [x['quantity'] for x in old['trades']])
+            self.assertFalse(projected['replayed'])
+            self.assertEqual(projected['source_settlement_hash'], old['settlement_hash'])
+            self.assertTrue(all(path.read_bytes() == content for path, content in old_files.items()))
 
     def test_settlement_tampering_rejected_and_index_independent_rebuild(self):
         api = self.api()

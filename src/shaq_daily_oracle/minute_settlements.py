@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 from filelock import FileLock
 
 from .hashing import sha256_payload
-from .market_calendar import market_session
+from .market_calendar import market_session, next_market_session
 from .settings import _atomic_json
 
 ET = ZoneInfo('America/New_York')
@@ -155,7 +155,8 @@ class MinuteStore:
                     source=current['source'], confirmed_by_independent_reobservation=confirmed)
 
 
-def refresh_minute_observations(*, research_root, rows, profile, observed_at=None, market_provider=None):
+def refresh_minute_observations(*, research_root, rows, profile, observed_at=None, market_provider=None,
+                                eligible_dates=None):
     """Background service entry point. Never called during dashboard rendering."""
     from .data_providers import YFinanceProvider
     now = (observed_at or datetime.now(ET)).astimezone(ET)
@@ -165,6 +166,8 @@ def refresh_minute_observations(*, research_root, rows, profile, observed_at=Non
     grouped = {}
     for row in rows:
         day = date.fromisoformat(row['trade_date'])
+        if eligible_dates is not None and row['trade_date'] not in eligible_dates:
+            continue
         session = market_session(day)
         if session and now > session.market_close:
             grouped.setdefault(day, set()).update(p['symbol'] for p in row.get('predictions', []))
@@ -191,3 +194,64 @@ def refresh_minute_observations(*, research_root, rows, profile, observed_at=Non
         except Exception as exc:
             failures.append(dict(trade_date=day.isoformat(), error_type=type(exc).__name__, message=str(exc)))
     return {'refreshed_dates': refreshed, 'failures': failures}
+
+
+RETRY_MINUTES = (5, 15, 30, 60)
+
+
+def load_settlement_attempts(research_root):
+    path = Path(research_root) / 'minute_refresh_attempts.json'
+    try:
+        return json.loads(path.read_text(encoding='utf-8'))
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def record_settlement_attempt(research_root, dates, now, *, app_open=False):
+    now = _stamp(now).astimezone(ET)
+    attempts = load_settlement_attempts(research_root)
+    for day_text in dates:
+        item = attempts.setdefault(day_text, {'scheduled_offsets': []})
+        session = market_session(date.fromisoformat(day_text))
+        elapsed = (now - session.market_close).total_seconds() / 60 if session else 0
+        offset = next((value for value in reversed(RETRY_MINUTES) if elapsed >= value), None)
+        if offset in RETRY_MINUTES and offset not in item['scheduled_offsets']:
+            item['scheduled_offsets'].append(offset)
+            item['scheduled_offsets'].sort()
+        if app_open:
+            item['last_app_open_date'] = now.date().isoformat()
+        item['last_attempted_at_et'] = now.isoformat()
+    _atomic_json(Path(research_root) / 'minute_refresh_attempts.json', attempts)
+    return attempts
+
+
+def settlement_due_dates(rows, now, attempts=None, *, app_open=False, manual=False):
+    """Pure local due-state check. Calling it never reads credentials or the network."""
+    now = _stamp(now).astimezone(ET)
+    attempts = attempts or {}
+    due = []
+    by_date = {}
+    for row in rows:
+        by_date.setdefault(row['trade_date'], []).append(row)
+    for day_text, day_rows in sorted(by_date.items()):
+        session = market_session(date.fromisoformat(day_text))
+        if not session or now < session.market_close + timedelta(minutes=5):
+            continue
+        reviewed = all(row.get('minute', {}).get('status') == 'final' and
+                       all(value.get('status') == 'final' for value in row.get('labels', {}).values())
+                       for row in day_rows)
+        if reviewed:
+            continue
+        if manual:
+            due.append(day_text); continue
+        elapsed = (now - session.market_close).total_seconds() / 60
+        used = set(attempts.get(day_text, {}).get('scheduled_offsets', []))
+        offset = next((value for value in RETRY_MINUTES if elapsed >= value and value not in used), None)
+        if offset is not None and elapsed <= RETRY_MINUTES[-1] + 1:
+            due.append(day_text); continue
+        next_session = next_market_session(date.fromisoformat(day_text))
+        confirmation_due = next_session.market_close + timedelta(minutes=5)
+        local_day = now.date().isoformat()
+        if app_open and now >= confirmation_due and attempts.get(day_text, {}).get('last_app_open_date') != local_day:
+            due.append(day_text)
+    return due
