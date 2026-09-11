@@ -1,0 +1,77 @@
+# Task 1 report: end-to-end research presentation
+
+## Commit
+
+- `95c4a06 Show live research execution progress`
+
+## Scope delivered
+
+- Added an append-only JSONL research observer keyed by batch, variant, symbol(s), domain, call identity, attempt, timestamp, status, and measured elapsed seconds.
+- Instrumented preparation, screening, domain-call start/return, cache hit, no-data, validated report, validation failure, adversary, decision, and terminal failure boundaries.
+- Kept observer writes and reads non-blocking. Raw invalid model output is never recorded or rendered; only contract-validated reports enter the conclusion view.
+- Exposed incremental events through the existing `LabService` job polling and completed batch-detail APIs.
+- Added current-day and history research views with version/candidate selectors, task counts, elapsed time (no invented percentage), support/counterevidence/unknowns/invalidation, source/time/unit detail, original validated-report foldouts, safe escaping, and legacy-history disclosure.
+- Preserved native duplicate-run controls and replay selection; expanded sections and selected candidate/version remain in in-memory UI state across the normal refresh wrapper.
+- Extended the deterministic `lab_smoke` fixture to emit the same presentation events without networking, live model calls, installed-runtime changes, or permanent user history.
+- Confirmed forward virtual accounts inherit the prior close as the next session opening cash for the same method+model identity; the UI now labels period opening and closing balances. Historical scope remains isolated.
+- Bumped source-tree version only to `0.6.2.dev1`; no publishing or installed-app mutation was performed.
+
+## TDD evidence
+
+RED (before implementation):
+
+```text
+PYTHONPATH=src:tests .../venv-nolzo/bin/python -m unittest tests.test_research_progress tests.test_today_progress
+TypeError: ui.researchHtml is not a function
+FAILED (errors=2)
+
+PYTHONPATH=src:tests .../venv-nolzo/bin/python -m unittest tests.test_research_batch.ResearchBatchTests.test_progress_observer_is_isolated_and_does_not_change_predictions
+TypeError: ResearchBatchRunner.run() got an unexpected keyword argument 'observer'
+FAILED (errors=1)
+```
+
+GREEN targeted:
+
+```text
+PYTHONPATH=src:tests .../venv-nolzo/bin/python -m unittest tests.test_research_progress tests.test_today_progress tests.test_research_batch tests.test_virtual_accounts tests.test_lab_smoke
+Ran 34 tests in 3.655s
+OK
+```
+
+Full regression:
+
+```text
+PYTHONPATH=src:tests .../venv-nolzo/bin/python -m unittest discover -s tests
+Ran 366 tests in 9.775s
+OK
+```
+
+Eight-Skill/release validation command:
+
+```text
+PYTHONPATH=src:tests .../venv-nolzo/bin/python scripts/validate_release.py
+ValueError: local or legacy path in public package: .../local-results-plan.md
+```
+
+This check reaches the repository-wide privacy scan after validating exactly eight Skills. Its only failure is a pre-existing untracked planning file outside task scope; no product source failure was reported.
+
+Deterministic GUI/smoke reproducer:
+
+```text
+smoke_dir=$(mktemp -d /private/tmp/shaq-progress-smoke.XXXXXX)
+PYTHONPATH=src:tests .../venv-nolzo/bin/python -m shaq_daily_oracle.lab_smoke --package-root . --output "$smoke_dir"
+```
+
+Observed: `status=passed`, `fixture_kind=deterministic-model-fixture`, 30 events, with preparation, screening, domain call start/return, validated report, adversary, and decision stages.
+
+## Identity and safety checks
+
+- The observer is not included in prompts, schemas, cache keys, model profile identity, method identity, portfolio rules, or prediction inputs.
+- An observer exception is swallowed at the sidecar boundary; a dedicated regression confirms predictions are identical with and without it.
+- Multi-symbol calls store the exact symbol list on the single real call event; cache reuse is marked as cache reuse and is not represented as an independent model call.
+- No live model/provider call, broker action, installation, or app restart occurred.
+
+## Concerns for controller review
+
+- The controller should remove or exclude the pre-existing `local-results-plan.md` from the release candidate before treating `scripts/validate_release.py` as green.
+- Native rendering/build review remains controller-owned. Use the deterministic smoke output for the new timeline; today's real completed batch is correctly treated as legacy and must not be backfilled with fabricated timestamps.
