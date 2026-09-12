@@ -51,7 +51,10 @@ def _side(batch, key):
         'profile': profile,
         'request_policies': sorted(set(policies)),
         'response_models': sorted(set(response_models)),
-    } if (profile and policies and all(policies) and all(response_models)) else None
+    # Historical audits do not map response-model identity to stable domain roles.
+    # A mixed set cannot prove that the same model handled the same tasks.
+    } if (profile and policies and all(policies) and all(response_models)
+          and len(set(response_models)) == 1 and len(set(policies)) == 1) else None
     return {
         'batch_id': batch.get('batch_id'), 'variant_key': key,
         'label': variant.get('variant', {}).get('label') or key,

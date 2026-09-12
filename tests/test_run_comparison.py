@@ -114,6 +114,17 @@ class RunComparisonTests(unittest.TestCase):
         self.assertEqual(value['dimensions']['model']['status'], 'different')
         self.assertFalse(value['controlled_method_comparison'])
 
+    def test_mixed_response_models_cannot_lose_call_assignments_in_a_set(self):
+        left, right = batch(), batch('team/alternative')
+        for source, key, names in ((left, 'team/main', ('model-a', 'model-b')),
+                                   (right, 'team/alternative', ('model-b', 'model-a'))):
+            first = source['variants'][key]['model_call_audits'][0]
+            source['variants'][key]['model_call_audits'] = [
+                {**first, 'response_model': name} for name in names]
+        value = run_comparison.compare_runs(left, 'team/main', right, 'team/alternative')
+        self.assertEqual(value['dimensions']['model']['status'], 'unknown')
+        self.assertFalse(value['controlled_method_comparison'])
+
     def test_known_matching_response_models_allow_controlled_comparison(self):
         left, right = batch(), batch('team/alternative')
         value = run_comparison.compare_runs(
