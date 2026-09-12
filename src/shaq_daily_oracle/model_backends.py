@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import ntpath
 import os
 import plistlib
+import re
 import shutil
 import subprocess
+import sys
 import tempfile
 from dataclasses import asdict, dataclass
 from datetime import datetime
@@ -29,6 +32,66 @@ SUPPORTED_PROTOCOLS = {
     "claude-code",
 }
 SUPPORTED_OUTPUT_MODES = {"strict", "local_validated"}
+
+
+@dataclass(frozen=True)
+class ProtocolCapabilities:
+    """Request behavior that is stable for a protocol, never inferred from model names."""
+
+    provider_kind: str
+    local_subscription: bool
+    sampling_parameters: tuple[str, ...]
+    policy_version: int = 1
+
+    def identity_payload(self) -> dict[str, Any]:
+        value = asdict(self)
+        value["sampling_parameters"] = list(self.sampling_parameters)
+        return value
+
+
+_PROTOCOL_CAPABILITIES = {
+    "openai-responses": ProtocolCapabilities(
+        provider_kind="openai-official",
+        local_subscription=False,
+        sampling_parameters=(),
+    ),
+    "openai-chat-completions": ProtocolCapabilities(
+        provider_kind="openai-compatible-relay",
+        local_subscription=False,
+        sampling_parameters=(),
+    ),
+    "anthropic-messages": ProtocolCapabilities(
+        provider_kind="anthropic-official",
+        local_subscription=False,
+        sampling_parameters=(),
+    ),
+    "codex-cli": ProtocolCapabilities(
+        provider_kind="codex-cli",
+        local_subscription=True,
+        sampling_parameters=(),
+    ),
+    "claude-code": ProtocolCapabilities(
+        provider_kind="claude-code",
+        local_subscription=True,
+        sampling_parameters=(),
+    ),
+}
+
+
+def _protocol_capabilities(protocol: str) -> ProtocolCapabilities:
+    try:
+        return _PROTOCOL_CAPABILITIES[protocol]
+    except KeyError as exc:
+        raise ModelBackendError(f"unsupported model protocol: {protocol}") from exc
+
+
+def _effective_protocol_policy(profile: "ModelProfile") -> dict[str, Any]:
+    capabilities = _protocol_capabilities(profile.protocol)
+    return {
+        "protocol_policy_version": capabilities.policy_version,
+        "provider_kind": capabilities.provider_kind,
+        "sampling_parameters": list(capabilities.sampling_parameters),
+    }
 
 
 @dataclass(frozen=True)
@@ -92,7 +155,12 @@ class ModelProfile:
         return asdict(self)
 
     def identity(self) -> str:
-        return sha256_payload(self.public_dict())
+        return sha256_payload({
+            "profile": self.public_dict(),
+            "protocol_capabilities": _protocol_capabilities(
+                self.protocol
+            ).identity_payload(),
+        })
 
     def endpoint_fingerprint(self) -> str:
         if self.protocol in {"codex-cli", "claude-code"}:
@@ -112,7 +180,11 @@ def _validate_result(value: Any, schema: dict[str, Any]) -> dict[str, Any]:
     except ImportError as exc:
         raise ModelBackendError("jsonschema is required for model output validation") from exc
     except Exception as exc:
-        raise ModelBackendError(f"model output failed JSON Schema validation: {exc}") from exc
+        path = ".".join(str(part) for part in getattr(exc, "path", ())) or "root"
+        validator = str(getattr(exc, "validator", "schema"))
+        raise ModelBackendError(
+            f"model output failed JSON Schema validation at {path} ({validator})"
+        ) from exc
     return value
 
 
@@ -148,7 +220,7 @@ def _auth_headers(profile: ModelProfile, secret: str) -> dict[str, str]:
 def uses_local_subscription(profile: ModelProfile) -> bool:
     """Whether the model is authenticated by its own locally logged-in CLI."""
 
-    return profile.protocol in {"codex-cli", "claude-code"}
+    return _protocol_capabilities(profile.protocol).local_subscription
 
 
 def find_desktop_cli(executable: str, search_roots: list[Path]) -> str | None:
@@ -172,10 +244,33 @@ def find_desktop_cli(executable: str, search_roots: list[Path]) -> str | None:
 
 def _local_cli(profile: ModelProfile) -> str:
     executable = "codex" if profile.protocol == "codex-cli" else "claude"
-    located = shutil.which(executable) or find_desktop_cli(executable, [
-        Path.home() / '.local/bin', Path('/opt/homebrew/bin'), Path('/usr/local/bin'),
-        Path('/Applications'), Path.home() / 'Applications',
-    ])
+    if sys.platform == "win32":
+        search_roots = [
+            Path(value) / suffix
+            for value, suffix in (
+                (os.environ.get("USERPROFILE", ""), Path(".local/bin")),
+                (os.environ.get("APPDATA", ""), Path("npm")),
+                (os.environ.get("LOCALAPPDATA", ""), Path("Programs")),
+            )
+            if value
+        ]
+        located = find_desktop_cli(f"{executable}.exe", search_roots)
+        if not located:
+            located = shutil.which(executable)
+        if not located:
+            located = next(
+                (
+                    candidate
+                    for launcher in (f"{executable}.cmd", f"{executable}.bat")
+                    if (candidate := find_desktop_cli(launcher, search_roots))
+                ),
+                None,
+            )
+    else:
+        located = shutil.which(executable) or find_desktop_cli(executable, [
+            Path.home() / '.local/bin', Path('/opt/homebrew/bin'), Path('/usr/local/bin'),
+            Path('/Applications'), Path.home() / 'Applications',
+        ])
     if not located:
         raise ModelBackendError(
             f"未找到 {executable}。请在此电脑先安装并登录，再回到应用连接。"
@@ -186,10 +281,59 @@ def _local_cli(profile: ModelProfile) -> str:
 def _local_cli_environment() -> dict[str, str]:
     """Keep only ordinary locale/PATH values; never pass evidence through env vars."""
 
+    allowed = {
+        "APPDATA", "COMSPEC", "HOME", "LANG", "LANGUAGE", "LC_ALL", "LC_CTYPE",
+        "LOCALAPPDATA", "PATH", "PATHEXT", "SystemRoot", "TEMP", "TERM", "TMP",
+        "TMPDIR", "USER", "USERPROFILE", "WINDIR",
+    }
     return {
         key: value for key, value in os.environ.items()
-        if key in {"PATH", "HOME", "LANG", "LC_ALL", "TERM", "USER", "TMPDIR"}
+        if key in allowed
     }
+
+
+def _cli_command(executable: str, arguments: list[str]) -> list[str]:
+    """Launch supported Windows shims explicitly while keeping prompts on stdin."""
+
+    if sys.platform != "win32":
+        return [executable, *arguments]
+    suffix = Path(executable).suffix.lower()
+    if suffix in {".exe", ".com"}:
+        return [executable, *arguments]
+    if suffix in {".cmd", ".bat"}:
+        command_processor = os.environ.get("COMSPEC")
+        if not command_processor:
+            system_root = os.environ.get("SystemRoot") or os.environ.get("WINDIR")
+            if not system_root:
+                raise ModelBackendError("Windows CLI launcher requires SystemRoot or COMSPEC")
+            command_processor = ntpath.join(system_root, "System32", "cmd.exe")
+        return [command_processor, "/d", "/s", "/c", executable, *arguments]
+    raise ModelBackendError(f"unsupported Windows CLI launcher: {suffix or 'no extension'}")
+
+
+_SENSITIVE_ASSIGNMENT = re.compile(
+    r"(?i)\b((?:[a-z0-9]+[_-])*(?:api[_-]?key|access[_-]?token|refresh[_-]?token|token|secret|password)"
+    r"|authorization|x-api-key)"
+    r"\s*[:=]\s*(?:bearer\s+)?[^\s,;]+"
+)
+_BEARER_VALUE = re.compile(r"(?i)\bbearer\s+[^\s,;]+")
+_COMMON_API_TOKEN = re.compile(r"\b(?:sk|sk-ant)-[A-Za-z0-9_-]{8,}\b")
+
+
+def safe_model_error_summary(
+    value: object, *, sensitive_values: tuple[str, ...] = (), maximum_length: int = 800
+) -> str:
+    """Return a bounded diagnostic with common credentials removed."""
+
+    text = str(value).strip() or "未知错误"
+    for sensitive in sensitive_values:
+        if sensitive:
+            text = text.replace(sensitive, "[REDACTED]")
+    text = _SENSITIVE_ASSIGNMENT.sub(lambda match: f"{match.group(1)}=[REDACTED]", text)
+    text = _BEARER_VALUE.sub("Bearer [REDACTED]", text)
+    text = _COMMON_API_TOKEN.sub("[REDACTED]", text)
+    text = " ".join(text.split())
+    return text[-maximum_length:]
 
 
 def _codex_cli_call(
@@ -203,25 +347,27 @@ def _codex_cli_call(
         schema_path = root / "output-schema.json"
         output_path = root / "final.json"
         schema_path.write_text(json.dumps(schema, sort_keys=True), encoding="utf-8")
-        command = [
-            executable, "exec", "--ephemeral", "--skip-git-repo-check",
+        arguments = [
+            "exec", "--ephemeral", "--skip-git-repo-check",
             "--ignore-user-config", "--ignore-rules", "--sandbox", "read-only",
             "--output-schema", str(schema_path), "--output-last-message", str(output_path),
             "--color", "never", "-C", str(root), "-",
         ]
         if profile.model != "subscription-default":
-            command[2:2] = ["--model", profile.model]
+            arguments[1:1] = ["--model", profile.model]
+        command = _cli_command(executable, arguments)
         try:
             completed = subprocess.run(
-                command, input=prompt, text=True, capture_output=True,
+                command, input=prompt, text=True, encoding="utf-8", errors="replace",
+                capture_output=True, shell=False,
                 cwd=root, env=_local_cli_environment(), timeout=profile.timeout_seconds,
                 check=False,
             )
         except subprocess.TimeoutExpired as exc:
             raise ModelBackendError("Codex 本地调用超时") from exc
         if completed.returncode != 0 or not output_path.is_file():
-            detail = (completed.stderr or completed.stdout or "未知错误").strip()
-            raise ModelBackendError(f"Codex 本地调用失败：{detail[-800:]}")
+            detail = safe_model_error_summary(completed.stderr or completed.stdout)
+            raise ModelBackendError(f"Codex 本地调用失败：{detail}")
         parsed = _json_from_text(output_path.read_text(encoding="utf-8"))
     return parsed, {
         "backend": "codex-cli",
@@ -231,6 +377,7 @@ def _codex_cli_call(
         "request_policy": {
             "ephemeral": True, "sandbox": "read-only", "user_config": False,
             "rules": False, "output_schema": True,
+            **_effective_protocol_policy(profile),
         },
         "schema_enforcement": "cli-output-schema",
     }
@@ -242,31 +389,37 @@ def _claude_code_call(
     """Use Claude Code's existing local subscription, with no agent tools enabled."""
 
     executable = _local_cli(profile)
-    command = [
-        executable, "-p", "--output-format", "json", "--json-schema",
+    arguments = [
+        "-p", "--output-format", "json", "--json-schema",
         json.dumps(schema, sort_keys=True), "--permission-mode", "plan", "--tools", "",
     ]
     if profile.model != "subscription-default":
-        command.extend(["--model", profile.model])
+        arguments.extend(["--model", profile.model])
+    command = _cli_command(executable, arguments)
     try:
         completed = subprocess.run(
-            command, input=prompt, text=True, capture_output=True,
+            command, input=prompt, text=True, encoding="utf-8", errors="replace",
+            capture_output=True, shell=False,
             env=_local_cli_environment(), timeout=profile.timeout_seconds, check=False,
         )
     except subprocess.TimeoutExpired as exc:
         raise ModelBackendError("Claude 本地调用超时") from exc
     if completed.returncode != 0:
-        detail = (completed.stderr or completed.stdout or "未知错误").strip()
-        raise ModelBackendError(f"Claude 本地调用失败：{detail[-800:]}")
+        detail = safe_model_error_summary(completed.stderr or completed.stdout)
+        raise ModelBackendError(f"Claude 本地调用失败：{detail}")
     envelope = _json_from_text(completed.stdout)
-    result = envelope.get("structured_output", envelope.get("result"))
-    parsed = result if isinstance(result, dict) else _json_from_text(result)
+    parsed = envelope.get("structured_output")
+    if not isinstance(parsed, dict):
+        raise ModelBackendError("Claude structured_output is missing or is not a JSON object")
     return parsed, {
         "backend": "claude-code",
         "response_id": str(envelope.get("session_id", "local-subscription")),
         "response_model": profile.model,
         "usage": envelope.get("usage") if isinstance(envelope.get("usage"), dict) else None,
-        "request_policy": {"permission_mode": "plan", "tools": [], "json_schema": True},
+        "request_policy": {
+            "permission_mode": "plan", "tools": [], "json_schema": True,
+            **_effective_protocol_policy(profile),
+        },
         "schema_enforcement": "cli-json-schema",
     }
 
@@ -328,7 +481,10 @@ def _openai_responses_call(
         "response_id": str(getattr(response, "id", "")),
         "response_model": str(getattr(response, "model", profile.model)),
         "usage": usage if isinstance(usage, dict) else None,
-        "request_policy": {"store": False, "tools": [], "tool_choice": "none"},
+        "request_policy": {
+            "store": False, "tools": [], "tool_choice": "none",
+            **_effective_protocol_policy(profile),
+        },
         "schema_enforcement": "native",
     }
 
@@ -340,12 +496,37 @@ def _http_post_json(
         import httpx  # type: ignore
     except ImportError as exc:
         raise ModelBackendError("httpx is unavailable") from exc
+    sensitive: list[str] = []
+    for value in headers.values():
+        if not value or value.lower() == "application/json":
+            continue
+        sensitive.append(value)
+        if value.lower().startswith("bearer "):
+            sensitive.append(value.split(" ", 1)[1])
+    sensitive_values = tuple(sensitive)
     try:
         response = httpx.post(url, headers=headers, json=payload, timeout=timeout)
         response.raise_for_status()
         value = response.json()
+    except httpx.HTTPStatusError as exc:
+        status = exc.response.status_code
+        category = {
+            401: "authentication rejected",
+            403: "access forbidden",
+            429: "rate limited",
+        }.get(status, "HTTP error")
+        raise ModelBackendError(
+            f"model endpoint request failed: HTTP {status} ({category})"
+        ) from exc
+    except httpx.TimeoutException as exc:
+        raise ModelBackendError("model endpoint request failed: timeout") from exc
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise ModelBackendError("model endpoint returned malformed JSON") from exc
     except Exception as exc:
-        raise ModelBackendError(f"model endpoint request failed: {type(exc).__name__}: {exc}") from exc
+        detail = safe_model_error_summary(exc, sensitive_values=sensitive_values)
+        raise ModelBackendError(
+            f"model endpoint request failed: {type(exc).__name__}: {detail}"
+        ) from exc
     if not isinstance(value, dict):
         raise ModelBackendError("model endpoint response is not a JSON object")
     return value
@@ -382,7 +563,6 @@ def _openai_chat_call(
         ],
         "response_format": response_format,
         "max_tokens": profile.maximum_output_tokens,
-        "temperature": 0,
     }
     value = _http_post_json(
         url=endpoint,
@@ -400,7 +580,7 @@ def _openai_chat_call(
         "response_id": str(value.get("id", "")),
         "response_model": str(value.get("model", profile.model)),
         "usage": value.get("usage") if isinstance(value.get("usage"), dict) else None,
-        "request_policy": {"tools": [], "temperature": 0},
+        "request_policy": {"tools": [], **_effective_protocol_policy(profile)},
         "schema_enforcement": (
             "native" if profile.output_mode == "strict" else "local_validation"
         ),
@@ -455,7 +635,7 @@ def _anthropic_call(
         "response_id": str(value.get("id", "")),
         "response_model": str(value.get("model", profile.model)),
         "usage": value.get("usage") if isinstance(value.get("usage"), dict) else None,
-        "request_policy": {"tools": []},
+        "request_policy": {"tools": [], **_effective_protocol_policy(profile)},
         "schema_enforcement": (
             "native" if profile.output_mode == "strict" else "local_validation"
         ),
@@ -504,7 +684,8 @@ def call_structured(
     except ModelBackendError:
         raise
     except Exception as exc:
-        raise ModelBackendError(f"model call failed: {type(exc).__name__}: {exc}") from exc
+        detail = safe_model_error_summary(exc, sensitive_values=(secret,))
+        raise ModelBackendError(f"model call failed: {type(exc).__name__}: {detail}") from exc
     returned_model = str(provider_audit.get("response_model", "")).strip()
     if (
         returned_model and profile.model != "subscription-default"
@@ -532,35 +713,34 @@ def call_structured(
 
 
 def probe_model_profile(*, profile: ModelProfile, secret: str) -> dict[str, Any]:
-    if uses_local_subscription(profile):
-        executable = _local_cli(profile)
-        command = [executable, "login", "status"] if profile.protocol == "codex-cli" else [executable, "--version"]
-        try:
-            completed = subprocess.run(
-                command, text=True, capture_output=True, timeout=10,
-                env=_local_cli_environment(), check=False,
-            )
-        except subprocess.TimeoutExpired as exc:
-            raise ModelBackendError("本地模型登录检查超时") from exc
-        if completed.returncode != 0:
-            detail = (completed.stderr or completed.stdout or "未知错误").strip()
-            raise ModelBackendError(f"本地模型不可用：{detail[-500:]}")
-        status_text = (completed.stdout + "\n" + completed.stderr)
-        if profile.protocol == "codex-cli" and "Logged in" not in status_text:
-            raise ModelBackendError("Codex 尚未登录 ChatGPT 账号")
-        return {
-            "backend": profile.protocol,
-            "profile_id": profile.profile_id,
-            "profile_sha256": profile.identity(),
-            "connection": "local-subscription-ready",
-            "model_facing_tools_allowed": False,
-        }
     schema = {
         "type": "object",
         "additionalProperties": False,
         "required": ["status"],
         "properties": {"status": {"type": "string", "const": "ready"}},
     }
+    if uses_local_subscription(profile):
+        executable = _local_cli(profile)
+        arguments = (
+            ["login", "status"]
+            if profile.protocol == "codex-cli"
+            else ["auth", "status"]
+        )
+        command = _cli_command(executable, arguments)
+        try:
+            completed = subprocess.run(
+                command, text=True, encoding="utf-8", errors="replace",
+                capture_output=True, shell=False, timeout=10,
+                env=_local_cli_environment(), check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise ModelBackendError("本地模型登录检查超时") from exc
+        if completed.returncode != 0:
+            detail = safe_model_error_summary(completed.stderr or completed.stdout)
+            raise ModelBackendError(f"本地模型登录检查失败：{detail}")
+        status_text = (completed.stdout + "\n" + completed.stderr)
+        if profile.protocol == "codex-cli" and "Logged in" not in status_text:
+            raise ModelBackendError("Codex 尚未登录 ChatGPT 账号")
     result, audit = call_structured(
         profile=profile,
         secret=secret,
@@ -569,4 +749,6 @@ def probe_model_profile(*, profile: ModelProfile, secret: str) -> dict[str, Any]
     )
     if result != {"status": "ready"}:
         raise ModelBackendError("model capability probe returned an unexpected result")
+    if uses_local_subscription(profile):
+        audit = {**audit, "connection": "local-subscription-ready"}
     return audit
