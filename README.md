@@ -15,7 +15,7 @@ The current published internal-test installers are **0.6.1**:
 
 Choose exactly one Mac disk image for the computer's architecture. Each release page includes checksums and an acceptance record and is visibly marked as a prerelease. These research builds are not commercially signed or notarized, so the operating system may require a first-launch confirmation.
 
-The [current `main` source](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/tree/main) is newer than 0.6.1. It has not yet been accepted as a Windows installer and is not a published upgrade. See [Software updates](docs/software-updates.md) for the exact boundary.
+The [current `main` source](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/tree/main) is newer than 0.6.1. Revision `8ede112` passed [Windows x64 and both Mac architecture build/install/replay checks](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/actions/runs/34678254740), but its 0.6.2 installers are not yet a published upgrade. These fixture-based platform checks do not verify each user's live Claude/API connection. See [Software updates](docs/software-updates.md).
 
 ## First comparison in three steps
 

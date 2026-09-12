@@ -15,7 +15,7 @@ SHAQ Daily Oracle Lab 是一套本地金融研究对照工作台：它让受治�
 
 Mac 请按电脑架构只选择一个 DMG。每个发布页均附校验值和验收记录，并明确标为预发布。这些研究构建没有商业签名，首次打开时操作系统可能要求确认。
 
-[当前 `main` 源码](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/tree/main)比 0.6.1 新，但尚未作为 Windows 安装包完成验收，也不是已发布升级。准确边界见[软件更新](docs/software-updates.md)。
+[当前 `main` 源码](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/tree/main)比 0.6.1 新。`8ede112` 已通过 [Windows x64 与两种 Mac 的构建、安装及回放检查](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/actions/runs/34678254740)，但 0.6.2 安装包尚未作为升级发布。这些平台样例测试不等于已验证每位组员的真实 Claude／API 连接。详见[软件更新](docs/software-updates.md)。
 
 ## 三步完成第一次对照
 

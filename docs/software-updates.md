@@ -11,7 +11,7 @@ The current published internal-test installers are **0.6.1**. Their GitHub pages
 
 Both pages identify the accepted source revision and provide installer checksums plus `Acceptance.json`. Platform claims stop at the evidence recorded on those pages: Windows acceptance ran on the stated GitHub Windows environment, and the two Mac architectures have separate artifacts. These results do not establish live model connectivity on every user's account.
 
-The [current `main` branch](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/tree/main) contains newer development source than 0.6.1. It has not yet been accepted as a Windows installer and must not be presented as an installed 0.6.1 update.
+The [current `main` branch](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/tree/main) contains newer source than 0.6.1. Revision `8ede112` passed [three-platform native acceptance](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/actions/runs/34678254740): Windows x64, macOS Apple Silicon and macOS Intel, including installation, deterministic two-method replay, native-window interaction, reopen, payload audit and uninstall. This is not a live Claude/API test. The 0.6.2 installers remain CI artifacts, not a published Release or an installed 0.6.1 update.
 
 ## What the app does now
 
