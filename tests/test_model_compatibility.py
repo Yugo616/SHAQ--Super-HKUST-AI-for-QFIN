@@ -7,7 +7,7 @@ import sys
 import tempfile
 import unittest
 from dataclasses import replace
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from unittest.mock import patch
 
 import httpx
@@ -130,14 +130,15 @@ class ModelCompatibilityTests(unittest.TestCase):
     def test_windows_cli_environment_keeps_system_paths_but_filters_secrets(self) -> None:
         """Dropping a Windows process variable must fail without exposing app secrets."""
 
+        user = PureWindowsPath('C:/') / 'Users' / '李 小明'
         retained = {
-            "USERPROFILE": r"C:\Users\李 小明",
-            "APPDATA": r"C:\Users\李 小明\AppData\Roaming",
-            "LOCALAPPDATA": r"C:\Users\李 小明\AppData\Local",
+            "USERPROFILE": str(user),
+            "APPDATA": str(user / 'AppData' / 'Roaming'),
+            "LOCALAPPDATA": str(user / 'AppData' / 'Local'),
             "SYSTEMROOT": r"C:\Windows",
             "WINDIR": r"C:\Windows",
-            "TEMP": r"C:\Users\李 小明\AppData\Local\Temp",
-            "TMP": r"C:\Users\李 小明\AppData\Local\Temp",
+            "TEMP": str(user / 'AppData' / 'Local' / 'Temp'),
+            "TMP": str(user / 'AppData' / 'Local' / 'Temp'),
             "PATH": r"C:\Windows\System32",
             "PATHEXT": ".COM;.EXE;.BAT;.CMD",
             "LANG": "zh_HK.UTF-8",
@@ -188,7 +189,8 @@ class ModelCompatibilityTests(unittest.TestCase):
             profile_id="claude", protocol="claude-code", base_url="",
             model="subscription-default",
         )
-        launcher = r"C:\Users\李 小明\AppData\Roaming\npm\claude.cmd"
+        launcher = str(PureWindowsPath('C:/') / 'Users' / '李 小明' /
+                       'AppData' / 'Roaming' / 'npm' / 'claude.cmd')
         with patch.object(sys, "platform", "win32"), patch.object(
             model_backends, "_local_cli", return_value=launcher
         ), patch.object(
