@@ -41,9 +41,11 @@
         <section id="model-step"><b>1</b><div><h3>连接分析模型</h3><p>选择你正在使用的模型。</p>
           <div class="connection-choices">
             <button class="connection-choice" id="connect-codex" type="button"><b>连接 Codex</b><span>使用此电脑已登录的 ChatGPT / Codex</span></button>
-            <button class="connection-choice" id="connect-claude" type="button"><b>连接 Claude</b><span>使用此电脑已登录的 Claude Code</span></button>
-            <button class="connection-choice subtle" id="show-api-form" type="button"><b>使用 API 或中转站</b><span>仅在没有上述订阅时使用</span></button>
-          </div><p id="model-status" class="inline-status"></p>
+            <button class="connection-choice" id="connect-claude" type="button"><b>连接 Claude Code</b><span>使用此电脑已安装并登录的 Claude Code</span></button>
+            <button class="connection-choice subtle" id="show-api-form" type="button"><b>使用 API 或中转站</b><span>填写服务地址、密钥与模型</span></button>
+          </div><p id="model-status" class="inline-status" role="status"></p>
+          <div id="model-error-actions" class="hidden connection-actions"><button id="retry-model" type="button">重新检测</button><button id="edit-model" type="button">修改连接</button><button id="copy-model-error" type="button">复制错误信息</button></div>
+          <details class="install-help"><summary>还没有安装本机分析工具？</summary><p>Claude 聊天软件不等于 Claude Code。选择官方安装说明，安装并登录后回到这里重新检测。</p><button type="button" data-install-model="codex-cli">Codex 安装说明</button><button type="button" data-install-model="claude-code">Claude Code 安装说明</button></details>
           <form id="model-form" class="form-grid hidden">
           <input name="profile_id" value="api-model" type="hidden">
           <input name="base_url" value="https://api.openai.com/v1" type="hidden">
@@ -71,6 +73,12 @@
     <header class="replay-modal-header"><h2 id="replay-title">当日分析详情</h2><button id="replay-close" type="button">关闭</button></header>
     <div id="batch-detail"></div>
   </dialog>
+  <dialog id="comparison-modal" aria-labelledby="comparison-title">
+    <header class="replay-modal-header"><h2 id="comparison-title">版本运行对照</h2><button type="button" onclick="document.querySelector('#comparison-modal').close()">关闭</button></header>
+    <div id="comparison-detail"></div>
+  </dialog>
+  <script src="connections.js"></script>
+  <script src="comparison.js"></script>
   <script src="app.js"></script>
   <script src="today_progress.js"></script>
   <script src="workbench.js"></script>

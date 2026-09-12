@@ -34,3 +34,16 @@
 .replay-modal-header{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:14px 22px;background:white;border-bottom:1px solid #d7dce3;flex:none}
 .replay-modal-header h2{margin:0;font-size:20px}
 #replay-modal #batch-detail{overflow:auto;padding:18px;min-height:0;flex:1}
+/* Compact connection recovery and frozen-run comparisons. */
+.connection-actions,.comparison-toolbar{display:flex;align-items:center;gap:10px;margin:14px 0;flex-wrap:wrap}
+.comparison-toolbar span{margin-right:auto;color:var(--muted,#637083)}
+.install-help{margin:12px 0;font-size:13px;color:#526175}
+.install-help button{margin:6px 8px 0 0}
+#model-status[data-status="failed"]{color:#a12d2d;white-space:pre-wrap;overflow-wrap:anywhere}
+.compare-record{width:16px!important;height:16px;margin:0 10px 0 0;vertical-align:middle}
+#comparison-modal{width:min(1040px,94vw);max-height:90vh;border:1px solid #d6dce5;border-radius:10px;padding:0;background:#fff;color:#172332}
+#comparison-modal::backdrop{background:rgba(20,30,40,.35)}
+#comparison-detail{padding:22px;overflow:auto}
+.method-diff{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;max-height:340px;overflow:auto;background:#f4f6f8;padding:14px}
+.comparison-dimensions{max-width:520px}
+.comparison-verdict{padding:12px 0;border-top:1px solid #dce1e7;border-bottom:1px solid #dce1e7}

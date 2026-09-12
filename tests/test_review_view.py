@@ -85,46 +85,22 @@ const state={selectedBatch:{replay_summaries:{version:{X:{correct:false,return_p
         self.assertNotIn('<script>', output)
         self.assertIn('e1', output)
 
-    def comparison_result(self, error_message):
-        source = (Path(__file__).parents[1] / 'src/shaq_daily_oracle/desktop/review.js').read_text(encoding="utf-8")
-        harness = f'''
-const window={{showCandidate(){{}}}}; let renderBatch=()=>{{}};
-const esc=x=>String(x??""); const moduleName=x=>x; const dir=x=>x;
-const selector={{value:"",onchange:null}}; let rendered="",notices=[];
-const document={{createElement:()=>({{innerHTML:""}})}};
-const q=s=>s==="#compare-version"?selector:s==="#version-comparison"?{{prepend:e=>rendered=e.innerHTML}}:{{after(){{}}}};
-const state={{data:{{versions:[
-  {{author:"team",version_id:"left",method_name:"左方法",status_badge:"正式基准"}},
-  {{author:"team",version_id:"right",method_name:"右方法",status_badge:"Shadow"}}
-]}}}};
-const SHAQAccounts={{methodMeta:key=>key.endsWith("left")?{{method_name:"左方法",status_badge:"正式基准"}}:{{method_name:"右方法",status_badge:"Shadow"}},statusName:x=>x,usd:x=>"$"+x}};
-const notice=(message,bad)=>notices.push([message,bad]);
-const api=async()=>{{throw new Error({json.dumps(error_message)})}};
-const batch={{variants:{{"team/left":{{variant:{{}},predictions:[],integration_audit:{{}}}},"team/right":{{variant:{{}},predictions:[],integration_audit:{{}}}}}},version_comparisons:{{"team/left":{{"team/right":{{changed_modules:[],same_model:true,stocks:[]}}}}}},virtual_accounts:{{results:[]}}}};
+    def test_details_compare_frozen_records_without_installed_version_lookup(self):
+        source = (Path(__file__).parents[1] / 'src/shaq_daily_oracle/desktop/review.js').read_text(encoding='utf-8')
+        harness = '''
+const window={showCandidate(){}};
+let renderBatch=()=>{},renderHistory=()=>{},called=[];
+const target={innerHTML:'old'},selector={value:'right'};
+const q=s=>s==='#compare-version'?selector:target;
+async function showRunComparison(...args){called=args.slice(0,2)}
+const batch={batch_id:'frozen-batch',variants:{left:{},right:{}}};
 '''
-        script = harness + source + '''
-renderBatch(batch,"team/left");selector.value="team/right";
-(async()=>{let rejected="";try{await selector.onchange()}catch(error){rejected=error.message}console.log(JSON.stringify({rendered,notices,rejected}))})()
-'''
-        return json.loads(subprocess.check_output(['node', '-'], input=script, text=True, encoding="utf-8"))
-
-    def test_missing_installed_method_is_explicitly_unavailable(self):
-        value = self.comparison_result('Skill version is not installed: team/right')
-        self.assertIn('实际安装包比较不可用', value['rendered'])
-        self.assertIn('历史版本未安装', value['rendered'])
-        self.assertEqual(value['notices'], [])
-        self.assertEqual(value['rejected'], '')
-
-    def test_unexpected_installed_comparison_error_is_visible_and_propagates(self):
-        value = self.comparison_result(
-            'Skill version is not installed: team/right; manifest hash mismatch'
-        )
-        self.assertEqual(value['rendered'], '')
-        self.assertEqual(value['notices'], [
-            ['安装包比较失败：Skill version is not installed: '
-             'team/right; manifest hash mismatch', True]
-        ])
-        self.assertEqual(
-            value['rejected'],
-            'Skill version is not installed: team/right; manifest hash mismatch',
-        )
+        value=json.loads(subprocess.check_output(['node','-'],input=harness+source+'''
+(async()=>{renderBatch(batch,'left');await selector.onchange();
+const first=called;selector.value='';await selector.onchange();
+console.log(JSON.stringify({first,cleared:target.innerHTML}));})();
+''',text=True,encoding='utf-8'))
+        self.assertEqual(value['first'], [
+            {'batch_id':'frozen-batch','variant_key':'left'},
+            {'batch_id':'frozen-batch','variant_key':'right'}])
+        self.assertEqual(value['cleared'],'')

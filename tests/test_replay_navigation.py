@@ -105,7 +105,7 @@ const fs=require('fs'),path=require('path'),vm=require('vm'),assert=require('ass
 const desktop='src/shaq_daily_oracle/desktop';
 const html=fs.readFileSync(path.join(desktop,'index.html'),'utf8');
 const scripts=[...html.matchAll(/<script src="([^"]+)"/g)].map(row=>row[1]);
-assert.deepEqual(scripts,['app.js','today_progress.js','workbench.js','accounts.js','review.js']);
+assert.deepEqual(scripts,['connections.js','comparison.js','app.js','today_progress.js','workbench.js','accounts.js','review.js']);
 const cls={add(){},remove(){},toggle(){}};
 const element=()=>new Proxy({classList:cls,dataset:{},parentElement:{prepend(){}},children:[],
  append(){},prepend(){},before(){},insertBefore(){},insertAdjacentHTML(){},insertAdjacentElement(){},

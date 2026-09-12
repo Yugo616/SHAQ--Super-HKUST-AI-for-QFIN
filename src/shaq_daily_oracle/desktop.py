@@ -163,6 +163,17 @@ class DesktopBridge:
             return {"opened": bool(webbrowser.open(url))}
         return self._result(open_safe)
 
+    def open_model_installation(self, protocol: str) -> dict[str, Any]:
+        def open_installation() -> dict[str, Any]:
+            pages = {
+                "codex-cli": "https://developers.openai.com/codex/cli/",
+                "claude-code": "https://code.claude.com/docs/en/setup",
+            }
+            if protocol not in pages:
+                raise SettingsError("请选择 Codex 或 Claude Code 的官方安装说明")
+            return {"opened": bool(webbrowser.open(pages[protocol]))}
+        return self._result(open_installation)
+
     def check_team_updates(self) -> dict[str, Any]:
         return self._result(self.lab.check_team_updates)
 
@@ -259,6 +270,16 @@ class DesktopBridge:
         self, left: dict[str, str], right: dict[str, str]
     ) -> dict[str, Any]:
         return self._result(self.lab.compare_methods, left, right)
+
+    def compare_research_runs(self, left: dict[str, str], right: dict[str, str]) -> dict[str, Any]:
+        def compare():
+            from .run_comparison import compare_runs
+            batches = {str(row['batch_id']): None for row in (left, right)}
+            for identifier in batches:
+                batches[identifier] = self.lab.batch_detail(identifier)
+            return compare_runs(batches[left['batch_id']], left['variant_key'],
+                                batches[right['batch_id']], right['variant_key'])
+        return self._result(compare)
 
     def save_setup(self, submitted: dict[str, Any]) -> dict[str, Any]:
         def save_and_check() -> dict[str, Any]:
