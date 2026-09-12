@@ -80,7 +80,7 @@ Use the checkboxes to compare any two frozen records. The comparison includes me
 
 ### Official direction label
 
-The scientific label is the unadjusted US regular-session open-to-close return. The first eligible observation is provisional. A later independent read must match before it becomes final. An exactly flat close is neutral and is wrong for either a bullish or bearish forecast.
+The scientific label is the unadjusted US regular-session open-to-close return. The first eligible observation immediately appears as provisional; a later read must match before it is marked confirmed, without requiring a new trading day. An exactly flat close is neutral and is wrong for either a bullish or bearish forecast.
 
 ### Minute replay
 

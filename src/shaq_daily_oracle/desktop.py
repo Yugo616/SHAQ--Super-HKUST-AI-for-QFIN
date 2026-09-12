@@ -550,7 +550,7 @@ def launch_desktop(*, smoke_output: Path | None = None) -> int:
             window.evaluate_js("document.querySelector('#history tr[data-batch]').click()")
             replay_deadline = time.monotonic() + 5
             while time.monotonic() < replay_deadline:
-                if window.evaluate_js("Boolean(document.querySelector('#replay-modal').open && document.querySelector('#candidate-analysis').textContent.includes('AAPL'))"):
+                if window.evaluate_js("Boolean(document.querySelector('#replay-modal').open && document.querySelector('#candidate-analysis')?.textContent.includes('AAPL'))"):
                     break
                 time.sleep(0.1)
             else:
@@ -562,7 +562,7 @@ def launch_desktop(*, smoke_output: Path | None = None) -> int:
                 selected = window.evaluate_js(
                     "document.querySelector('.candidate-button.active')?.dataset.symbol || ''")
                 loaded = window.evaluate_js(
-                    "document.querySelector('#candidate-analysis').textContent.includes('MSFT')")
+                    "Boolean(document.querySelector('#candidate-analysis')?.textContent.includes('MSFT'))")
                 if selected == 'MSFT' and loaded:
                     break
                 time.sleep(0.1)
@@ -575,7 +575,7 @@ def launch_desktop(*, smoke_output: Path | None = None) -> int:
                 if window.evaluate_js(
                     "document.querySelector('#refresh-status').textContent.includes('完成') && "
                     "document.querySelector('.candidate-button.active')?.dataset.symbol === 'MSFT' && "
-                    "document.querySelector('#candidate-analysis').textContent.includes('$200.00')"):
+                    "document.querySelector('#candidate-analysis')?.textContent.includes('$200.00')"):
                     break
                 time.sleep(0.1)
             else:
@@ -586,7 +586,7 @@ def launch_desktop(*, smoke_output: Path | None = None) -> int:
                 "document.querySelector('#replay-modal').open"))
             result['refresh_preserved_candidate'] = bool(window.evaluate_js(
                 "document.querySelector('.candidate-button.active')?.dataset.symbol === 'MSFT' && "
-                "document.querySelector('#candidate-analysis').textContent.includes('MSFT')"))
+                    "document.querySelector('#candidate-analysis')?.textContent.includes('MSFT')"))
             window.evaluate_js("document.querySelector('#replay-close').click()")
             closed = not window.evaluate_js("document.querySelector('#replay-modal').open")
             window.evaluate_js("document.querySelector('#history tr[data-batch]').click()")
@@ -594,7 +594,7 @@ def launch_desktop(*, smoke_output: Path | None = None) -> int:
             while time.monotonic() < reopen_deadline:
                 reopened = bool(window.evaluate_js(
                     "document.querySelector('#replay-modal').open && "
-                    "document.querySelector('#candidate-analysis').textContent.includes('AAPL')"))
+                    "document.querySelector('#candidate-analysis')?.textContent.includes('AAPL')"))
                 if reopened:
                     break
                 time.sleep(0.1)

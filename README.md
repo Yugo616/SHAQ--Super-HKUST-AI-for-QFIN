@@ -34,7 +34,7 @@ Connection, data, team-sync, and software-update controls open as focused dialog
 ## Two bundled methods
 
 - **Independent Evidence Gate · Formal Baseline** requires aligned applicable domains, independent roots, both context and stock-specific evidence, no independent opposing root, and a maximum of three published directions. Deterministic code makes the final gate decision.
-- **Cross-domain Synthesis · Shadow** asks a separate synthesis step to compare the thesis, countercase, unknowns, invalidation conditions, and alternatives over the same frozen domain reports. Code still validates citations, integrity, and the publication cap.
+- **Cross-domain Synthesis · Shadow** asks a separate synthesis step to compare the thesis, countercase, unknowns, invalidation conditions, and alternatives using its validated domain reports and adversary review. Both methods receive the same frozen evidence; their reports need not be identical. Code still validates citations, integrity, and the publication cap.
 
 The labels describe research roles, not proven performance. One batch—or any historical replay—cannot establish that either method is superior.
 

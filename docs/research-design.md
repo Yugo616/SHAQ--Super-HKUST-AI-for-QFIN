@@ -36,7 +36,7 @@ The baseline makes the publication decision in deterministic JavaScript. A direc
 
 ### Cross-domain Synthesis · Shadow
 
-The Shadow receives the same validated six reports and adversary record, then asks a separate synthesis step to compare the leading mechanism with the strongest countercase and candidate alternatives. Each output includes thesis, antithesis, resolution, comparison, unknowns, invalidation conditions, and supplied evidence IDs. Program code validates those references, integrity constraints, and the same maximum of three.
+Both methods receive the same frozen evidence. Each method produces its own validated domain reports and adversary record; identical unchanged tasks can reuse a valid cached result. The Shadow then asks a separate synthesis step to compare the leading mechanism with the strongest countercase and candidate alternatives. Each output includes thesis, antithesis, resolution, comparison, unknowns, invalidation conditions, and supplied evidence IDs. Program code validates those references, integrity constraints, and the same maximum of three.
 
 This is a method contrast, not a claim that synthesis is more intelligent or that the baseline is more profitable. The labels **Formal Baseline** and **Shadow** identify experimental roles only.
 
@@ -47,7 +47,7 @@ The results view compares actual frozen identities rather than labels or author 
 | Dimension | Frozen identity used |
 |---|---|
 | Method | SHA-256 of the saved method documents |
-| Model | Saved model-profile SHA-256 |
+| Model | Saved model-profile SHA-256, request-policy identity, and recorded response model; unresolved defaults remain unknown |
 | Data | Frozen evidence-manifest hash |
 | Candidates | SHA-256 of the actual candidate array |
 | Trading rules | Execution-policy hash together with engine and engine version |
