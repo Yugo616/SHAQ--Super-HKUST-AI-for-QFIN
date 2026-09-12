@@ -13,7 +13,10 @@ def batch(key='team/main', *, evidence='e' * 64, model='m' * 64, rules='r' * 64)
         'evidence': {'evidence_hash': evidence, 'as_of_et': '2026-09-09T08:50:00-04:00',
                      'candidates': [{'symbol': 'AAA', 'premarket_return': .02}]},
         'variants': {key: {'variant': {'label': '方法'}, 'model_profile_sha256': model,
-                          'model_call_audits': [{'request_policy_sha256':'p'*64}],
+                          'model_call_audits': [{
+                              'request_policy_sha256': 'p' * 64,
+                              'response_model': 'claude-sonnet-4-6',
+                          }],
                           'predictions': [{'symbol': 'AAA', 'direction': 'bullish'}],
                           'reports_by_symbol': {'AAA': []}, 'integration_audit': {}}},
         'skill_snapshots': {key: {'documents': {'skills/event/SKILL.md': 'original'}}},
@@ -86,6 +89,37 @@ class RunComparisonTests(unittest.TestCase):
         value=run_comparison.compare_runs(left,'team/main',right,'team/alternative')
         self.assertEqual(value['dimensions']['model']['status'],'different')
         self.assertFalse(value['controlled_method_comparison'])
+
+    def test_missing_or_subscription_default_response_model_is_unknown(self):
+        for unresolved in (None, 'subscription-default'):
+            with self.subTest(response_model=unresolved):
+                left, right = batch(), batch('team/alternative')
+                for source, key in ((left, 'team/main'), (right, 'team/alternative')):
+                    audit = source['variants'][key]['model_call_audits'][0]
+                    if unresolved is None:
+                        audit.pop('response_model')
+                    else:
+                        audit['response_model'] = unresolved
+                value = run_comparison.compare_runs(
+                    left, 'team/main', right, 'team/alternative')
+                self.assertEqual(value['dimensions']['model']['status'], 'unknown')
+                self.assertFalse(value['controlled_method_comparison'])
+
+    def test_known_response_models_must_match_exactly(self):
+        left, right = batch(), batch('team/alternative')
+        right['variants']['team/alternative']['model_call_audits'][0][
+            'response_model'] = 'claude-opus-4-6'
+        value = run_comparison.compare_runs(
+            left, 'team/main', right, 'team/alternative')
+        self.assertEqual(value['dimensions']['model']['status'], 'different')
+        self.assertFalse(value['controlled_method_comparison'])
+
+    def test_known_matching_response_models_allow_controlled_comparison(self):
+        left, right = batch(), batch('team/alternative')
+        value = run_comparison.compare_runs(
+            left, 'team/main', right, 'team/alternative')
+        self.assertEqual(value['dimensions']['model']['status'], 'same')
+        self.assertTrue(value['controlled_method_comparison'])
 
     def test_bridge_compares_only_verified_batch_details(self):
         from shaq_daily_oracle.desktop import DesktopBridge

@@ -4,6 +4,9 @@ from difflib import unified_diff
 from .hashing import sha256_payload
 
 
+_UNRESOLVED_RESPONSE_MODELS = frozenset({'subscription-default'})
+
+
 def _difference(left, right):
     status = 'unknown' if left is None or right is None else 'same' if left == right else 'different'
     return {'status': status, 'left': left, 'right': right}
@@ -11,6 +14,13 @@ def _difference(left, right):
 
 def _value(value):
     return value if isinstance(value, str) and value.strip() else None
+
+
+def _resolved_response_model(audit):
+    response_model = _value(audit.get('response_model'))
+    if response_model is None or response_model.strip().casefold() in _UNRESOLVED_RESPONSE_MODELS:
+        return None
+    return response_model
 
 
 def _side(batch, key):
@@ -30,13 +40,18 @@ def _side(batch, key):
     profile = _value(variant.get('model_profile_sha256'))
     audits = variant.get('model_call_audits', [])
     policies = []
+    response_models = []
     for audit in audits:
         policy = _value(audit.get('request_policy_sha256'))
         if not policy and isinstance(audit.get('request_policy'), dict):
             policy = sha256_payload(audit['request_policy'])
         policies.append(policy)
-    model = {'profile': profile, 'request_policies': sorted(set(policies))} if (
-        profile and policies and all(policies)) else None
+        response_models.append(_resolved_response_model(audit))
+    model = {
+        'profile': profile,
+        'request_policies': sorted(set(policies)),
+        'response_models': sorted(set(response_models)),
+    } if (profile and policies and all(policies) and all(response_models)) else None
     return {
         'batch_id': batch.get('batch_id'), 'variant_key': key,
         'label': variant.get('variant', {}).get('label') or key,
