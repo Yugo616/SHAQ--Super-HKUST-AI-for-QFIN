@@ -235,19 +235,23 @@ class ModelCompatibilityTests(unittest.TestCase):
             }),
             stderr="",
         )
-        with patch.object(
-            model_backends, "_local_cli", return_value="/usr/local/bin/claude"
-        ), patch.object(
-            model_backends.subprocess, "run", side_effect=[auth, structured]
-        ) as run:
-            audit = probe_model_profile(profile=profile, secret="")
+        for platform_name, executable in (("darwin", "claude"), ("win32", "claude.exe")):
+            with self.subTest(platform=platform_name), patch.object(
+                sys, "platform", platform_name
+            ), patch.object(
+                model_backends, "_local_cli", return_value=executable
+            ), patch.object(
+                model_backends.subprocess, "run", side_effect=[auth, structured]
+            ) as run:
+                audit = probe_model_profile(profile=profile, secret="")
 
-        self.assertEqual(run.call_count, 2)
-        self.assertEqual(run.call_args_list[0].args[0][1:], ["auth", "status"])
-        self.assertIn("-p", run.call_args_list[1].args[0])
-        self.assertNotIn("--version", run.call_args_list[0].args[0])
-        self.assertEqual(audit["connection"], "local-subscription-ready")
-        self.assertEqual(audit["schema_enforcement"], "cli-json-schema")
+            self.assertEqual(run.call_count, 2)
+            self.assertEqual(run.call_args_list[0].args[0][0], executable)
+            self.assertEqual(run.call_args_list[0].args[0][1:], ["auth", "status"])
+            self.assertIn("-p", run.call_args_list[1].args[0])
+            self.assertNotIn("--version", run.call_args_list[0].args[0])
+            self.assertEqual(audit["connection"], "local-subscription-ready")
+            self.assertEqual(audit["schema_enforcement"], "cli-json-schema")
 
     def test_claude_schema_call_rejects_free_text_result_fallback(self) -> None:
         """A JSON-looking result field must not replace missing structured_output."""
@@ -260,15 +264,18 @@ class ModelCompatibilityTests(unittest.TestCase):
             args=[], returncode=0,
             stdout=json.dumps({"result": '{"status":"ready"}'}), stderr="",
         )
-        with patch.object(
-            model_backends, "_local_cli", return_value="/usr/local/bin/claude"
-        ), patch.object(
-            model_backends.subprocess, "run", return_value=completed
-        ):
-            with self.assertRaisesRegex(ModelBackendError, "structured_output"):
-                call_structured(
-                    profile=profile, secret="", prompt="packet", schema=READY_SCHEMA
-                )
+        for platform_name, executable in (("darwin", "claude"), ("win32", "claude.exe")):
+            with self.subTest(platform=platform_name), patch.object(
+                sys, "platform", platform_name
+            ), patch.object(
+                model_backends, "_local_cli", return_value=executable
+            ), patch.object(
+                model_backends.subprocess, "run", return_value=completed
+            ):
+                with self.assertRaisesRegex(ModelBackendError, "structured_output"):
+                    call_structured(
+                        profile=profile, secret="", prompt="packet", schema=READY_SCHEMA
+                    )
 
     def test_cli_errors_are_redacted_and_keep_failure_stage(self) -> None:
         """CLI stderr must identify auth/call stage without echoing credentials."""
@@ -281,14 +288,17 @@ class ModelCompatibilityTests(unittest.TestCase):
             args=[], returncode=1,
             stdout="", stderr="ANTHROPIC_API_KEY=do-not-leak login expired",
         )
-        with patch.object(
-            model_backends, "_local_cli", return_value="/usr/local/bin/claude"
-        ), patch.object(
-            model_backends.subprocess, "run", return_value=failed_auth
-        ):
-            with self.assertRaisesRegex(ModelBackendError, "登录") as raised:
-                probe_model_profile(profile=profile, secret="")
-        self.assertNotIn("do-not-leak", str(raised.exception))
+        for platform_name, executable in (("darwin", "claude"), ("win32", "claude.exe")):
+            with self.subTest(platform=platform_name), patch.object(
+                sys, "platform", platform_name
+            ), patch.object(
+                model_backends, "_local_cli", return_value=executable
+            ), patch.object(
+                model_backends.subprocess, "run", return_value=failed_auth
+            ):
+                with self.assertRaisesRegex(ModelBackendError, "登录") as raised:
+                    probe_model_profile(profile=profile, secret="")
+            self.assertNotIn("do-not-leak", str(raised.exception))
 
     def test_profile_identity_stays_stable_when_request_policy_changes(self) -> None:
         """Request transport changes must not split historical model/account series."""
