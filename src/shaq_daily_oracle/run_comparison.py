@@ -27,12 +27,22 @@ def _side(batch, key):
     # Current projection rules are not necessarily the historical execution rules.
     execution = {'policy_hash': rules, 'engine': account.get('engine'),
                  'engine_version': account.get('engine_version')} if rules else None
+    profile = _value(variant.get('model_profile_sha256'))
+    audits = variant.get('model_call_audits', [])
+    policies = []
+    for audit in audits:
+        policy = _value(audit.get('request_policy_sha256'))
+        if not policy and isinstance(audit.get('request_policy'), dict):
+            policy = sha256_payload(audit['request_policy'])
+        policies.append(policy)
+    model = {'profile': profile, 'request_policies': sorted(set(policies))} if (
+        profile and policies and all(policies)) else None
     return {
         'batch_id': batch.get('batch_id'), 'variant_key': key,
         'label': variant.get('variant', {}).get('label') or key,
         'variant': variant, 'documents': documents,
         'method': sha256_payload(documents) if isinstance(documents, dict) and documents else None,
-        'model': _value(variant.get('model_profile_sha256')),
+        'model': model,
         'data': _value(evidence.get('evidence_hash')),
         'candidates': sha256_payload(candidates) if isinstance(candidates, list) else None,
         'trade_date': str(evidence['as_of_et'])[:10] if evidence.get('as_of_et') else None,

@@ -20,7 +20,7 @@
   <main>
     <header>
       <div><h1 id="page-title">开始运行</h1></div>
-      <div class="header-actions"><span id="refresh-status" role="status"></span><button class="secondary" id="connections-button">连接设置</button><button class="secondary" id="refresh-button">更新价格与成绩</button></div>
+      <div class="header-actions"><span id="refresh-status" role="status"></span><button class="secondary" id="connections-button">连接设置</button><button class="secondary" id="software-update-button">软件更新</button><button class="secondary" id="refresh-button">更新价格与成绩</button></div>
     </header>
     <section id="notice" class="notice hidden"></section>
     <section id="run" class="page active"></section>
@@ -78,11 +78,16 @@
     <div id="comparison-detail"></div>
   </dialog>
   <script src="connections.js"></script>
+  <dialog id="software-update-modal" aria-labelledby="software-update-title">
+    <header class="replay-modal-header"><h2 id="software-update-title">软件更新</h2><button type="button" onclick="document.querySelector('#software-update-modal').close()">关闭</button></header>
+    <div id="software-update-detail"></div>
+  </dialog>
   <script src="comparison.js"></script>
   <script src="app.js"></script>
   <script src="today_progress.js"></script>
   <script src="workbench.js"></script>
   <script src="accounts.js"></script>
   <script src="review.js"></script>
+  <script src="software_updates.js"></script>
 </body>
 </html>

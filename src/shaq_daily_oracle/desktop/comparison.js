@@ -13,6 +13,7 @@ const SHAQComparison = {
     const label=x=>escape(x?.label || x?.variant_key || '未记录版本');
     const outcome=x=>`${escape({final:'已复核',provisional:'初步',pending:'等待行情',empty:'空榜',failed:'失败'}[x?.status]||x?.status||'尚无账户回放')} · 净盈亏 ${usd(x?.net_pnl)}`;
     return `<h3>${label(value.left)} ↔ ${label(value.right)}</h3>
+      <p class="muted">左：${escape(value.left?.trade_date||'未记录日期')} · ${escape(value.left?.batch_id||'未记录批次')}<br>右：${escape(value.right?.trade_date||'未记录日期')} · ${escape(value.right?.batch_id||'未记录批次')}</p>
       <p class="comparison-verdict">${value.controlled_method_comparison
         ? '数据、模型、候选、日期与交易规则一致，可以对照方法输出；单次差异不代表效果已经得到证明。'
         : '存在不同或未记录的输入，结果差异不能单独归因于方法。'}</p>
@@ -47,19 +48,27 @@ function addHistoryComparisonControls() {
     q('#comparison-selection-count').textContent=`已选 ${SHAQComparison.selections.size} 条记录`;
     q('#compare-selected').disabled=SHAQComparison.selections.size!==2;
   };
-  for(const row of qa('#history .result-table tr[data-batch]')) {
-    const item={batch_id:row.dataset.batch,variant_key:row.dataset.variantKey};
+  const inputs=[];
+  const addChoice=(item,insert)=>{
     const key=JSON.stringify(item),input=document.createElement('input');
     input.type='checkbox';input.className='compare-record';
-    input.setAttribute('aria-label',`选择 ${row.children[0]?.textContent} ${row.children[1]?.textContent} 进行比较`);
+    input.dataset.comparisonKey=key;
+    input.setAttribute('aria-label',`选择 ${item.batch_id} ${item.variant_key} 进行比较`);
     input.checked=SHAQComparison.selections.has(key);
     input.onclick=event=>event.stopPropagation();
     input.onchange=()=>{
       if(input.checked)SHAQComparison.selections.set(key,item);
       else SHAQComparison.selections.delete(key);
+      inputs.forEach(other=>{other.checked=SHAQComparison.selections.has(other.dataset.comparisonKey);});
       update();
     };
-    row.children[0].prepend(input);
+    inputs.push(input);insert(input);
+  };
+  for(const row of qa('#history .result-table tr[data-batch]')) {
+    addChoice({batch_id:row.dataset.batch,variant_key:row.dataset.variantKey},input=>row.children[0].prepend(input));
+  }
+  for(const button of qa('#history [data-repeat-batch]')) {
+    addChoice({batch_id:button.dataset.repeatBatch,variant_key:button.dataset.key},input=>button.before(input));
   }
   q('#clear-comparison').onclick=()=>{SHAQComparison.selections.clear();renderHistory();};
   q('#compare-selected').onclick=()=>{

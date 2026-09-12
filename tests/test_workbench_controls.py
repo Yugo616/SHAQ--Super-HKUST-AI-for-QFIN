@@ -68,3 +68,43 @@ console.log(JSON.stringify(html));''')
             opened.assert_called_once_with('https://code.claude.com/docs/en/setup')
             self.assertFalse(bridge.open_model_installation('https://evil.example')['ok'])
             self.assertEqual(opened.call_count, 1)
+
+    def test_late_comparison_response_cannot_replace_new_selection(self):
+        value=self.node('comparison.js', '''
+let requests=[];const api=()=>new Promise(resolve=>requests.push(resolve));
+const esc=String,target={innerHTML:''};
+(async()=>{
+const first=showRunComparison({}, {},target),second=showRunComparison({}, {},target);
+const result=label=>({left:{label},right:{label:'right'},dimensions:{},stocks:[],outcomes:{}});
+requests[1](result('new'));await second;requests[0](result('old'));await first;
+console.log(JSON.stringify(target.innerHTML));
+})();''')
+        self.assertIn('new',value)
+        self.assertNotIn('old',value)
+
+    def test_native_fixture_supports_error_retry_without_live_model(self):
+        from shaq_daily_oracle.desktop import DesktopBridge, _bind_gui_smoke_fixture
+        bridge=object.__new__(DesktopBridge)
+        _bind_gui_smoke_fixture(bridge,{}, {})
+        first=bridge.save_lab_model_profile({},'',True)
+        second=bridge.save_lab_model_profile({},'',True)
+        self.assertFalse(first['ok'])
+        self.assertIn('fixture',first['error'])
+        self.assertTrue(second['ok'])
+
+    def test_repeated_runs_can_each_be_selected_and_survive_rerender(self):
+        value=self.node('comparison.js', '''
+const inputs=[],controls={};const cell={textContent:'date',prepend:x=>inputs.push(x)};
+const row={dataset:{batch:'first',variantKey:'team/main'},children:[cell,{textContent:'main'}]};
+const repeats=['first','second'].map(id=>({dataset:{repeatBatch:id,key:'team/main'},before:x=>inputs.push(x)}));
+const table={before(){}},document={createElement:()=>({setAttribute(){},dataset:{}})};
+const q=selector=>selector==='#history .result-table'?table:(controls[selector] ||= {});
+const qa=selector=>selector.includes('data-repeat-batch')?repeats:[row];
+const renderHistory=()=>{};
+addHistoryComparisonControls();const second=inputs.find(x=>x.dataset.comparisonKey?.includes('second'));
+if(second){second.checked=true;second.onchange();}const selected=[...SHAQComparison.selections.values()];
+inputs.length=0;addHistoryComparisonControls();
+console.log(JSON.stringify({selected,restored:inputs.find(x=>x.dataset.comparisonKey?.includes('second'))?.checked}));
+''')
+        self.assertEqual(value['selected'],[{'batch_id':'second','variant_key':'team/main'}])
+        self.assertTrue(value['restored'])

@@ -174,6 +174,22 @@ class DesktopBridge:
             return {"opened": bool(webbrowser.open(pages[protocol]))}
         return self._result(open_installation)
 
+    def check_software_update(self) -> dict[str, Any]:
+        def check():
+            from .software_updates import check_releases
+            value = check_releases(self.paths.package_root)
+            self._offered_software_release = value
+            return value
+        return self._result(check)
+
+    def open_software_release(self) -> dict[str, Any]:
+        def open_release():
+            value = getattr(self, '_offered_software_release', {})
+            if value.get('status') != 'available' or not value.get('asset_url'):
+                raise SettingsError('请先检查是否有适合这台电脑的新版本')
+            return {'opened': bool(webbrowser.open(value['asset_url']))}
+        return self._result(open_release)
+
     def check_team_updates(self) -> dict[str, Any]:
         return self._result(self.lab.check_team_updates)
 
@@ -434,6 +450,7 @@ def desktop_api(bridge):
 
 def _bind_gui_smoke_fixture(bridge, fixture_state, fixture_detail):
     from types import MethodType
+    attempts = 0
 
     def fixture_state_api(self):
         return {"ok": True, "value": fixture_state}
@@ -454,9 +471,28 @@ def _bind_gui_smoke_fixture(bridge, fixture_state, fixture_detail):
         }
         return {"ok": True, "value": fixture_state["result_refresh"]}
 
+    def fixture_compare_api(self, left, right):
+        from .run_comparison import compare_runs
+        return self._result(compare_runs, fixture_detail, left['variant_key'],
+                            fixture_detail, right['variant_key'])
+
+    def fixture_model_api(self, profile, secret, test=True):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return {'ok': False, 'error': 'fixture 401: 登录已失效'}
+        return {'ok': True, 'value': {'status': 'connected'}}
+
+    def fixture_update_api(self):
+        return {'ok': True, 'value': {'status': 'no_release', 'platform': 'GUI fixture',
+                                     'current_version': 'fixture', 'mode': 'installer_only'}}
+
     bridge.get_lab_state = MethodType(fixture_state_api, bridge)
     bridge.get_shadow_batch = MethodType(fixture_batch_api, bridge)
     bridge.refresh_prices_and_results = MethodType(fixture_refresh_api, bridge)
+    bridge.compare_research_runs = MethodType(fixture_compare_api, bridge)
+    bridge.save_lab_model_profile = MethodType(fixture_model_api, bridge)
+    bridge.check_software_update = MethodType(fixture_update_api, bridge)
 
 
 def launch_desktop(*, smoke_output: Path | None = None) -> int:
@@ -565,6 +601,49 @@ def launch_desktop(*, smoke_output: Path | None = None) -> int:
             else:
                 raise RuntimeError('Reopened fixture replay content failed to load')
             result['modal_close_reopen'] = bool(closed and reopened)
+            window.evaluate_js("document.querySelector('#replay-close').click(); "
+                               "[...document.querySelectorAll('.compare-record')].slice(0,2).forEach(x=>x.click()); "
+                               "document.querySelector('#compare-selected').click()")
+            deadline = time.monotonic() + 6
+            while time.monotonic() < deadline:
+                if window.evaluate_js("document.querySelector('#comparison-modal').open && "
+                                      "document.querySelector('#comparison-detail').textContent.includes('模型配置')"):
+                    break
+                time.sleep(.1)
+            else:
+                raise RuntimeError('Native frozen-run comparison failed')
+            result['comparison_dialog'] = True
+            window.evaluate_js("document.querySelector('#comparison-modal').close(); "
+                               "document.querySelector('#connections-button').click(); "
+                               "document.querySelector('#connect-claude').click()")
+            deadline = time.monotonic() + 6
+            while time.monotonic() < deadline:
+                if window.evaluate_js("document.querySelector('#model-status').textContent.includes('fixture 401') && "
+                                      "!document.querySelector('#model-error-actions').classList.contains('hidden')"):
+                    break
+                time.sleep(.1)
+            else:
+                raise RuntimeError('Native connection failure actions missing')
+            window.evaluate_js("document.querySelector('#retry-model').click()")
+            deadline = time.monotonic() + 6
+            while time.monotonic() < deadline:
+                if window.evaluate_js("document.querySelector('#model-status').dataset.status === 'connected'"):
+                    break
+                time.sleep(.1)
+            else:
+                raise RuntimeError('Native connection retry failed')
+            result['connection_retry_fixture'] = True
+            window.evaluate_js("document.querySelector('#close-setup').click(); "
+                               "document.querySelector('#software-update-button').click()")
+            deadline = time.monotonic() + 6
+            while time.monotonic() < deadline:
+                if window.evaluate_js("document.querySelector('#software-update-modal').open && "
+                                      "document.querySelector('#software-update-detail').textContent.includes('还没有适合')"):
+                    break
+                time.sleep(.1)
+            else:
+                raise RuntimeError('Native software update view failed')
+            result['installer_update_view'] = True
             if not all(result[key] for key in (
                 'refresh_completed', 'refresh_detail_marker',
                 'refresh_preserved_modal', 'refresh_preserved_candidate',

@@ -14,6 +14,9 @@ import sys
 import tarfile
 import urllib.request
 import zipfile
+import plistlib
+import re
+import tomllib
 
 
 def verified_wheel_files(archive, expected_sha256, installed):
@@ -142,7 +145,7 @@ def pyinstaller_args(root, output, name, blosc2_library=None):
             '--runtime-hook', str(root / 'packaging/frozen_native.py'),
             '--workpath', str(root / 'build/desktop-native'), '--specpath', str(root / 'build')]
     if sys.platform == 'darwin':
-        args += ['--strip']
+        args += ['--strip', '--osx-bundle-identifier', 'io.shaq.dailyoracle.lab']
     if blosc2_library is not None:
         args += ['--add-binary', f'{blosc2_library}:tables']
     args += ['--collect-submodules', 'scipy._external']
@@ -160,6 +163,17 @@ def pyinstaller_args(root, output, name, blosc2_library=None):
              '--add-data', f'{root / "build/third-party"}:third-party',
              str(root / 'packaging/desktop_entry.py')]
     return args
+
+
+def set_macos_bundle_identity(root, app):
+    version = str(tomllib.loads((root / 'pyproject.toml').read_text(encoding='utf-8'))['project']['version'])
+    if not re.fullmatch(r'\d+\.\d+\.\d+', version):
+        raise ValueError('Native bundle version must be a final numeric project triplet')
+    path = app / 'Contents/Info.plist'
+    data = plistlib.loads(path.read_bytes())
+    data.update(CFBundleVersion=version, CFBundleShortVersionString=version,
+                CFBundleIdentifier='io.shaq.dailyoracle.lab')
+    path.write_bytes(plistlib.dumps(data))
 
 
 def collect_notices(root):
@@ -280,6 +294,8 @@ def main():
     collect_notices(root)
     env = dict(os.environ, PYINSTALLER_CONFIG_DIR=str(root / 'build/pyinstaller-cache'))
     subprocess.run([sys.executable, '-m', 'PyInstaller', *pyinstaller_args(root, args.output.resolve(), args.name, blosc2_library)], check=True, env=env)
+    if sys.platform == 'darwin':
+        set_macos_bundle_identity(root, args.output / (args.name + '.app'))
     # pip's local installation URL is not runtime metadata. Public provenance is
     # retained in third-party/source-manifest.json and the wheel/source artifacts.
     for payload in (args.output / args.name, args.output / (args.name + '.app')):

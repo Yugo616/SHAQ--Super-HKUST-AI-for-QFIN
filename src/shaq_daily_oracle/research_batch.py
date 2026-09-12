@@ -78,10 +78,8 @@ class FrozenEvidence:
 
 
 def _application_version() -> str:
-    try:
-        return version("shaq-daily-oracle")
-    except PackageNotFoundError:
-        return "source-tree"
+    from .app_paths import application_version
+    return application_version()
 
 
 def _safe_name(value: str) -> str:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 import shutil
+import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -46,6 +47,12 @@ def installed_package_root() -> Path:
     if bundled:
         return Path(str(bundled)).resolve()
     return Path(__file__).resolve().parents[2]
+
+
+def application_version(package_root: Path | None = None) -> str:
+    """The shipped/source pyproject is authoritative, not the build venv metadata."""
+    path = (package_root or installed_package_root()) / 'pyproject.toml'
+    return str(tomllib.loads(path.read_text(encoding='utf-8'))['project']['version'])
 
 
 def app_paths(*, package_root: Path | None = None) -> AppPaths:

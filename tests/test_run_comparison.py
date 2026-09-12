@@ -13,6 +13,7 @@ def batch(key='team/main', *, evidence='e' * 64, model='m' * 64, rules='r' * 64)
         'evidence': {'evidence_hash': evidence, 'as_of_et': '2026-09-09T08:50:00-04:00',
                      'candidates': [{'symbol': 'AAA', 'premarket_return': .02}]},
         'variants': {key: {'variant': {'label': '方法'}, 'model_profile_sha256': model,
+                          'model_call_audits': [{'request_policy_sha256':'p'*64}],
                           'predictions': [{'symbol': 'AAA', 'direction': 'bullish'}],
                           'reports_by_symbol': {'AAA': []}, 'integration_audit': {}}},
         'skill_snapshots': {key: {'documents': {'skills/event/SKILL.md': 'original'}}},
@@ -78,6 +79,13 @@ class RunComparisonTests(unittest.TestCase):
     def test_absent_variant_is_error_instead_of_comparing_empty_objects(self):
         with self.assertRaisesRegex(ValueError, '版本'):
             run_comparison.compare_runs(batch(), 'team/missing', batch(), 'team/main')
+
+    def test_effective_request_policy_difference_prevents_controlled_claim(self):
+        left,right=batch(),batch('team/alternative')
+        right['variants']['team/alternative']['model_call_audits'][0]['request_policy_sha256']='q'*64
+        value=run_comparison.compare_runs(left,'team/main',right,'team/alternative')
+        self.assertEqual(value['dimensions']['model']['status'],'different')
+        self.assertFalse(value['controlled_method_comparison'])
 
     def test_bridge_compares_only_verified_batch_details(self):
         from shaq_daily_oracle.desktop import DesktopBridge
