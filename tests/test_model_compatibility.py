@@ -19,6 +19,7 @@ from shaq_daily_oracle.model_backends import (
     call_structured,
     probe_model_profile,
 )
+from shaq_daily_oracle.research_batch import ContentAddressedModelCache
 
 
 READY_SCHEMA = {
@@ -133,7 +134,7 @@ class ModelCompatibilityTests(unittest.TestCase):
             "USERPROFILE": r"C:\Users\李 小明",
             "APPDATA": r"C:\Users\李 小明\AppData\Roaming",
             "LOCALAPPDATA": r"C:\Users\李 小明\AppData\Local",
-            "SystemRoot": r"C:\Windows",
+            "SYSTEMROOT": r"C:\Windows",
             "WINDIR": r"C:\Windows",
             "TEMP": r"C:\Users\李 小明\AppData\Local\Temp",
             "TMP": r"C:\Users\李 小明\AppData\Local\Temp",
@@ -180,43 +181,25 @@ class ModelCompatibilityTests(unittest.TestCase):
                 actual = model_backends._local_cli(profile)
         self.assertEqual(actual, str(native))
 
-    def test_windows_cmd_launcher_is_explicit_and_prompt_stays_on_stdin(self) -> None:
-        """Putting the prompt in a command string would permit shell interpolation."""
+    def test_windows_legacy_cmd_launcher_is_rejected_before_execution(self) -> None:
+        """A legacy shim must not place model arguments behind cmd.exe parsing."""
 
         profile = ModelProfile(
             profile_id="claude", protocol="claude-code", base_url="",
             model="subscription-default",
         )
-        prompt = 'frozen evidence & echo "not a command"'
-        completed = subprocess.CompletedProcess(
-            args=[], returncode=0,
-            stdout='{"structured_output":{"status":"ready"}}', stderr="",
-        )
-        environment = {
-            "SystemRoot": r"C:\Windows",
-            "PATH": r"C:\Windows\System32",
-        }
         launcher = r"C:\Users\李 小明\AppData\Roaming\npm\claude.cmd"
-        with patch.object(sys, "platform", "win32"), patch.dict(
-            os.environ, environment, clear=True
-        ), patch.object(
+        with patch.object(sys, "platform", "win32"), patch.object(
             model_backends, "_local_cli", return_value=launcher
         ), patch.object(
-            model_backends.subprocess, "run", return_value=completed
+            model_backends.subprocess, "run"
         ) as run:
-            result, _ = call_structured(
-                profile=profile, secret="", prompt=prompt, schema=READY_SCHEMA
-            )
-
-        command = run.call_args.args[0]
-        self.assertEqual(result, {"status": "ready"})
-        self.assertEqual(command[:4], [r"C:\Windows\System32\cmd.exe", "/d", "/s", "/c"])
-        self.assertEqual(command[4], launcher)
-        self.assertNotIn(prompt, command)
-        self.assertEqual(run.call_args.kwargs["input"], prompt)
-        self.assertEqual(run.call_args.kwargs["encoding"], "utf-8")
-        self.assertEqual(run.call_args.kwargs["errors"], "replace")
-        self.assertFalse(run.call_args.kwargs["shell"])
+            with self.assertRaisesRegex(ModelBackendError, r"原生.*\.exe"):
+                call_structured(
+                    profile=profile, secret="", prompt="packet & not-a-command",
+                    schema=READY_SCHEMA,
+                )
+        run.assert_not_called()
 
     def test_unsupported_windows_launcher_is_rejected_before_execution(self) -> None:
         """Unexpected script launchers must not gain implicit shell execution."""
@@ -305,22 +288,74 @@ class ModelCompatibilityTests(unittest.TestCase):
                 probe_model_profile(profile=profile, secret="")
         self.assertNotIn("do-not-leak", str(raised.exception))
 
-    def test_model_profile_identity_tracks_effective_protocol_policy(self) -> None:
-        """Changing request capabilities must invalidate policy-bound cached work."""
+    def test_profile_identity_stays_stable_when_request_policy_changes(self) -> None:
+        """Request transport changes must not split historical model/account series."""
 
         profile = relay_profile()
         original = profile.identity()
-        capabilities = getattr(model_backends, "_PROTOCOL_CAPABILITIES", None)
-        self.assertIsNotNone(capabilities)
-        if capabilities is None:
+        policy_identity = getattr(profile, "request_policy_identity", None)
+        self.assertIsNotNone(policy_identity)
+        if policy_identity is None:
             return
-        capability = capabilities[profile.protocol]
+        original_policy = policy_identity()
+        capability = model_backends._PROTOCOL_CAPABILITIES[profile.protocol]
         changed = replace(capability, policy_version=capability.policy_version + 1)
         with patch.dict(
             model_backends._PROTOCOL_CAPABILITIES,
             {profile.protocol: changed},
         ):
-            self.assertNotEqual(profile.identity(), original)
+            self.assertEqual(profile.identity(), original)
+            self.assertNotEqual(profile.request_policy_identity(), original_policy)
+
+    def test_model_cache_routing_tracks_policy_without_changing_frozen_identity(self) -> None:
+        """A new request policy must miss old cache while preserving the model series hash."""
+
+        profile = relay_profile()
+        calls = []
+
+        def caller(**kwargs):
+            calls.append(kwargs["profile"].identity())
+            return {"status": "ready"}, {
+                "profile_sha256": kwargs["profile"].identity(),
+                "request_policy": {"tools": []},
+            }
+
+        with tempfile.TemporaryDirectory() as name:
+            cache = ContentAddressedModelCache(Path(name))
+            first = cache.call(
+                profile=profile, secret="", prompt="packet", schema=READY_SCHEMA,
+                caller=caller,
+            )
+            capability = model_backends._PROTOCOL_CAPABILITIES[profile.protocol]
+            changed = replace(capability, policy_version=capability.policy_version + 1)
+            with patch.dict(
+                model_backends._PROTOCOL_CAPABILITIES,
+                {profile.protocol: changed},
+            ):
+                second = cache.call(
+                    profile=profile, secret="", prompt="packet", schema=READY_SCHEMA,
+                    caller=caller,
+                )
+        self.assertFalse(first[2])
+        self.assertFalse(second[2])
+        self.assertEqual(first[1]["cache_key"], second[1]["cache_key"])
+        self.assertEqual(calls, [profile.identity(), profile.identity()])
+
+    def test_model_mismatch_error_does_not_echo_returned_model_text(self) -> None:
+        """An endpoint-controlled model field must not be reflected in user-facing errors."""
+
+        response = JsonResponse({
+            "id": "chat-1",
+            "model": "wrong-model-do-not-leak",
+            "choices": [{"message": {"content": '{"status":"ready"}'}}],
+        })
+        with patch("httpx.post", return_value=response):
+            with self.assertRaisesRegex(ModelBackendError, "different model") as raised:
+                call_structured(
+                    profile=relay_profile(), secret="do-not-leak", prompt="packet",
+                    schema=READY_SCHEMA,
+                )
+        self.assertNotIn("do-not-leak", str(raised.exception))
 
 
 if __name__ == "__main__":

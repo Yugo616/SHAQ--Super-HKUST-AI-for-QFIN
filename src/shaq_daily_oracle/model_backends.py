@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import ntpath
 import os
 import plistlib
 import re
@@ -155,12 +154,14 @@ class ModelProfile:
         return asdict(self)
 
     def identity(self) -> str:
-        return sha256_payload({
-            "profile": self.public_dict(),
-            "protocol_capabilities": _protocol_capabilities(
-                self.protocol
-            ).identity_payload(),
-        })
+        return sha256_payload(self.public_dict())
+
+    def request_policy_identity(self) -> str:
+        """Hash transport behavior separately from the historical model identity."""
+
+        return sha256_payload(
+            _protocol_capabilities(self.protocol).identity_payload()
+        )
 
     def endpoint_fingerprint(self) -> str:
         if self.protocol in {"codex-cli", "claude-code"}:
@@ -283,12 +284,12 @@ def _local_cli_environment() -> dict[str, str]:
 
     allowed = {
         "APPDATA", "COMSPEC", "HOME", "LANG", "LANGUAGE", "LC_ALL", "LC_CTYPE",
-        "LOCALAPPDATA", "PATH", "PATHEXT", "SystemRoot", "TEMP", "TERM", "TMP",
+        "LOCALAPPDATA", "PATH", "PATHEXT", "SYSTEMROOT", "TEMP", "TERM", "TMP",
         "TMPDIR", "USER", "USERPROFILE", "WINDIR",
     }
     return {
         key: value for key, value in os.environ.items()
-        if key in allowed
+        if key.upper() in allowed
     }
 
 
@@ -301,13 +302,9 @@ def _cli_command(executable: str, arguments: list[str]) -> list[str]:
     if suffix in {".exe", ".com"}:
         return [executable, *arguments]
     if suffix in {".cmd", ".bat"}:
-        command_processor = os.environ.get("COMSPEC")
-        if not command_processor:
-            system_root = os.environ.get("SystemRoot") or os.environ.get("WINDIR")
-            if not system_root:
-                raise ModelBackendError("Windows CLI launcher requires SystemRoot or COMSPEC")
-            command_processor = ntpath.join(system_root, "System32", "cmd.exe")
-        return [command_processor, "/d", "/s", "/c", executable, *arguments]
+        raise ModelBackendError(
+            "检测到旧式 Windows CLI 启动器；请安装官方原生 .exe 后重新连接"
+        )
     raise ModelBackendError(f"unsupported Windows CLI launcher: {suffix or 'no extension'}")
 
 
@@ -691,15 +688,14 @@ def call_structured(
         returned_model and profile.model != "subscription-default"
         and not _model_identity_matches(profile.model, returned_model)
     ):
-        raise ModelBackendError(
-            f"model endpoint returned a different model: expected {profile.model}, got {returned_model}"
-        )
+        raise ModelBackendError("model endpoint returned a different model than configured")
     parsed = _validate_result(parsed, schema)
     completed = datetime.now(ZoneInfo("America/New_York")).isoformat()
     audit = {
         **provider_audit,
         "profile_id": profile.profile_id,
         "profile_sha256": profile.identity(),
+        "request_policy_sha256": profile.request_policy_identity(),
         "endpoint_fingerprint": profile.endpoint_fingerprint(),
         "prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
         "schema_sha256": sha256_payload(schema),

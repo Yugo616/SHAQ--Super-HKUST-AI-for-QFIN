@@ -375,6 +375,7 @@ class ContentAddressedModelCache:
         caller: Callable[..., tuple[dict[str, Any], dict[str, Any]]] = call_structured,
         on_model_start: Callable[[], None] | None = None,
     ) -> tuple[dict[str, Any], dict[str, Any], bool]:
+        request_policy_sha256 = profile.request_policy_identity()
         key_document = {
             "cache_schema_version": 2,
             "profile_sha256": profile.identity(),
@@ -382,7 +383,9 @@ class ContentAddressedModelCache:
             "schema_sha256": sha256_payload(schema),
         }
         cache_key = sha256_payload(key_document)
-        path = self.root / f"{cache_key}.json"
+        policy_root = self.root / request_policy_sha256
+        policy_root.mkdir(parents=True, exist_ok=True)
+        path = policy_root / f"{cache_key}.json"
         lock = FileLock(str(path) + ".lock")
         with lock:
             if path.is_file():
@@ -396,6 +399,10 @@ class ContentAddressedModelCache:
             result, audit = caller(
                 profile=profile, secret=secret, prompt=prompt, schema=schema
             )
+            declared_policy = audit.get("request_policy_sha256")
+            if declared_policy not in {None, request_policy_sha256}:
+                raise ResearchBatchError("model audit request policy mismatch")
+            audit = {**audit, "request_policy_sha256": request_policy_sha256}
             unsigned = {
                 "schema_version": 2, "cache_key": cache_key,
                 "key_document": key_document, "prompt": prompt, "schema": schema,
@@ -454,11 +461,24 @@ class ContentAddressedModelCache:
     ) -> list[str]:
         """Copy exact, verified model inputs and outputs into one immutable batch."""
 
-        keys = sorted({str(row.get("cache_key", "")) for row in audits})
+        locations = {
+            (
+                str(row.get("cache_key", "")),
+                str(row.get("request_policy_sha256", "")),
+            )
+            for row in audits
+        }
+        keys = sorted({key for key, _ in locations})
         if not keys or any(len(key) != 64 for key in keys):
             raise ResearchBatchError("model call audit has no content-addressed identity")
-        for key in keys:
-            source = self.root / f"{key}.json"
+        if len(locations) != len(keys):
+            raise ResearchBatchError("model call cache key has conflicting request policies")
+        for key, request_policy_sha256 in sorted(locations):
+            source = (
+                self.root / request_policy_sha256 / f"{key}.json"
+                if len(request_policy_sha256) == 64
+                else self.root / f"{key}.json"
+            )
             document = self._verified_document(source, cache_key=key)
             _write_json_same_or_once(destination / f"{key}.json", document)
         return keys
@@ -556,7 +576,13 @@ def _run_domain(
         schema = _report_schema()
         schema['properties']['results']['items']['properties']['task_id']['enum'] = [task['task_id'] for task in group]
         prompt = _domain_prompt(domain=domain, tasks=group, documents=documents)
-        call_id = sha256_payload({"cache_schema_version": 2, "profile_sha256": profile.identity(), "prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(), "schema_sha256": sha256_payload(schema)})
+        call_id = sha256_payload({
+            "call_identity_version": 1,
+            "profile_sha256": profile.identity(),
+            "request_policy_sha256": profile.request_policy_identity(),
+            "prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+            "schema_sha256": sha256_payload(schema),
+        })
         for task in group:
             call_by_task[task["task_id"]] = (call_id, None)
         started = time.monotonic()
