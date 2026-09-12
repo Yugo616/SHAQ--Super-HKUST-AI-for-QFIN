@@ -4,7 +4,7 @@
 
 SHAQ Daily Oracle Lab is a local workbench for comparative financial research: it runs governed premarket methods against frozen evidence and compares their records; it is not a live-trading application or investment advice.
 
-![Two frozen runs compared in SHAQ Daily Oracle Lab](docs/assets/run-comparison.png)
+The results view separates **method changes, model identity, frozen data, candidate selection, and trading rules** before comparing predictions. A mismatch or missing record remains visible; it is not presented as a controlled experiment.
 
 ## Published installers
 
