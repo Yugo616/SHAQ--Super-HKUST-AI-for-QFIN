@@ -198,6 +198,68 @@ class DeadlineTests(unittest.TestCase):
 
 
 class DownstreamCheckpointTests(unittest.TestCase):
+    def test_shared_cache_reconciliation_rejects_valid_conflicts_inputs_and_tampering(self):
+        import copy
+        from shaq_daily_oracle.research_batch import ContentAddressedModelCache, ResearchBatchError, _validated_adversary
+        helper=fixtures.ResearchBatchTests()
+        for mutation in ['valid-conflict','changed-input','tampered']:
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as name:
+                root=Path(name);cache=ContentAddressedModelCache(root/'cache');profile=helper.profile()
+                prompt='REPORTS:\n{"AAPL":[]}'
+                _,audit,_=cache.call(profile=profile,secret='',prompt=prompt,schema={},caller=fixtures.FakeModel())
+                global_path=root/'cache'/audit['request_policy_sha256']/f"{audit['cache_key']}.json"
+                global_bytes=global_path.read_bytes();local=copy.deepcopy(json.loads(global_bytes))
+                local['result']['results'][0]['report']['strongest_countercase']='另一个同样合法但不相同的反方判断'
+                if mutation!='tampered':
+                    local['result_sha256']=sha256_payload(local['result'])
+                    local['audit']['output_sha256']=local['result_sha256']
+                    local['audit_sha256']=sha256_payload(local['audit'])
+                    if mutation=='changed-input':local['prompt']='different frozen input'
+                    local['cache_document_sha256']=sha256_payload({k:v for k,v in local.items() if k!='cache_document_sha256'})
+                snapshots=root/'batch/model_calls';local_path=snapshots/global_path.name
+                _atomic_json(local_path,local);local_bytes=local_path.read_bytes()
+                with self.assertRaises(ResearchBatchError):
+                    cache.call(profile=profile,secret='',prompt=prompt,schema={},
+                        caller=lambda **kw:self.fail('conflicting frozen data was recalled'),snapshot_root=snapshots,
+                        recover_rejected_cache=True,validate=lambda value:_validated_adversary(value,{'AAPL':[]}))
+                self.assertEqual(global_path.read_bytes(),global_bytes)
+                self.assertEqual(local_path.read_bytes(),local_bytes)
+                self.assertFalse((root/'batch/rejected_model_calls').exists())
+
+    def test_two_old_batches_share_repaired_global_checkpoint_without_recalling_valid_model(self):
+        helper=fixtures.ResearchBatchTests()
+        with tempfile.TemporaryDirectory() as name:
+            root=Path(name);registry=helper.registry(root);evidence=helper.evidence(root)
+            runner=ResearchBatchRunner(batches_root=root/'batches',cache_root=root/'cache',
+                registry=registry,integration_policy=helper.policy())
+            original_call=runner.cache.call
+            def legacy_call(**kw):
+                kw.pop('validate',None)
+                return original_call(**kw)
+            def invalid(**kw):
+                return fixtures.FakeModel()(**kw) if 'FROZEN TASKS:' in kw['prompt'] else ({'results':[]},{})
+            old=[]
+            for version in ['old-app-A','old-app-B']:
+                with patch.object(runner.cache,'call',side_effect=legacy_call), \
+                     patch('shaq_daily_oracle.research_batch._application_version',return_value=version):
+                    old.append(runner.run(evidence=evidence,variants=[helper.main_variant(registry)],
+                        profile=helper.profile(),secret='',caller=invalid))
+            self.assertNotEqual(old[0]['batch_root'],old[1]['batch_root'])
+            batch_b=Path(old[1]['batch_root'])
+            before={path.name:path.read_bytes() for path in (batch_b/'model_calls').glob('*.json')}
+            rejected=next(json.loads(content) for content in before.values() if 'REPORTS:' in json.loads(content)['prompt'])
+            first=runner.resume(batch_id=old[0]['status']['batch_id'],evidence=evidence,profile=helper.profile(),secret='',caller=fixtures.FakeModel())
+            self.assertTrue(first['status']['all_variants_completed'])
+            second=runner.resume(batch_id=old[1]['status']['batch_id'],evidence=evidence,profile=helper.profile(),
+                secret='',caller=lambda **kw:self.fail('repaired valid global checkpoint was recalled'))
+            self.assertTrue(second['status']['all_variants_completed'])
+            self.assertTrue(any(json.loads(path.read_text())==rejected for path in (batch_b/'rejected_model_calls').glob('*.json')))
+            for filename,content in before.items():
+                if json.loads(content)['cache_key'] != rejected['cache_key']:
+                    self.assertEqual((batch_b/'model_calls'/filename).read_bytes(),content)
+            repaired=json.loads((batch_b/'model_calls'/f"{rejected['cache_key']}.json").read_text())
+            self.assertEqual(repaired,json.loads((Path(first['batch_root'])/'model_calls'/f"{rejected['cache_key']}.json").read_text()))
+
     def test_invalid_adversary_is_not_promoted_and_resume_retries_only_adversary(self):
         helper=fixtures.ResearchBatchTests()
         with tempfile.TemporaryDirectory() as name:

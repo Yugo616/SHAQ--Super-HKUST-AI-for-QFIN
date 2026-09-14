@@ -426,6 +426,30 @@ class ContentAddressedModelCache:
                             'message': safe_model_error_summary(exc, sensitive_values=(secret,))})
                 else:
                     if snapshot_root:
+                        snapshot_path = snapshot_root / path.name
+                        if snapshot_path.is_file():
+                            original = self._verified_document(snapshot_path, cache_key=cache_key)
+                            if original != document:
+                                if any(original[field] != document[field] for field in ('key_document', 'prompt', 'schema')):
+                                    raise ResearchBatchError('frozen model call input conflict')
+                                if not recover_rejected_cache or validate is None:
+                                    raise ResearchBatchError('model cache conflicts with frozen call snapshot')
+                                try:
+                                    validate(original['result'])
+                                except ValueError as exc:
+                                    # Another batch may already have repaired the shared global cache.
+                                    # Reuse that validated output; quarantine only this rejected snapshot.
+                                    _write_json_same_or_once(snapshot_root.parent / 'rejected_model_calls' /
+                                        f"{original['cache_document_sha256']}.json", original)
+                                    _write_json_same_or_once(snapshot_root.parent / 'call_attempts' /
+                                        f"rejected-{original['cache_document_sha256']}.json", {
+                                            'cache_key': cache_key, 'status': 'rejected_checkpoint',
+                                            'cache_document_sha256': original['cache_document_sha256'],
+                                            'error_type': type(exc).__name__,
+                                            'message': safe_model_error_summary(exc, sensitive_values=(secret,))})
+                                    snapshot_path.unlink()  # Rejected bytes and diagnostic are retained above.
+                                else:
+                                    raise ResearchBatchError('conflicting valid frozen model call snapshots')
                         _write_json_same_or_once(snapshot_root / path.name, document)
                     return document["result"], self._public_audit(document), True
             policy = execution_policy or ExecutionPolicy()
@@ -1077,6 +1101,14 @@ class ResearchBatchRunner:
                 raise ResearchBatchError('original call model identity mismatch')
             policy = document['audit'].get('request_policy_sha256', '')
             target = self.cache.root / policy / path.name if policy else self.cache.root / path.name
+            if target.is_file():
+                current = self.cache._verified_document(target, cache_key=path.stem)
+                if current != document:
+                    if any(current[field] != document[field] for field in ('key_document', 'prompt', 'schema')):
+                        raise ResearchBatchError('frozen model call input conflict')
+                    # Do not overwrite either document or guess output validity here. The actual
+                    # call's full semantic validator will reconcile a rejected local snapshot.
+                    continue
             _write_json_same_or_once(target, document)
         return self.run(evidence=evidence, variants=[VariantSelection(**value['variant']) for value in snapshots.values()],
             profile=profile, secret=secret, caller=caller, progress=progress, observer=observer,
