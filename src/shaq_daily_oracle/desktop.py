@@ -356,6 +356,12 @@ class DesktopBridge:
     def get_shadow_batch(self, batch_id: str) -> dict[str, Any]:
         return self._result(self.lab.batch_detail, batch_id)
 
+    def resume_shadow_batch(self, batch_id: str) -> dict[str, Any]:
+        return self._result(self.lab.resume_batch, batch_id)
+
+    def save_model_execution_policy(self, value: dict[str, Any]) -> dict[str, Any]:
+        return self._result(self.lab.settings.save_execution_policy, value)
+
     def compare_lab_methods(
         self, left: dict[str, str], right: dict[str, str]
     ) -> dict[str, Any]:

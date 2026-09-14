@@ -7,6 +7,7 @@ import platform
 import tempfile
 import threading
 import time
+import uuid
 from collections import defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, replace
@@ -23,6 +24,8 @@ from .decision_sandbox import build_decision_input, execute_decision_script, dec
 from .hashing import sha256_file, sha256_payload
 from .lineage import build_lineage_graph
 from .model_backends import ModelProfile, call_structured
+from .model_execution import (ExecutionPolicy, execution_policy_scope, transient_model_failure,
+                              compact_market_tables)
 from .research_progress import safe_observe
 from .sandboxed_codex import (
     DOMAIN_SKILLS,
@@ -259,7 +262,7 @@ def market_input_view(content):
     return result
 
 
-def _tasks_for_domain(evidence: FrozenEvidence, domain: str) -> list[dict[str, Any]]:
+def _tasks_for_domain(evidence: FrozenEvidence, domain: str, *, prompt_format_version=1) -> list[dict[str, Any]]:
     records = evidence.lineage["records"]
     declared_statuses = {
         (str(row.get("symbol", "*")).upper(), str(row.get("domain", ""))): str(
@@ -372,6 +375,11 @@ class ContentAddressedModelCache:
         schema: dict[str, Any],
         caller: Callable[..., tuple[dict[str, Any], dict[str, Any]]] = call_structured,
         on_model_start: Callable[[], None] | None = None,
+        execution_policy: ExecutionPolicy | None = None,
+        validate: Callable[[dict[str, Any]], None] | None = None,
+        snapshot_root: Path | None = None,
+        group_symbols: list[str] | None = None,
+        allow_legacy_cache: bool = False,
     ) -> tuple[dict[str, Any], dict[str, Any], bool]:
         request_policy_sha256 = profile.request_policy_identity()
         key_document = {
@@ -384,19 +392,53 @@ class ContentAddressedModelCache:
         policy_root = self.root / request_policy_sha256
         policy_root.mkdir(parents=True, exist_ok=True)
         path = policy_root / f"{cache_key}.json"
+        if allow_legacy_cache and not path.exists() and (self.root / path.name).is_file():
+            path = self.root / path.name
         lock = FileLock(str(path) + ".lock")
         with lock:
             if path.is_file():
                 document = self._verified_document(path, cache_key=cache_key)
                 if document["prompt"] != prompt or document["schema"] != schema:
                     raise ResearchBatchError("model cache input differs from its content key")
+                if validate:
+                    validate(document["result"])
+                if snapshot_root:
+                    _write_json_same_or_once(snapshot_root / path.name, document)
                 return document["result"], self._public_audit(document), True
-            self._wait_for_rate_slot(profile)
-            if on_model_start:
-                on_model_start()
-            result, audit = caller(
-                profile=profile, secret=secret, prompt=prompt, schema=schema
-            )
+            policy = execution_policy or ExecutionPolicy()
+            attempts = []
+            invocation_id = uuid.uuid4().hex
+            started = time.monotonic()
+            for attempt in range(policy.transient_retries + 1):
+                self._wait_for_rate_slot(profile)
+                if on_model_start:
+                    on_model_start()
+                attempt_started = time.monotonic()
+                timestamp = datetime.now(ZoneInfo('America/New_York')).isoformat()
+                try:
+                    with execution_policy_scope(policy):
+                        result, audit = caller(profile=profile, secret=secret, prompt=prompt, schema=schema)
+                    if validate:
+                        validate(result)
+                except Exception as exc:
+                    transient = transient_model_failure(exc)
+                    attempts.append({'attempt': attempt + 1, 'started_at_et': timestamp,
+                        'elapsed_seconds': time.monotonic() - attempt_started,
+                        'status': 'failed', 'error_type': type(exc).__name__, 'transient': transient})
+                    if snapshot_root:
+                        _atomic_json(snapshot_root.parent / 'call_attempts' / f'{cache_key}-{invocation_id}.json', {
+                            'cache_key': cache_key, 'input_bytes': len(prompt.encode('utf-8')),
+                            'group_symbols': group_symbols or [], 'attempts': attempts,
+                            'execution_policy': policy.public_dict()})
+                    if not transient or attempt == policy.transient_retries:
+                        raise
+                    continue
+                attempts.append({'attempt': attempt + 1, 'started_at_et': timestamp,
+                    'elapsed_seconds': time.monotonic() - attempt_started, 'status': 'complete'})
+                break
+            audit = {**audit, 'attempts': attempts, 'attempt_count': len(attempts),
+                'input_bytes': len(prompt.encode('utf-8')), 'group_symbols': group_symbols or [],
+                'elapsed_seconds': time.monotonic() - started, 'execution_policy': policy.public_dict()}
             declared_policy = audit.get("request_policy_sha256")
             if declared_policy not in {None, request_policy_sha256}:
                 raise ResearchBatchError("model audit request policy mismatch")
@@ -411,6 +453,8 @@ class ContentAddressedModelCache:
                 **unsigned, "cache_document_sha256": sha256_payload(unsigned)
             }
             _write_json_once(path, document)
+            if snapshot_root:
+                _write_json_same_or_once(snapshot_root / path.name, document)
             return result, self._public_audit(document), False
 
     @staticmethod
@@ -495,7 +539,7 @@ def shared_task_inputs(tasks):
 
 
 def _domain_prompt(
-    *, domain: str, tasks: list[dict[str, Any]], documents: dict[str, str]
+    *, domain: str, tasks: list[dict[str, Any]], documents: dict[str, str], prompt_format_version=1
 ) -> str:
     skill_name = DOMAIN_SKILLS[domain]
     skill = documents[f"skills/{skill_name}/SKILL.md"]
@@ -503,6 +547,8 @@ def _domain_prompt(
     role_card = documents.get(f"skills/{skill_name}/agents/openai.yaml", "")
     role = parse_agent_profile(role_card) if role_card else {}
     pool, tasks = shared_task_inputs(tasks)
+    if prompt_format_version >= 2:
+        pool = {key: compact_market_tables(value) for key, value in pool.items()}
     component_instruction = (
         "This version uses final synthesis: your verdict describes only your domain's supported "
         "contribution, not an independently sufficient whole-stock forecast. Partial data limits the "
@@ -510,7 +556,11 @@ def _domain_prompt(
         "or proving complete absorption. Distinguish a supported conditional mechanism from certainty. "
         "Missing indispensable data still requires unavailable; balanced evidence still permits neutral. "
     ) if decision_mode(documents["decision/cases.json"]) == "synthesis" else ""
-    return (
+    format_instruction = ("INPUT FORMAT v2: bars tables are lossless. columns names each row value; "
+        "present lists indexes existing in the original row; null means all columns present "
+        "(an absent field is distinct from a null value). "
+        "All dates, values and original evidence references are retained.\n\n") if prompt_format_version >= 2 else ''
+    return (format_instruction +
         "You are one isolated SHAQ Daily Oracle research-domain analyst. "
         "Use only the frozen packet below. Do not browse, call tools, add remembered company facts, "
         "or infer missing measurements. Analyze each task independently for the official US regular "
@@ -540,9 +590,12 @@ def _run_domain(
     observer: Callable[..., None] | None = None,
     batch_id: str = "",
     variant_key: str = "",
+    execution_policy: ExecutionPolicy | None = None,
+    prompt_format_version: int = 1,
+    snapshot_root: Path | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     domain_started = time.monotonic()
-    tasks = _tasks_for_domain(evidence, domain)
+    tasks = _tasks_for_domain(evidence, domain, prompt_format_version=prompt_format_version)
     from .module_rules import default_rule, execute_rule
     code = documents.get(f"modules/{domain}/compute.js")
     if code and code != default_rule(domain):
@@ -562,18 +615,25 @@ def _run_domain(
         return [empty_reports[task['task_id']] for task in all_tasks], []
     groups, group = [], []
     for task in tasks:
-        prompt = _domain_prompt(domain=domain, tasks=group + [task], documents=documents)
-        if group and len(prompt.encode('utf-8')) // 4 + profile.maximum_output_tokens > profile.maximum_context_tokens:
+        prompt = _domain_prompt(domain=domain, tasks=group + [task], documents=documents,
+                                prompt_format_version=prompt_format_version)
+        if group and ((prompt_format_version >= 2 and domain == 'price_volume') or
+                len(prompt.encode('utf-8')) // 4 + profile.maximum_output_tokens > profile.maximum_context_tokens):
             groups.append(group)
             group = []
         group.append(task)
     if group:
         groups.append(group)
-    rows, audits, call_by_task = [], [], {}
+    rows, audits, call_by_task, failures = [], [], {}, []
+    evidence_domains = {
+        record['evidence_id']: set(record.get('consumer_domains', [record['domain']]))
+        for record in evidence.lineage['records']
+    }
     for group in groups:
         schema = _report_schema()
         schema['properties']['results']['items']['properties']['task_id']['enum'] = [task['task_id'] for task in group]
-        prompt = _domain_prompt(domain=domain, tasks=group, documents=documents)
+        prompt = _domain_prompt(domain=domain, tasks=group, documents=documents,
+                                prompt_format_version=prompt_format_version)
         call_id = sha256_payload({
             "call_identity_version": 1,
             "profile_sha256": profile.identity(),
@@ -597,15 +657,34 @@ def _run_domain(
                          symbols=[task["symbol"] for task in group], call_id=call_id,
                          attempt=attempt, status="running", elapsed_seconds=round(time.monotonic()-started, 3))
         try:
+            def validate_group(value):
+                group_rows = value.get('results') if isinstance(value, dict) else None
+                if not isinstance(group_rows, list) or len(group_rows) != len(group):
+                    raise ResearchBatchError(f'{domain} model output does not match frozen tasks')
+                by_id = {row.get('task_id'): row.get('report') for row in group_rows if isinstance(row, dict)}
+                if set(by_id) != {task['task_id'] for task in group}:
+                    raise ResearchBatchError(f'{domain} model output does not match frozen tasks')
+                for task in group:
+                    raw = by_id[task['task_id']]
+                    if not isinstance(raw, dict) or raw.get('domain') != domain or raw.get('as_of_et') != task['as_of_et']:
+                        raise ResearchBatchError(f'{domain} changed its frozen task identity')
+                    if not set(raw.get('evidence_ids', [])) <= {row['evidence_id'] for row in task['evidence']}:
+                        raise ResearchBatchError(f'{domain} cited evidence outside its frozen task')
+                    validate_domain_report(_bind_verified_lineage(raw, evidence.lineage['evidence_to_roots']),
+                        evidence.lineage['evidence_to_roots'], evidence_domains)
             result, audit, cache_hit = cache.call(profile=profile, secret=secret,
-                prompt=prompt, schema=schema, caller=caller, on_model_start=model_start)
+                prompt=prompt, schema=schema, caller=caller, on_model_start=model_start,
+                execution_policy=execution_policy, validate=validate_group,
+                allow_legacy_cache=prompt_format_version == 1,
+                snapshot_root=snapshot_root, group_symbols=[task['symbol'] for task in group])
         except Exception as exc:
             safe_observe(observer, stage="failure", batch_id=batch_id,
                          variant_key=variant_key, domain=domain,
                          symbols=[task["symbol"] for task in group], call_id=call_id,
                          attempt=attempt, status="failed", error_type=type(exc).__name__,
                          message=str(exc), elapsed_seconds=round(time.monotonic()-started, 3))
-            raise
+            failures.append(f'{domain}: {type(exc).__name__}: {exc}')
+            continue
         safe_observe(observer, stage="cache_hit" if cache_hit else "model_returned", batch_id=batch_id,
                      variant_key=variant_key, domain=domain,
                      symbols=[task["symbol"] for task in group], call_id=call_id,
@@ -617,8 +696,9 @@ def _run_domain(
         rows.extend(group_rows)
         audits.append({**audit, 'domain': domain, 'cache_hit': cache_hit})
     by_task = {str(row.get("task_id")): row.get("report") for row in rows if isinstance(row, dict)}
-    if len(rows) != len(tasks) or set(by_task) != {task["task_id"] for task in tasks}:
+    if not failures and (len(rows) != len(tasks) or set(by_task) != {task["task_id"] for task in tasks}):
         raise ResearchBatchError(f"{domain} model output does not match frozen tasks")
+    tasks = [task for task in tasks if task['task_id'] in by_task]
     evidence_domains = {
         record["evidence_id"]: set(record.get("consumer_domains", [record["domain"]]))
         for record in evidence.lineage["records"]
@@ -665,6 +745,8 @@ def _run_domain(
                      variant_key=variant_key, symbol=task["symbol"], domain=domain,
                      status="no_data", elapsed_seconds=round(time.monotonic()-domain_started, 3),
                      report={**report, "original": report, "evidence": []})
+    if failures:
+        raise ResearchBatchError('; '.join(failures))
     return [valid_reports[task['task_id']] for task in all_tasks], audits
 
 
@@ -708,6 +790,9 @@ def run_variant(
     caller: Callable[..., tuple[dict[str, Any], dict[str, Any]]] = call_structured,
     observer: Callable[..., None] | None = None,
     batch_id: str = "",
+    execution_policy: ExecutionPolicy | None = None,
+    prompt_format_version: int = 1,
+    documents_snapshot: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     variant_key = f"{variant.author}/{variant.version_id}"
     stage_started = time.monotonic()
@@ -731,7 +816,7 @@ def run_variant(
                              status="reused", elapsed_seconds=0.0,
                              report={**report, "original": report, "evidence": []})
         return result
-    documents = registry.effective_skills(variant.version_id, variant.author)
+    documents = documents_snapshot if documents_snapshot is not None else registry.effective_skills(variant.version_id, variant.author)
     screening_path = evidence.root / "raw/screening.json"
     if screening_path.is_file():
         from .module_rules import default_rule
@@ -748,16 +833,24 @@ def run_variant(
     reports_by_symbol = {
         str(row["symbol"]).upper(): [] for row in evidence.candidate_intake["candidates"]
     }
-    audits = []
+    audits, domain_failures = [], []
     for domain in sorted(DOMAINS):
-        reports, domain_audits = _run_domain(
-            domain=domain, evidence=evidence, documents=documents,
-            profile=profile, secret=secret, cache=cache, caller=caller,
-            observer=observer, batch_id=batch_id, variant_key=variant_key,
-        )
+        try:
+            reports, domain_audits = _run_domain(
+                domain=domain, evidence=evidence, documents=documents,
+                profile=profile, secret=secret, cache=cache, caller=caller,
+                observer=observer, batch_id=batch_id, variant_key=variant_key,
+                execution_policy=execution_policy, prompt_format_version=prompt_format_version,
+                snapshot_root=output_root.parent / 'model_calls',
+            )
+        except Exception as exc:
+            domain_failures.append(f'{domain}: {type(exc).__name__}: {exc}')
+            continue
         for candidate, report in zip(evidence.candidate_intake["candidates"], reports, strict=True):
             reports_by_symbol[str(candidate["symbol"]).upper()].append(report)
         audits.extend(domain_audits)
+    if domain_failures:
+        raise ResearchBatchError('Required reports incomplete; synthesis blocked: ' + '; '.join(domain_failures))
     adversary_prompt = _adversary_prompt(
         reports_by_symbol=reports_by_symbol, documents=documents
     )
@@ -768,6 +861,9 @@ def run_variant(
         adversary_result, adversary_audit, cache_hit = cache.call(
             profile=profile, secret=secret, prompt=adversary_prompt,
             schema=_adversary_schema(), caller=caller,
+            execution_policy=execution_policy, snapshot_root=output_root.parent / 'model_calls',
+            group_symbols=sorted(reports_by_symbol),
+            allow_legacy_cache=prompt_format_version == 1,
         )
     else:
         adversary_result, adversary_audit, cache_hit = {"results": []}, {}, False
@@ -809,6 +905,9 @@ def run_variant(
                 documents=documents, as_of_et=evidence.manifest["as_of_et"],
                 maximum_predictions=parameters["maximum_predictions"]),
             schema=synthesis_schema(list(reports_by_symbol)),
+            execution_policy=execution_policy, snapshot_root=output_root.parent / 'model_calls',
+            group_symbols=sorted(reports_by_symbol),
+            allow_legacy_cache=prompt_format_version == 1,
         )
         decision_input["synthesis"] = validate_synthesis(synthesis, reports_by_symbol,
             evidence.lineage["evidence_to_roots"], maximum_predictions=parameters["maximum_predictions"])
@@ -906,6 +1005,48 @@ class ResearchBatchRunner:
         self.registry = registry
         self.integration_policy = integration_policy
 
+    def resume(self, *, batch_id: str, evidence: FrozenEvidence, profile: ModelProfile,
+               secret: str, caller=call_structured, progress=None, observer=None,
+               execution_policy: ExecutionPolicy | None = None):
+        """Resume an original identity, never recollect evidence or resolve current methods."""
+        if Path(batch_id).name != batch_id or not batch_id.startswith('LAB-'):
+            raise ResearchBatchError('invalid batch identity')
+        root = self.batches_root / batch_id
+        manifest = json.loads((root / 'batch_manifest.json').read_text(encoding='utf-8'))
+        identity = manifest['batch_identity']
+        if manifest.get('batch_id') != batch_id or manifest.get('batch_identity_sha256') != sha256_payload(identity):
+            raise ResearchBatchError('original batch manifest hash mismatch')
+        # Re-read and hash-check exact evidence before every resume, including cached completion.
+        evidence = load_frozen_evidence(evidence.root)
+        if identity.get('evidence_hash') != evidence.manifest['evidence_hash'] or identity.get('candidate_set_hash') != evidence.manifest['candidate_set_sha256']:
+            raise ResearchBatchError('resume evidence differs from original batch')
+        if profile.identity() != identity.get('model_profile_hash'):
+            raise ResearchBatchError('resume requires original model identity')
+        snapshots = {}
+        for key, digest in identity.get('skill_snapshot_sha256s', {}).items():
+            author, version_id = key.split('/', 1)
+            snapshot = json.loads((root / 'skills' / f'{_safe_name(author)}--{_safe_name(version_id)}.json').read_text(encoding='utf-8'))
+            unsigned = {k: v for k, v in snapshot.items() if k != 'skill_snapshot_sha256'}
+            if snapshot.get('skill_snapshot_sha256') != digest or sha256_payload(unsigned) != digest:
+                raise ResearchBatchError('original method snapshot hash mismatch')
+            if snapshot.get('document_sha256') != {path: hashlib.sha256(content.encode('utf-8')).hexdigest()
+                    for path, content in snapshot['documents'].items()}:
+                raise ResearchBatchError('original method document hash mismatch')
+            snapshots[key] = snapshot
+        if not snapshots:
+            raise ResearchBatchError('original method snapshots unavailable; cannot safely resume')
+        # Recover verified batch-local outputs even if the disposable global cache was cleared.
+        for path in (root / 'model_calls').glob('*.json'):
+            document = self.cache._verified_document(path, cache_key=path.stem)
+            if document['key_document']['profile_sha256'] != profile.identity():
+                raise ResearchBatchError('original call model identity mismatch')
+            policy = document['audit'].get('request_policy_sha256', '')
+            target = self.cache.root / policy / path.name if policy else self.cache.root / path.name
+            _write_json_same_or_once(target, document)
+        return self.run(evidence=evidence, variants=[VariantSelection(**value['variant']) for value in snapshots.values()],
+            profile=profile, secret=secret, caller=caller, progress=progress, observer=observer,
+            execution_policy=execution_policy, _resume_manifest=manifest, _resume_snapshots=snapshots)
+
     def run(
         self,
         *,
@@ -916,6 +1057,9 @@ class ResearchBatchRunner:
         caller: Callable[..., tuple[dict[str, Any], dict[str, Any]]] = call_structured,
         progress: Callable[[str, str], None] | None = None,
         observer: Callable[..., None] | None = None,
+        execution_policy: ExecutionPolicy | None = None,
+        _resume_manifest: dict[str, Any] | None = None,
+        _resume_snapshots: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         if not variants:
             raise ResearchBatchError("select at least one Skill version")
@@ -935,6 +1079,9 @@ class ResearchBatchRunner:
         skill_snapshots: dict[str, dict[str, Any]] = {}
         for variant in ordered_variants:
             key = f"{variant.author}/{variant.version_id}"
+            if _resume_snapshots is not None:
+                skill_snapshots[key] = _resume_snapshots[key]
+                continue
             documents = self.registry.effective_skills(
                 variant.version_id, variant.author
             )
@@ -967,8 +1114,15 @@ class ResearchBatchRunner:
             "selected_skill_commits": selected_commits,
             "skill_snapshot_sha256s": skill_snapshot_sha256s,
             "cutoff_status": evidence.manifest.get("cutoff_status"),
+            "execution_config": {"prompt_format_version": 2, "price_volume_group_size": 1},
         }
-        batch_id = "LAB-" + str(evidence.manifest["as_of_et"])[:10] + "-" + sha256_payload(identity)[:12]
+        if _resume_manifest is not None:
+            identity = _resume_manifest['batch_identity']
+        batch_id = (_resume_manifest['batch_id'] if _resume_manifest is not None else
+                    "LAB-" + str(evidence.manifest["as_of_et"])[:10] + "-" + sha256_payload(identity)[:12])
+        prompt_format_version = identity.get('execution_config', {}).get('prompt_format_version', 1)
+        if prompt_format_version not in {1, 2}:
+            raise ResearchBatchError('unsupported original prompt format')
         root = self.batches_root / batch_id
         root.mkdir(parents=True, exist_ok=True)
         lock = FileLock(str(root / ".batch.lock"))
@@ -993,6 +1147,8 @@ class ResearchBatchRunner:
                     "research_only": True,
                     "orders_allowed": False,
                     "skill_snapshot_sha256s": skill_snapshot_sha256s,
+                    "model_profile": profile.public_dict(),
+                    "evidence_root": str(evidence.root),
                 }
                 _write_json_once(manifest_path, manifest)
         results, failures = {}, {}
@@ -1007,6 +1163,8 @@ class ResearchBatchRunner:
                 integration_policy=self.integration_policy,
                 output_root=root / "variants", caller=caller,
                 observer=observer, batch_id=batch_id,
+                execution_policy=execution_policy, prompt_format_version=prompt_format_version,
+                documents_snapshot=skill_snapshots[key]['documents'],
             )
             self.cache.snapshot_calls(
                 value.get("model_call_audits", []),

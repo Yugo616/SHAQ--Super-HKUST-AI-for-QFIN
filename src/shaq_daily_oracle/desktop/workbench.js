@@ -30,8 +30,14 @@ renderRun=function(){
   q('#run-profile').onchange=estimate;
   q('#show-data').onclick=()=>openUtility('data','数据更新时间');
   qa('[data-progress-result]').forEach(b=>b.onclick=()=>{showPage('history');loadBatch(b.dataset.progressResult)});
-  qa('[data-progress-retry]').forEach(b=>b.onclick=()=>{
+  qa('[data-progress-retry]').forEach(b=>b.onclick=async()=>{
     const job=(state.data.jobs||[]).find(j=>j.job_id===b.dataset.progressRetry);
+    if(job?.batch_id){
+      b.disabled=true;
+      try{const result=await api('resume_shadow_batch',job.batch_id);notice(result.message||'正在恢复原批次');await load()}
+      catch(error){notice(error.message,true)}finally{b.disabled=false}
+      return;
+    }
     const selected=SHAQProgress.retryVersions(job||{});
     state.runSelections=new Set(selected.map(v=>versionKey(v)));
     qa('.version-check').forEach(box=>box.checked=state.runSelections.has(box.dataset.author+'/'+box.dataset.version));
@@ -218,7 +224,8 @@ renderBatch=function(batch,key,symbol){
   renderBatchWithResearchProgress(batch,chosen,chosenSymbol);
   const reports=batch.variants?.[chosen]?.reports_by_symbol?.[chosenSymbol]||[];
   const selection={variant:chosen,symbol:chosenSymbol,open:state.researchOpen||[]};
-  const box=document.createElement('details');box.className='card research-progress';box.open=true;
+  const box=document.createElement('details');box.className='card research-progress';box.open=state.researchOuterOpen!==false;
+  box.addEventListener?.('toggle',()=>{state.researchOuterOpen=box.open});
   box.innerHTML=`<summary>研究执行明细</summary>${SHAQProgress.researchHtml(batch.research_progress||[],reports,selection)}`;
   const head=q('.batch-head');
   if(head?.parentNode)head.parentNode.insertBefore(box,head.nextSibling||null);

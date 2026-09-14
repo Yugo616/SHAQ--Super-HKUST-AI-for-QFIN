@@ -841,7 +841,8 @@ class LabService:
         unique_calls = len(unique_domain_documents)
         concurrent_slots = min(model_profile.max_concurrency, max(unique_calls, 1))
         maximum_wait_minutes = math.ceil(
-            math.ceil(unique_calls / concurrent_slots) * model_profile.timeout_seconds / 60
+            math.ceil(unique_calls / concurrent_slots) * self.settings.execution_policy().timeout_seconds
+            * (1 + self.settings.execution_policy().transient_retries) / 60
         )
         available_domains = ["市场", "公司关系", "公司事件", "价量"]
         limited_domains = ["期权（波动结构可用，主动交易方向不可用）"]
@@ -923,12 +924,13 @@ class LabService:
 
     def _run_batch_job(
         self, *, job_id: str, variants: list[VariantSelection],
-        profile: ModelProfile, secret: str, task_lock=None,
+        profile: ModelProfile, secret: str, task_lock=None, resume_batch_id: str = '',
+        resume_evidence=None,
     ) -> None:
         self._set_job(job_id, status="running", started_at_et=datetime.now(ET).isoformat(), message="正在冻结共享证据")
         try:
             settings = self.settings.load()
-            evidence = self._today_evidence(
+            evidence = resume_evidence if resume_batch_id else self._today_evidence(
                 profile=DataProfile.from_dict(settings["data_profile"]),
                 sec_identity=str(settings["sec_identity"]),
                 variants=variants,
@@ -946,12 +948,18 @@ class LabService:
                 cache_root=self.paths.research_root / "cache/model_calls",
                 registry=self.registry, integration_policy=integration,
             )
-            result = runner.run(
-                evidence=evidence, variants=variants, profile=profile, secret=secret,
+            event_log = ResearchProgressLog(self.paths.research_root / 'jobs' / f'{job_id}-research.jsonl')
+            def observe(**event):
+                if event.get('batch_id'):
+                    self._set_job(job_id, batch_id=event['batch_id'])
+                return event_log.append(**event)
+            run = runner.resume if resume_batch_id else runner.run
+            result = run(
+                evidence=evidence, profile=profile, secret=secret,
+                **({'batch_id': resume_batch_id} if resume_batch_id else {'variants': variants}),
+                execution_policy=self.settings.execution_policy(),
                 progress=lambda key, status: self._variant_progress(job_id, key, status),
-                observer=ResearchProgressLog(
-                    self.paths.research_root / "jobs" / f"{job_id}-research.jsonl"
-                ).append,
+                observer=observe,
             )
             label_refresh = self.start_result_refresh(manual=False)
             if label_refresh.get('status') == 'running':
@@ -972,6 +980,56 @@ class LabService:
         finally:
             if task_lock is not None:
                 task_lock.release()
+
+    def resume_batch(self, batch_id: str) -> dict[str, Any]:
+        """Explicit original-batch recovery; never invoke today's data collection."""
+        if Path(batch_id).name != batch_id or not batch_id.startswith('LAB-'):
+            raise LabServiceError('invalid batch identity')
+        root = self.paths.batches_root / batch_id
+        manifest = json.loads((root / 'batch_manifest.json').read_text(encoding='utf-8'))
+        identity = manifest['batch_identity']
+        if manifest.get('batch_identity_sha256') != sha256_payload(identity):
+            raise LabServiceError('original batch manifest hash mismatch')
+        candidates = self.settings.load().get('model_profiles', [])
+        if manifest.get('model_profile'):
+            candidates = [manifest['model_profile'], *candidates]
+        profile = next((ModelProfile.from_dict(row) for row in candidates
+                        if ModelProfile.from_dict(row).identity() == identity['model_profile_hash']), None)
+        if profile is None:
+            raise LabServiceError('找不到原批次模型配置；不能换模型续跑')
+        secret = '' if uses_local_subscription(profile) else (self.settings.get_model_secret(profile.profile_id) or '')
+        if not secret and not uses_local_subscription(profile):
+            raise LabServiceError('原批次模型凭据不可用')
+        evidence_root = self.dashboard._find_evidence(identity['evidence_hash'])
+        if evidence_root is None:
+            raise LabServiceError('原批次冻结证据不可用；不会重新采集替代')
+        from .research_batch import load_frozen_evidence
+        evidence = load_frozen_evidence(evidence_root)
+        variants = []
+        for key in identity.get('skill_snapshot_sha256s', {}):
+            author, version_id = key.split('/', 1)
+            from .research_batch import _safe_name
+            value = json.loads((root / 'skills' / f'{_safe_name(author)}--{_safe_name(version_id)}.json').read_text(encoding='utf-8'))
+            variants.append(VariantSelection(**value['variant']))
+        job_id = 'resume-' + batch_id
+        job_root = self.paths.research_root / 'jobs'
+        job_root.mkdir(parents=True, exist_ok=True)
+        task_lock = FileLock(str(job_root / (job_id + '.lock')), thread_local=False)
+        try:
+            task_lock.acquire(timeout=0)
+        except LockTimeout:
+            return {'job_id': job_id, 'batch_id': batch_id, 'status': 'running', 'message': '原批次正在恢复'}
+        with self.jobs_lock:
+            self.jobs[job_id] = {'job_id': job_id, 'batch_id': batch_id, 'status': 'queued',
+                'message': '准备恢复原批次，仅补齐失败调用；逾期结果不计盘前成绩',
+                'started_at_et': None, 'completed_at_et': None,
+                'variant_progress': {f'{v.author}/{v.version_id}': 'queued' for v in variants}}
+        thread = threading.Thread(target=self._run_batch_job, kwargs={
+            'job_id': job_id, 'variants': variants, 'profile': profile, 'secret': secret,
+            'task_lock': task_lock, 'resume_batch_id': batch_id, 'resume_evidence': evidence},
+            daemon=True, name='shaq-resume')
+        start_guarded_thread(self.paths, thread)
+        return dict(self.jobs[job_id])
 
     def _variant_progress(self, job_id, key, status):
         with self.jobs_lock:

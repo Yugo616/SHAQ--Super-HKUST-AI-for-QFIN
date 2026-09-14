@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from .background_process import background_process_options
+from .model_execution import call_timeout_seconds, run_model_process
 
 import hashlib
 import json
@@ -434,15 +435,15 @@ def _codex_cli_call(
             arguments[1:1] = ["--model", profile.model]
         command = _cli_command(executable, arguments)
         try:
-            completed = subprocess.run(
+            completed = run_model_process(
                 command, input=prompt, text=True, encoding="utf-8", errors="replace",
                 capture_output=True, shell=False,
-                cwd=root, env=_local_cli_environment(), timeout=profile.timeout_seconds,
+                cwd=root, env=_local_cli_environment(), timeout=call_timeout_seconds(),
                 check=False,
                 **background_process_options(),
             )
         except subprocess.TimeoutExpired as exc:
-            raise ModelBackendError("Codex 本地调用超时") from exc
+            raise ModelBackendError("Codex 本地调用超时", diagnostic={"kind": "timeout"}) from exc
         if completed.returncode != 0 or not output_path.is_file():
             detail = safe_model_error_summary(completed.stderr or completed.stdout)
             raise ModelBackendError(f"Codex 本地调用失败：{detail}")
@@ -475,14 +476,14 @@ def _claude_code_call(
         arguments.extend(["--model", profile.model])
     command = _cli_command(executable, arguments)
     try:
-        completed = subprocess.run(
+        completed = run_model_process(
             command, input=prompt, text=True, encoding="utf-8", errors="replace",
             capture_output=True, shell=False,
-            env=_local_cli_environment(), timeout=profile.timeout_seconds, check=False,
+            env=_local_cli_environment(), timeout=call_timeout_seconds(), check=False,
             **background_process_options(),
         )
     except subprocess.TimeoutExpired as exc:
-        raise ModelBackendError("Claude 本地调用超时") from exc
+        raise ModelBackendError("Claude 本地调用超时", diagnostic={"kind": "timeout"}) from exc
     if completed.returncode != 0:
         detail = safe_model_error_summary(completed.stderr or completed.stdout)
         raise ModelBackendError(f"Claude 本地调用失败：{detail}")
@@ -526,7 +527,7 @@ def _openai_responses_call(
         raise ModelBackendError("OpenAI Python SDK is unavailable") from exc
     client_kwargs: dict[str, Any] = {
         "api_key": secret,
-        "timeout": float(profile.timeout_seconds),
+        "timeout": float(call_timeout_seconds()),
         "max_retries": 0,
     }
     if profile.base_url:
@@ -723,7 +724,7 @@ def _openai_chat_call(
         url=endpoint,
         headers={**_auth_headers(profile, secret), "Content-Type": "application/json"},
         payload=payload,
-        timeout=profile.timeout_seconds,
+        timeout=call_timeout_seconds(),
     )
     choices = value.get("choices")
     if not isinstance(choices, list) or not choices:
@@ -771,7 +772,7 @@ def _anthropic_call(
         "Content-Type": "application/json",
     }
     value = _http_post_json(
-        url=endpoint, headers=headers, payload=payload, timeout=profile.timeout_seconds
+        url=endpoint, headers=headers, payload=payload, timeout=call_timeout_seconds()
     )
     content = value.get("content")
     if not isinstance(content, list):

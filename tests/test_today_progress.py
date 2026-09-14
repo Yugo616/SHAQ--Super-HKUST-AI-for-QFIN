@@ -5,6 +5,15 @@ from pathlib import Path
 
 
 class TodayProgressTests(unittest.TestCase):
+    def test_failed_original_batch_remains_recoverable_after_its_trading_day(self):
+        self.run_js(r"""
+const assert=require('node:assert/strict');
+const job={job_id:'old',batch_id:'LAB-old',status:'partial_failure',
+ started_at_et:'2026-09-01T08:00:00-04:00',variant_progress:{'team/main':'failed'}};
+const html=ui.progressHtml([job],[],'2026-09-15T08:00:00-04:00');
+assert.match(html,/恢复原批次/);
+assert.match(html,/data-progress-retry="old"/);
+""")
     def test_workbench_render_applies_backend_guard_and_shows_reason(self):
         root = Path(__file__).resolve().parents[1] / 'src/shaq_daily_oracle/desktop'
         source = (root/'today_progress.js').read_text() + '\n' + '''

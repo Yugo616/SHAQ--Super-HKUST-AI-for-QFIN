@@ -162,6 +162,23 @@ async function copyConnectionError() {
 
 function bindModelConnections() {
   const form=q('#model-form');
+  const executionForm=q('#execution-policy-form');
+  if(executionForm?.elements?.timeout_seconds){
+    const policy=state.data?.settings?.model_execution_policy||{};
+    if(!executionForm.dataset.loaded){
+      executionForm.elements.timeout_seconds.value=policy.timeout_seconds??600;
+      executionForm.elements.transient_retries.value=policy.transient_retries??1;
+      executionForm.dataset.loaded='true';
+    }
+    executionForm.onsubmit=async event=>{
+      event.preventDefault();
+      try{await api('save_model_execution_policy',{
+        timeout_seconds:Number(executionForm.elements.timeout_seconds.value),
+        transient_retries:Number(executionForm.elements.transient_retries.value)});
+        notice('调用设置已保存；模型与方法身份保持不变。');await load(false)}
+      catch(error){notice(error.message,true)}
+    };
+  }
   q('#connect-codex').onclick=()=>connectLocalModel('codex-cli');
   q('#connect-claude').onclick=()=>connectLocalModel('claude-code');
   q('#login-model').onclick=loginLocalModel;

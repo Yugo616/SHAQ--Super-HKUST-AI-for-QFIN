@@ -11,7 +11,10 @@ const SHAQProgress = (() => {
   }
   function currentJobs(jobs, now) {
     const day = etDay(now);
-    return jobs.filter(job => active(job) || (day && etDay(job.started_at_et) === day))
+    return jobs.filter(job => active(job) ||
+      (job.batch_id && ['partial_failure','failed'].includes(job.status) &&
+       !jobs.some(other=>other.batch_id===job.batch_id&&other.status==='complete')) ||
+      (day && etDay(job.started_at_et) === day))
       .sort((a,b) => Number(active(b))-Number(active(a)) || (Date.parse(b.started_at_et)||0)-(Date.parse(a.started_at_et)||0));
   }
   function retryVersions(job) {
@@ -40,7 +43,7 @@ const SHAQProgress = (() => {
       const time = date && Number.isFinite(date.getTime()) ? date.toLocaleTimeString('zh-CN',{hour12:false}) : '等待启动';
       const carry = active(job) && etDay(job.started_at_et) && etDay(job.started_at_et) !== etDay(now) ? ' · 前一日未完成任务' : '';
       const versionsHtml = job.status === 'complete' ? '' : `<ul class="progress-versions">${Object.entries(job.variant_progress || {}).map(([key,value]) => `<li><span>${esc(names(key))}</span><span>${esc(status(value))}</span></li>`).join('')}</ul>`;
-      return `<article class="progress-batch" data-progress-job="${esc(job.job_id)}"><header><span>${esc(time + carry)}</span><b>${esc(status(job.status))}</b></header><p>${esc(job.message || '')}</p>${versionsHtml}<details class="research-progress"${job.research_selection?.outerOpen?' open':''}><summary>研究执行明细</summary>${researchHtml(job.research_progress||[],[],job.research_selection||{})}</details><div class="progress-actions">${job.batch_id ? `<button class="text-button" data-progress-result="${esc(job.batch_id)}">查看结果</button>` : ''}${retryVersions(job).length ? `<button class="secondary" data-progress-retry="${esc(job.job_id)}">选择失败版本重试</button>` : ''}</div></article>`;
+      return `<article class="progress-batch" data-progress-job="${esc(job.job_id)}"><header><span>${esc(time + carry)}</span><b>${esc(status(job.status))}</b></header><p>${esc(job.message || '')}</p>${versionsHtml}<details class="research-progress"${job.research_selection?.outerOpen?' open':''}><summary>研究执行明细</summary>${researchHtml(job.research_progress||[],[],job.research_selection||{})}</details><div class="progress-actions">${job.batch_id ? `<button class="text-button" data-progress-result="${esc(job.batch_id)}">查看结果</button>` : ''}${retryVersions(job).length && !active(job) ? `<button class="secondary" data-progress-retry="${esc(job.job_id)}">${job.batch_id?'恢复原批次（仅补失败调用）':'选择失败版本重试'}</button>` : ''}</div></article>`;
     }).join('');
   }
   function researchHtml(events, legacyReports, selection={}) {

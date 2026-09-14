@@ -9,6 +9,7 @@ from typing import Any
 from .app_paths import AppPaths
 from .hashing import sha256_payload
 from .model_backends import ModelProfile, uses_local_subscription
+from .model_execution import ExecutionPolicy
 from .settings import SERVICE_NAME, SettingsError, _atomic_json
 
 
@@ -57,6 +58,7 @@ def default_research_settings(package_root: Path) -> dict[str, Any]:
         "github_refresh_expires_at": "",
         "active_model_profile_id": "",
         "model_profiles": [],
+        "model_execution_policy": ExecutionPolicy().public_dict(),
         "credential_state": {
             "github_token_saved": False,
             "github_refresh_saved": False,
@@ -480,3 +482,13 @@ class ResearchSettingsStore:
 
     def _save(self, settings: dict[str, Any]) -> None:
         _atomic_json(self.paths.research_settings_file, settings)
+
+    def execution_policy(self) -> ExecutionPolicy:
+        return ExecutionPolicy(**self.load().get('model_execution_policy', {}))
+
+    def save_execution_policy(self, value: dict[str, Any]) -> dict[str, Any]:
+        policy = ExecutionPolicy(**value)
+        settings = self.load()
+        settings['model_execution_policy'] = policy.public_dict()
+        self._save(settings)
+        return policy.public_dict()

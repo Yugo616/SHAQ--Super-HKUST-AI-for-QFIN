@@ -439,7 +439,7 @@ class ModelCompatibilityTests(unittest.TestCase):
                 model_backends, "_local_cli", return_value=executable
             ), patch.object(
                 model_backends.subprocess, "run", side_effect=[auth, structured]
-            ) as run:
+            ) as run, patch.object(model_backends, 'run_model_process', side_effect=run):
                 audit = probe_model_profile(profile=profile, secret="")
 
             self.assertEqual(run.call_count, 2)
@@ -470,7 +470,7 @@ class ModelCompatibilityTests(unittest.TestCase):
             ), patch.object(
                 model_backends, "_local_cli", return_value=executable
             ), patch.object(
-                model_backends.subprocess, "run", return_value=completed
+                model_backends, "run_model_process", return_value=completed
             ):
                 with self.assertRaisesRegex(ModelBackendError, "structured_output"):
                     call_structured(
