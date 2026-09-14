@@ -23,7 +23,7 @@ from .contracts import DOMAINS, validate_adversary_report, validate_domain_repor
 from .decision_sandbox import build_decision_input, execute_decision_script, decision_parameters, decision_mode
 from .hashing import sha256_file, sha256_payload
 from .lineage import build_lineage_graph
-from .model_backends import ModelProfile, call_structured
+from .model_backends import ModelProfile, call_structured, safe_model_error_summary
 from .model_execution import (ExecutionPolicy, execution_policy_scope, transient_model_failure,
                               compact_market_tables)
 from .research_progress import safe_observe
@@ -380,6 +380,7 @@ class ContentAddressedModelCache:
         snapshot_root: Path | None = None,
         group_symbols: list[str] | None = None,
         allow_legacy_cache: bool = False,
+        recover_rejected_cache: bool = False,
     ) -> tuple[dict[str, Any], dict[str, Any], bool]:
         request_policy_sha256 = profile.request_policy_identity()
         key_document = {
@@ -400,11 +401,33 @@ class ContentAddressedModelCache:
                 document = self._verified_document(path, cache_key=cache_key)
                 if document["prompt"] != prompt or document["schema"] != schema:
                     raise ResearchBatchError("model cache input differs from its content key")
-                if validate:
-                    validate(document["result"])
-                if snapshot_root:
-                    _write_json_same_or_once(snapshot_root / path.name, document)
-                return document["result"], self._public_audit(document), True
+                try:
+                    if validate:
+                        validate(document["result"])
+                except ValueError as exc:
+                    if not recover_rejected_cache:
+                        raise
+                    # Explicit recovery preserves the old document, but not as a valid checkpoint.
+                    locations = [(path, path.parent / 'rejected_model_calls')]
+                    if snapshot_root and (snapshot_root / path.name).exists():
+                        locations.append((snapshot_root / path.name, snapshot_root.parent / 'rejected_model_calls'))
+                    for source, destination in locations:
+                        original = self._verified_document(source, cache_key=cache_key)
+                        if original != document:
+                            raise ResearchBatchError('rejected cache conflicts with frozen call snapshot')
+                        archived = destination / f"{document['cache_document_sha256']}.json"
+                        _write_json_same_or_once(archived, original)
+                        source.unlink()  # Exact rejected bytes are retained above, never a valid result.
+                    if snapshot_root:
+                        _write_json_same_or_once(snapshot_root.parent / 'call_attempts' / f'rejected-{document["cache_document_sha256"]}.json', {
+                            'cache_key': cache_key, 'status': 'rejected_checkpoint',
+                            'cache_document_sha256': document['cache_document_sha256'],
+                            'error_type': type(exc).__name__,
+                            'message': safe_model_error_summary(exc, sensitive_values=(secret,))})
+                else:
+                    if snapshot_root:
+                        _write_json_same_or_once(snapshot_root / path.name, document)
+                    return document["result"], self._public_audit(document), True
             policy = execution_policy or ExecutionPolicy()
             attempts = []
             invocation_id = uuid.uuid4().hex
@@ -424,7 +447,8 @@ class ContentAddressedModelCache:
                     transient = transient_model_failure(exc)
                     attempts.append({'attempt': attempt + 1, 'started_at_et': timestamp,
                         'elapsed_seconds': time.monotonic() - attempt_started,
-                        'status': 'failed', 'error_type': type(exc).__name__, 'transient': transient})
+                        'status': 'failed', 'error_type': type(exc).__name__, 'transient': transient,
+                        'message': safe_model_error_summary(exc, sensitive_values=(secret,))})
                     if snapshot_root:
                         _atomic_json(snapshot_root.parent / 'call_attempts' / f'{cache_key}-{invocation_id}.json', {
                             'cache_key': cache_key, 'input_bytes': len(prompt.encode('utf-8')),
@@ -777,6 +801,23 @@ def _adversary_prompt(
     )
 
 
+def _validated_adversary(value, expected_symbols):
+    rows = value.get('results') if isinstance(value, dict) else None
+    if not isinstance(rows, list):
+        raise ResearchBatchError('adversary output has no result list')
+    by_symbol = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            raise ResearchBatchError('adversary returned a non-object result')
+        symbol = str(row.get('symbol', '')).upper()
+        if symbol in by_symbol:
+            raise ResearchBatchError('adversary returned a duplicate symbol')
+        by_symbol[symbol] = validate_adversary_report(row.get('report', {}))
+    if set(by_symbol) != set(expected_symbols):
+        raise ResearchBatchError('adversary output does not match frozen candidates')
+    return by_symbol
+
+
 def run_variant(
     *,
     variant: VariantSelection,
@@ -793,6 +834,7 @@ def run_variant(
     execution_policy: ExecutionPolicy | None = None,
     prompt_format_version: int = 1,
     documents_snapshot: dict[str, str] | None = None,
+    recover_rejected_cache: bool = False,
 ) -> dict[str, Any]:
     variant_key = f"{variant.author}/{variant.version_id}"
     stage_started = time.monotonic()
@@ -864,22 +906,12 @@ def run_variant(
             execution_policy=execution_policy, snapshot_root=output_root.parent / 'model_calls',
             group_symbols=sorted(reports_by_symbol),
             allow_legacy_cache=prompt_format_version == 1,
+            validate=lambda value: _validated_adversary(value, reports_by_symbol),
+            recover_rejected_cache=recover_rejected_cache,
         )
     else:
         adversary_result, adversary_audit, cache_hit = {"results": []}, {}, False
-    adversary_rows = adversary_result.get("results") if isinstance(adversary_result, dict) else None
-    if not isinstance(adversary_rows, list):
-        raise ResearchBatchError("adversary output has no result list")
-    adversary_by_symbol = {}
-    for row in adversary_rows:
-        if not isinstance(row, dict):
-            raise ResearchBatchError("adversary returned a non-object result")
-        symbol = str(row.get("symbol", "")).upper()
-        if symbol in adversary_by_symbol:
-            raise ResearchBatchError("adversary returned a duplicate symbol")
-        adversary_by_symbol[symbol] = validate_adversary_report(row.get("report", {}))
-    if set(adversary_by_symbol) != set(reports_by_symbol):
-        raise ResearchBatchError("adversary output does not match frozen candidates")
+    adversary_by_symbol = _validated_adversary(adversary_result, reports_by_symbol)
     safe_observe(observer, stage="adversary", batch_id=batch_id,
                  variant_key=variant_key, symbols=sorted(reports_by_symbol), status="complete",
                  elapsed_seconds=round(time.monotonic() - adversary_started, 3) if reports_by_symbol else 0.0)
@@ -908,6 +940,9 @@ def run_variant(
             execution_policy=execution_policy, snapshot_root=output_root.parent / 'model_calls',
             group_symbols=sorted(reports_by_symbol),
             allow_legacy_cache=prompt_format_version == 1,
+            validate=lambda value: validate_synthesis(value, reports_by_symbol,
+                evidence.lineage['evidence_to_roots'], maximum_predictions=parameters['maximum_predictions']),
+            recover_rejected_cache=recover_rejected_cache,
         )
         decision_input["synthesis"] = validate_synthesis(synthesis, reports_by_symbol,
             evidence.lineage["evidence_to_roots"], maximum_predictions=parameters["maximum_predictions"])
@@ -1165,6 +1200,7 @@ class ResearchBatchRunner:
                 observer=observer, batch_id=batch_id,
                 execution_policy=execution_policy, prompt_format_version=prompt_format_version,
                 documents_snapshot=skill_snapshots[key]['documents'],
+                recover_rejected_cache=_resume_manifest is not None,
             )
             self.cache.snapshot_calls(
                 value.get("model_call_audits", []),

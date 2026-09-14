@@ -521,13 +521,23 @@ def _model_identity_matches(requested: str, returned: str) -> bool:
 def _openai_responses_call(
     *, profile: ModelProfile, secret: str, prompt: str, schema: dict[str, Any]
 ) -> tuple[dict[str, Any], dict[str, Any]]:
+    from .model_http_worker import call_in_worker
+    result = call_in_worker('openai-responses', {'profile': profile.public_dict(),
+        'secret': secret, 'prompt': prompt, 'schema': schema, '_timeout_seconds': call_timeout_seconds()},
+        timeout=call_timeout_seconds())
+    return result[0], result[1]
+
+
+def _openai_responses_call_inline(
+    *, profile: ModelProfile, secret: str, prompt: str, schema: dict[str, Any], _timeout_seconds=None
+) -> tuple[dict[str, Any], dict[str, Any]]:
     try:
         from openai import OpenAI  # type: ignore
     except ImportError as exc:
         raise ModelBackendError("OpenAI Python SDK is unavailable") from exc
     client_kwargs: dict[str, Any] = {
         "api_key": secret,
-        "timeout": float(call_timeout_seconds()),
+        "timeout": float(call_timeout_seconds() if _timeout_seconds is None else _timeout_seconds),
         "max_retries": 0,
     }
     if profile.base_url:
@@ -612,6 +622,14 @@ def _openai_responses_call(
 
 
 def _http_post_json(
+    *, url: str, headers: dict[str, str], payload: dict[str, Any], timeout: int
+) -> dict[str, Any]:
+    from .model_http_worker import call_in_worker
+    return call_in_worker('http-json', {'url': url, 'headers': headers, 'payload': payload,
+                                      'timeout': timeout}, timeout=timeout)
+
+
+def _http_post_json_inline(
     *, url: str, headers: dict[str, str], payload: dict[str, Any], timeout: int
 ) -> dict[str, Any]:
     try:

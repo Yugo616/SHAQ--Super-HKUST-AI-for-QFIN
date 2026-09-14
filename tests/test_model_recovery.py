@@ -53,21 +53,22 @@ class ExecutionRecoveryTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 store.save_execution_policy({'timeout_seconds':0,'transient_retries':1})
 
-    def test_windows_tree_kill_is_pid_scoped_and_windowless(self):
+    def test_windows_tree_job_is_owned_and_windowless(self):
         from unittest.mock import MagicMock
         from shaq_daily_oracle.model_execution import run_model_process
         process=MagicMock();process.pid=4567
-        process.__enter__.return_value=process
         process.communicate.side_effect=[subprocess.TimeoutExpired('worker',1),('', '')]
+        owner=MagicMock()
         with patch('shaq_daily_oracle.model_execution.sys.platform','win32'), \
              patch('shaq_daily_oracle.model_execution.subprocess.Popen',return_value=process) as popen, \
-             patch('shaq_daily_oracle.model_execution.subprocess.run') as kill:
+             patch('shaq_daily_oracle.model_execution.WindowsProcessJob',return_value=owner):
             with self.assertRaises(subprocess.TimeoutExpired):
                 run_model_process(['worker.exe'],timeout=1,capture_output=True)
             self.assertTrue(popen.call_args.kwargs['creationflags'] & 0x08000000)
+            self.assertTrue(popen.call_args.kwargs['creationflags'] & 0x4)
             self.assertNotIn('start_new_session',popen.call_args.kwargs)
-            self.assertEqual(kill.call_args.args[0],['taskkill','/PID','4567','/T','/F'])
-            self.assertTrue(kill.call_args.kwargs['creationflags'] & 0x08000000)
+            owner.assign_and_resume.assert_called_once_with(process)
+            owner.terminate.assert_called_once_with(timeout=1)
 
     def test_timeout_retries_once_and_policy_does_not_change_cache_identity(self):
         from shaq_daily_oracle.model_execution import ExecutionPolicy

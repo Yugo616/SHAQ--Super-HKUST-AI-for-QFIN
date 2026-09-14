@@ -73,6 +73,13 @@ class MalformedJsonResponse(JsonResponse):
 
 
 class ModelCompatibilityTests(unittest.TestCase):
+    def setUp(self):
+        # Keep mocked SDK/HTTP unit tests in this interpreter; native worker tests cover isolation.
+        from shaq_daily_oracle.model_http_worker import execute_transport
+        boundary = patch('shaq_daily_oracle.model_http_worker.call_in_worker',
+            side_effect=lambda operation, payload, *, timeout: execute_transport(operation, payload))
+        boundary.start()
+        self.addCleanup(boundary.stop)
     def test_openai_sdk_http_and_timeout_errors_use_safe_structured_diagnostics(self) -> None:
         class SDKError(Exception):
             def __init__(self, status: int) -> None:

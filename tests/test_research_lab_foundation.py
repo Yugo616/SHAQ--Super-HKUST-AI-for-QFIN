@@ -53,6 +53,13 @@ def skill_text(name: str = "market-common-shock") -> str:
 
 
 class ResearchLabFoundationTests(unittest.TestCase):
+    def setUp(self):
+        # These unit fixtures mock provider objects; real worker deadlines are tested separately.
+        from shaq_daily_oracle.model_http_worker import execute_transport
+        boundary = patch('shaq_daily_oracle.model_http_worker.call_in_worker',
+            side_effect=lambda operation, payload, *, timeout: execute_transport(operation, payload))
+        boundary.start()
+        self.addCleanup(boundary.stop)
     def test_restart_preserves_account_rules_and_activation_time(self):
         from shaq_daily_oracle.virtual_accounts import AccountStore, AccountRules
         with tempfile.TemporaryDirectory() as tmp:
