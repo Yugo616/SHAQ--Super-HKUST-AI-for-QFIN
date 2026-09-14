@@ -19,6 +19,25 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class NativePackagingTests(unittest.TestCase):
+    def test_failed_native_package_comparison_retains_entry_bytes_and_attributes(self):
+        acceptance=self.module('installed_update_acceptance')
+        self.assertTrue(hasattr(acceptance,'retain_failed_package_comparison'))
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory); expected=root/'full.nupkg'; cached=root/'cached.nupkg'; report=root/'comparison.json'
+            for path,attrs,data in ((expected,0x20,b'original'),(cached,0o100644 << 16,b'changed')):
+                with zipfile.ZipFile(path,'w') as archive:
+                    entry=zipfile.ZipInfo('lib/app/program.exe');entry.external_attr=attrs
+                    archive.writestr(entry,data)
+            acceptance.retain_failed_package_comparison(expected,cached,report)
+            result=json.loads(report.read_text())
+            self.assertEqual(result['expected']['entries'][0]['external_attr'],0x20)
+            self.assertEqual(result['cached']['entries'][0]['external_attr'],0o100644 << 16)
+            self.assertEqual(result['expected']['entries'][0]['sha256'],hashlib.sha256(b'original').hexdigest())
+            self.assertNotEqual(result['expected']['entries'][0]['sha256'],result['cached']['entries'][0]['sha256'])
+            cached.unlink()
+            acceptance.retain_failed_package_comparison(expected,cached,report)
+            self.assertFalse(json.loads(report.read_text())['cached']['exists'])
+
     def test_native_setup_promotion_replaces_only_named_owned_setup(self):
         build=self.module('build_desktop')
         with tempfile.TemporaryDirectory() as directory:

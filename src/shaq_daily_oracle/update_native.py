@@ -9,6 +9,10 @@ import sys
 import zipfile
 
 
+WINDOWS_DEFAULT_FILE_ATTRIBUTES = (0, 0x20)  # DOS default / archive bit, no access mode.
+CANONICAL_REGULAR_FILE_ATTRIBUTES = (stat.S_IFREG | 0o644) << 16
+
+
 def package_content_sha256(file):
     """Container-independent identity, including Unix file type/mode and links."""
     rows=[];seen=set()
@@ -33,7 +37,14 @@ def package_content_sha256(file):
                 if target.startswith('/') or '\\' in target or '\x00' in target or ':' in target or not prefix.startswith('lib/') or not resolved.startswith(prefix):
                     raise ValueError('Native package symlink leaves application payload')
             with archive.open(entry) as stream:digest=hashlib.file_digest(stream,'sha256').hexdigest()
-            rows.append([name,entry.external_attr,digest])
+            attributes=entry.external_attr
+            # .NET Windows CreateEntry defaults become Rust zip's regular 0644 on
+            # native delta reconstruction (Velopack 1.2.0 fastzip/mod.rs). Only this
+            # representation is equivalent; Unix modes, DOS readonly, links and
+            # directories retain their complete identity.
+            if entry.create_system == 0 and attributes in WINDOWS_DEFAULT_FILE_ATTRIBUTES and not name.endswith('.__symlink'):
+                attributes=CANONICAL_REGULAR_FILE_ATTRIBUTES
+            rows.append([name,attributes,digest])
     framed=json.dumps(sorted(rows),ensure_ascii=False,separators=(',',':')).encode('utf-8')
     return hashlib.sha256(framed).hexdigest()
 

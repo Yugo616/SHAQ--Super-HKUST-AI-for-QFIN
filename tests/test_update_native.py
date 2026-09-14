@@ -10,6 +10,34 @@ from shaq_daily_oracle import update_native
 
 
 class NativeUpdateTests(unittest.TestCase):
+    def test_native_windows_default_dos_attributes_match_rebuilt_regular_0644(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory); full=root/'full.nupkg'; rebuilt=root/'rebuilt.nupkg'
+            for path,system,attributes in ((full,0,0),(rebuilt,3,0o100644 << 16)):
+                with zipfile.ZipFile(path,'w') as archive:
+                    entry=zipfile.ZipInfo('lib/app/program.exe');entry.create_system=system;entry.external_attr=attributes
+                    archive.writestr(entry,b'unchanged program')
+                    entry.external_attr=attributes  # Retain actual .NET Windows zero central-directory attrs.
+            content=update_native.package_content_sha256(full)
+            asset=NS(FileName=rebuilt.name,Size=full.stat().st_size,SHA256=hashlib.sha256(full.read_bytes()).hexdigest())
+            update_native.verify_cached(root,asset,content_sha256=content)
+            self.assertEqual(content,update_native.package_content_sha256(rebuilt))
+
+    def test_windows_default_normalization_preserves_other_permission_and_content_differences(self):
+        with tempfile.TemporaryDirectory() as directory:
+            file=Path(directory)/'package.nupkg'
+            def digest(system,attributes,data=b'program'):
+                with zipfile.ZipFile(file,'w') as archive:
+                    entry=zipfile.ZipInfo('lib/app/program.exe');entry.create_system=system;entry.external_attr=attributes
+                    archive.writestr(entry,data)
+                return update_native.package_content_sha256(file)
+            default=digest(0,0x20)
+            self.assertEqual(default,digest(3,0o100644 << 16))
+            for system,attributes,data in ((0,0x21,b'program'),(3,0o100755 << 16,b'program'),
+                                           (3,0o100444 << 16,b'program'),(3,0x20,b'program'),
+                                           (0,0x20,b'changed')):
+                self.assertNotEqual(default,digest(system,attributes,data))
+
     def test_native_symlink_sidecar_cannot_escape_payload_root(self):
         with tempfile.TemporaryDirectory() as directory:
             file=Path(directory)/'full.nupkg'

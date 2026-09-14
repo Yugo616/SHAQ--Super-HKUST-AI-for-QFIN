@@ -44,6 +44,27 @@ def verify_cache(cache, current):
     return files
 
 
+def retain_failed_package_comparison(expected, cached, output):
+    """Failure-only diagnostics: entry identities, never extracted program data."""
+    def describe(path):
+        result={'filename':path.name,'exists':path.is_file(),'is_symlink':path.is_symlink()}
+        if not result['exists'] or result['is_symlink']:
+            return result
+        try:
+            with path.open('rb') as stream:result['sha256']=hashlib.file_digest(stream,'sha256').hexdigest()
+            result['size']=path.stat().st_size
+            result['entries']=[]
+            with zipfile.ZipFile(path) as archive:
+                for entry in archive.infolist():
+                    with archive.open(entry) as stream:digest=hashlib.file_digest(stream,'sha256').hexdigest()
+                    result['entries'].append({'name':entry.filename,'size':entry.file_size,
+                        'create_system':entry.create_system,'external_attr':entry.external_attr,'sha256':digest})
+        except (OSError,ValueError,zipfile.BadZipFile) as exc:
+            result['error']=str(exc)
+        return result
+    output.write_text(json.dumps({'expected':describe(expected),'cached':describe(cached)},indent=2),encoding='utf-8')
+
+
 def verify_program_copies(installed, system):
     if system=='darwin':
         copies=sorted(path.name for path in installed.parent.glob('*.app'))
@@ -213,6 +234,11 @@ def main():
                 'limitations':['explicit isolated App.run bypass','deterministic model substitute','two native transitions plus seeded stale cache; not a ten-version soak test']}
     except Exception as exc:
         result={'status':'failed','platform':key,'root':str(root),'stages':reports,'error':str(exc)}
+        if 'current' in locals():
+            try:
+                retain_failed_package_comparison(feed/current,root/'packages'/current,output/'failed-package-comparison.json')
+            except Exception as diagnostic_error:
+                result['package_diagnostic_error']=str(diagnostic_error)
     for file in root.glob('*-result.json'):shutil.copy2(file,output/file.name)
     for directory in root.glob('events-*'):
         shutil.copytree(directory,output/directory.name,dirs_exist_ok=True)
