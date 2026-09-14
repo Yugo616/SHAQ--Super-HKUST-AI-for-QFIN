@@ -58,10 +58,23 @@ class NativePackagingTests(unittest.TestCase):
                         'python packaging/installed_update_acceptance.py', '.\\packaging\\build_windows.ps1',
                         'python scripts/validate_release.py'):
             self.assertIn(command, native)
-        self.assertLess(native.index('python $env:SHAQ_EXTERNAL_DISPLAY_PREFLIGHT'), native.index('python packaging/build_native.py'))
+        self.assertLess(native.index('python $env:DISPLAY_PREFLIGHT'), native.index('python packaging/build_native.py'))
         diagnostic = workflow.split('  windows-layout-diagnostic:',1)[1].split('\n  native:',1)[0]
         self.assertIn('python packaging/windows_ci_display.py --minimum-width 1520 --minimum-height 900', diagnostic)
         self.assertLess(diagnostic.index('windows_ci_display.py'), diagnostic.index('windows_layout_dependencies.py'))
+
+    def test_all_windows_routes_provision_display_with_correct_source(self):
+        workflow = (ROOT/'.github/workflows/build-desktop.yml').read_text()
+        self.assertIn('name: Provision Windows display before native compilation', workflow)
+        block = workflow.split('name: Provision Windows display before native compilation',1)[1].split('      - name:',1)[0]
+        self.assertIn("if: runner.os == 'Windows'", block)
+        self.assertIn("DISPLAY_PREFLIGHT: ${{ inputs.target == 'windows-validated' && env.SHAQ_EXTERNAL_DISPLAY_PREFLIGHT || 'packaging/windows_ci_display.py' }}", block)
+        self.assertIn('python $env:DISPLAY_PREFLIGHT --minimum-width 1520 --minimum-height 900', block)
+        for target, expected in [('windows-validated','external'), ('windows','packaging/windows_ci_display.py'),
+                                 ('all','packaging/windows_ci_display.py')]:
+            script = "const inputs={target:process.argv[2]},env={SHAQ_EXTERNAL_DISPLAY_PREFLIGHT:'external'};console.log(" + block.split('DISPLAY_PREFLIGHT: ${{',1)[1].split('}}',1)[0] + ');'
+            result = subprocess.run(['node','-',target],input=script,text=True,capture_output=True,check=True)
+            self.assertEqual(result.stdout.strip(), expected)
 
     def test_release_tags_never_trigger_the_three_platform_push_matrix(self):
         lines = (ROOT / '.github/workflows/build-desktop.yml').read_text().splitlines()

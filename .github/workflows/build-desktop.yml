@@ -180,11 +180,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Provision external validated Windows display before native compilation
-        if: inputs.target == 'windows-validated'
+      - name: Provision Windows display before native compilation
+        if: runner.os == 'Windows'
         shell: pwsh
+        env:
+          DISPLAY_PREFLIGHT: ${{ inputs.target == 'windows-validated' && env.SHAQ_EXTERNAL_DISPLAY_PREFLIGHT || 'packaging/windows_ci_display.py' }}
         run: |
-          python $env:SHAQ_EXTERNAL_DISPLAY_PREFLIGHT --minimum-width 1520 --minimum-height 900 --output dist/diagnostic/display-preflight.json
+          python $env:DISPLAY_PREFLIGHT --minimum-width 1520 --minimum-height 900 --output dist/diagnostic/display-preflight.json
           exit $LASTEXITCODE
       - name: Read pinned native updater toolchain
         id: native-config
