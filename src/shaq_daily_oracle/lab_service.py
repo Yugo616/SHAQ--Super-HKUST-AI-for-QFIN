@@ -927,8 +927,8 @@ class LabService:
         profile: ModelProfile, secret: str, task_lock=None, resume_batch_id: str = '',
         resume_evidence=None,
     ) -> None:
-        self._set_job(job_id, status="running", started_at_et=datetime.now(ET).isoformat(), message="正在冻结共享证据")
         try:
+            self._set_job(job_id, status="running", started_at_et=datetime.now(ET).isoformat(), message="正在冻结共享证据")
             settings = self.settings.load()
             evidence = resume_evidence if resume_batch_id else self._today_evidence(
                 profile=DataProfile.from_dict(settings["data_profile"]),
@@ -973,10 +973,17 @@ class LabService:
                 label_refresh=label_refresh,
             )
         except Exception as exc:
-            self._set_job(
-                job_id, status="failed", completed_at_et=datetime.now(ET).isoformat(),
-                message=str(exc), error_type=type(exc).__name__,
-            )
+            try:
+                self._set_job(
+                    job_id, status="failed", completed_at_et=datetime.now(ET).isoformat(),
+                    message=str(exc), error_type=type(exc).__name__,
+                    error_diagnostic=getattr(exc, 'diagnostic', {}),
+                )
+            except Exception as persistence_error:
+                # _set_job updates memory first. Even a parent disk failure must
+                # leave a terminal UI state and release the owned job lock.
+                with self.jobs_lock:
+                    self.jobs[job_id]['persistence_error'] = type(persistence_error).__name__
         finally:
             if task_lock is not None:
                 task_lock.release()
@@ -1126,6 +1133,7 @@ class LabService:
         return versions
 
     def job_statuses(self) -> list[dict[str, Any]]:
+        from .job_corrections import corrected_status
         stored = {}
         jobs_root = self.paths.research_root / "jobs"
         if jobs_root.is_dir():
@@ -1138,10 +1146,19 @@ class LabService:
         with self.jobs_lock:
             stored.update({key: dict(value) for key, value in self.jobs.items()})
         for job_id, row in stored.items():
+            row = corrected_status(self.paths.research_root, row)
+            stored[job_id] = row
             row["research_progress"] = ResearchProgressLog(
                 self.paths.research_root / "jobs" / f"{job_id}-research.jsonl"
             ).read()
         return sorted(stored.values(), key=lambda row: str(row.get("started_at_et") or ""), reverse=True)
+
+    def correct_interrupted_job(self, *, job_id: str, trade_date: str,
+                                job_sha256: str, automatic_run_sha256: str):
+        from .job_corrections import append_correction
+        return append_correction(self.paths.research_root, job_id=job_id,
+            trade_date=trade_date, job_sha256=job_sha256,
+            automatic_run_sha256=automatic_run_sha256)
 
     def batch_detail(self, batch_id: str) -> dict[str, Any]:
         detail = self.dashboard.batch_detail(batch_id)

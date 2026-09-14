@@ -16,6 +16,10 @@ from .hashing import sha256_file, sha256_payload
 class DataProviderError(ValueError):
     """A research data provider failed without permission to fabricate a substitute."""
 
+    def __init__(self, message: str, *, diagnostic: dict[str, Any] | None = None):
+        super().__init__(message)
+        self.diagnostic = diagnostic or {}
+
 
 CAPABILITIES = {
     "instrument_identity",
@@ -45,6 +49,7 @@ class DataProfile:
     maximum_candidates: int = 8
     maximum_event_characters: int = 60_000
     maximum_option_contracts_per_side: int = 40
+    yahoo_worker_timeout_seconds: int = 900
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> "DataProfile":
@@ -88,6 +93,8 @@ class DataProfile:
                     raise DataProviderError("OpenBB REST capability route is invalid")
         if self.request_timeout_seconds <= 0 or self.batch_size <= 0:
             raise DataProviderError("provider timeouts and batch size must be positive")
+        if self.yahoo_worker_timeout_seconds <= 0:
+            raise DataProviderError("Yahoo worker deadline must be positive")
         if self.maximum_candidates <= 0:
             raise DataProviderError("maximum_candidates must be positive")
         if self.maximum_event_characters <= 0:
@@ -97,8 +104,14 @@ class DataProfile:
         if self.intraday_interval not in {"1m", "2m", "5m", "15m", "30m", "60m"}:
             raise DataProviderError("unsupported intraday interval")
 
+    def source_dict(self) -> dict[str, Any]:
+        value = asdict(self)
+        # A process deadline changes execution, never the source/data identity.
+        value.pop('yahoo_worker_timeout_seconds')
+        return value
+
     def identity(self) -> str:
-        return sha256_payload(asdict(self))
+        return sha256_payload(self.source_dict())
 
 
 @dataclass(frozen=True)
@@ -244,6 +257,16 @@ class YFinanceProvider:
         interval: str = "1d",
         prepost: bool = False,
     ) -> dict[str, list[dict[str, Any]]]:
+        from .collection_worker import call_in_worker
+        return call_in_worker('history', self.profile, {
+            'symbols': symbols, 'start': start.isoformat(), 'end': end.isoformat(),
+            'interval': interval, 'prepost': prepost,
+        })
+
+    def _history_inline(
+        self, symbols: list[str], *, start: date, end: date,
+        interval: str = '1d', prepost: bool = False, session,
+    ) -> dict[str, list[dict[str, Any]]]:
         yf = self._module()
         normalized = {_yahoo_symbol(symbol): symbol for symbol in symbols}
         output = {symbol: [] for symbol in symbols}
@@ -258,7 +281,10 @@ class YFinanceProvider:
                     auto_adjust=False,
                     actions=False,
                     group_by="ticker",
-                    threads=True,
+                    # Ephemeral ticker threads leak thread-local cache connections.
+                    # One owned thread shares the explicit worker session/cache.
+                    threads=False,
+                    session=session,
                     progress=False,
                     timeout=self.profile.request_timeout_seconds,
                 )
@@ -272,12 +298,7 @@ class YFinanceProvider:
         return output
 
     def fresh_history(self, *args: Any, **kwargs: Any) -> dict[str, list[dict[str, Any]]]:
-        """Bypass yfinance's process-local historical-response LRU for verification reads."""
-        yf = self._module()
-        try:
-            yf.data.YfData.cache_get.cache_clear()
-        except AttributeError as exc:
-            raise DataProviderError("yfinance history cache cannot be cleared") from exc
+        """A fresh child has no historical-response LRU from an earlier read."""
         return self.history(*args, **kwargs)
 
     def recent_intraday(
@@ -307,8 +328,12 @@ class YFinanceProvider:
         return rows
 
     def option_surface(self, symbol: str) -> dict[str, Any]:
+        from .collection_worker import call_in_worker
+        return call_in_worker('option_surface', self.profile, {'symbol': symbol})
+
+    def _option_surface_inline(self, symbol: str, *, session) -> dict[str, Any]:
         yf = self._module()
-        ticker = yf.Ticker(_yahoo_symbol(symbol))
+        ticker = yf.Ticker(_yahoo_symbol(symbol), session=session)
         expiries = list(ticker.options or [])
         if not expiries:
             return {"symbol": symbol, "status": "no_data", "expiries": {}}
@@ -642,7 +667,7 @@ def provider_manifest(
         "free_research_data_only": True,
         "production_grade_claimed": False,
         "manifest_sha256": sha256_payload({
-            "profile": asdict(profile),
+            "profile": profile.source_dict(),
             "universe_file_sha256": sha256_file(universe_path),
             "active": active,
         }),

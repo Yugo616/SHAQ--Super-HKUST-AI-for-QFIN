@@ -19,6 +19,12 @@ MODEL_SECRET_PREFIX = "model-profile:"
 OPENBB_SECRET_NAME = "openbb-rest-api-key"
 
 
+def _data_profile_hash(value: dict[str, Any]) -> str:
+    # Runtime deadline is not part of source readiness or frozen data identity.
+    return sha256_payload({key: item for key, item in value.items()
+                           if key != 'yahoo_worker_timeout_seconds'})
+
+
 def _repository_defaults(package_root: Path) -> dict[str, Any]:
     path = package_root / "config/team-repository.json"
     if not path.is_file():
@@ -155,7 +161,7 @@ class ResearchSettingsStore:
         if (
             readiness.get("status") != "ready"
             or readiness.get("data_profile_sha256")
-            != sha256_payload(merged["data_profile"])
+            != _data_profile_hash(merged["data_profile"])
         ):
             merged["setup_complete"] = False
         else:
@@ -268,7 +274,7 @@ class ResearchSettingsStore:
         readiness_matches = (
             readiness.get("status") == "ready"
             and readiness.get("data_profile_sha256")
-            == sha256_payload(settings.get("data_profile", {}))
+            == _data_profile_hash(settings.get("data_profile", {}))
         )
         return bool(
             settings.get("model_profiles")
@@ -389,7 +395,7 @@ class ResearchSettingsStore:
             raise SettingsError("研究环境检查结果无效") from exc
         if checked_at.tzinfo is None or universe_members <= 0:
             raise SettingsError("研究环境检查结果无效")
-        if receipt.get("data_profile_sha256") != sha256_payload(
+        if receipt.get("data_profile_sha256") != _data_profile_hash(
             settings.get("data_profile", {})
         ):
             raise SettingsError("数据配置已变化，请重新检查研究环境")

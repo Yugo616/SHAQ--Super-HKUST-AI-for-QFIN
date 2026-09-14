@@ -27,6 +27,10 @@ from .research_batch import FrozenEvidence, freeze_evidence_bundle
 class ResearchCollectionError(ValueError):
     """The cross-platform research evidence snapshot cannot be formed safely."""
 
+    def __init__(self, message: str, *, diagnostic: dict[str, Any] | None = None):
+        super().__init__(message)
+        self.diagnostic = diagnostic or {}
+
 
 ET = ZoneInfo("America/New_York")
 
@@ -308,7 +312,14 @@ def collect_research_evidence(
         stock_intraday = market.recent_intraday(stock_symbols, cutoff=data_cutoff)
         benchmark_intraday = market.recent_intraday(benchmark_symbols, cutoff=data_cutoff)
     except DataProviderError as exc:
-        raise ResearchCollectionError('provider_error：行情提供方明确返回错误，未启动模型分析。') from exc
+        reason = {
+            'resource_exhausted': '采集进程资源不足',
+            'timeout': '采集进程超过总时限',
+            'worker_crash': '采集进程意外退出',
+            'protocol_error': '采集进程返回格式错误',
+        }.get(exc.diagnostic.get('kind'), '行情提供方明确返回错误')
+        raise ResearchCollectionError(f'provider_error：{reason}，未启动模型分析。',
+                                      diagnostic=exc.diagnostic) from exc
     premarket_observations = {symbol: {
         key: state[key] for key in ('status', 'first_observation_et', 'last_observation_et')
     } for symbol in stock_symbols for state in [_premarket_state(
