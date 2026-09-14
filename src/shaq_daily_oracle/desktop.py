@@ -242,6 +242,12 @@ class DesktopBridge:
     def check_team_updates(self) -> dict[str, Any]:
         return self._result(self.lab.check_team_updates)
 
+    def open_method_transfer(self, direction: str) -> dict[str, Any]:
+        return self._result(self.lab.open_method_transfer, direction)
+
+    def transfer_methods(self, operation_id: str, keys: list[str]) -> dict[str, Any]:
+        return self._result(self.lab.transfer_methods, operation_id, keys)
+
     def install_team_version(
         self, branch: str, author: str, version_id: str
     ) -> dict[str, Any]:
@@ -536,12 +542,28 @@ def _bind_gui_smoke_fixture(bridge, fixture_state, fixture_detail):
         return {'ok': True, 'value': {'status': 'no_release', 'platform': 'GUI fixture',
                                      'current_version': 'fixture', 'mode': 'installer_only'}}
 
+    def fixture_transfer_api(self, direction):
+        return {'ok': True, 'value': {'operation_id': 'fixture-'+direction,
+            'destination': 'fixture/repo · versions/shadow_versions',
+            'note': 'Fixture only; no remote writes', 'rows': [
+                {'key': 'existing', 'author': 'fixture', 'version_id': 'existing',
+                 'method_name': '已有测试方法', 'eligible': False,
+                 'local_status': '本地已有相同内容', 'content_sha256': 'a'*64},
+                {'key': 'new', 'author': 'fixture', 'version_id': 'new',
+                 'method_name': '待传输测试方法', 'eligible': True,
+                 'local_status': '可选择', 'content_sha256': 'b'*64}]}}
+
+    def fixture_transfer_write_api(self, operation_id, keys):
+        return {'ok': False, 'error': 'fixture forbids remote writes'}
+
     bridge.get_lab_state = MethodType(fixture_state_api, bridge)
     bridge.get_shadow_batch = MethodType(fixture_batch_api, bridge)
     bridge.refresh_prices_and_results = MethodType(fixture_refresh_api, bridge)
     bridge.compare_research_runs = MethodType(fixture_compare_api, bridge)
     bridge.save_lab_model_profile = MethodType(fixture_model_api, bridge)
     bridge.check_software_update = MethodType(fixture_update_api, bridge)
+    bridge.open_method_transfer = MethodType(fixture_transfer_api, bridge)
+    bridge.transfer_methods = MethodType(fixture_transfer_write_api, bridge)
 
 
 def launch_desktop(*, smoke_output: Path | None = None) -> int:
@@ -693,6 +715,45 @@ def launch_desktop(*, smoke_output: Path | None = None) -> int:
             else:
                 raise RuntimeError('Native software update view failed')
             result['installer_update_view'] = True
+            window.evaluate_js("document.querySelector('#software-update-modal').close(); "
+                               "document.querySelector('.nav[data-page=editor]').click()")
+            deadline = time.monotonic() + 6
+            while time.monotonic() < deadline:
+                if window.evaluate_js("Boolean(document.querySelector('#skill-method').value)"):
+                    break
+                time.sleep(.1)
+            # Let all method loading finish before deliberately dirtying the input.
+            window.evaluate_js("window.fixtureEditorNode=document.querySelector('#skill-method'); "
+                "window.fixtureEditorVersion=document.querySelector('#edit-version').value; "
+                "fixtureEditorNode.value='fixture unsaved method edit'; "
+                "fixtureEditorNode.dispatchEvent(new Event('input',{bubbles:true})); "
+                "document.querySelector('#download-methods').click()")
+            for direction in ('download', 'upload'):
+                deadline = time.monotonic() + 6
+                while time.monotonic() < deadline:
+                    if window.evaluate_js("document.querySelector('#method-transfer-modal').open && "
+                                          "document.querySelector('#transfer-select-all') && "
+                                          "!document.querySelector('#transfer-select-all').disabled"):
+                        break
+                    time.sleep(.1)
+                else:
+                    raise RuntimeError('Native transfer dialog failed to load')
+                window.evaluate_js("document.querySelector('#transfer-select-all').click(); load(false)")
+                deadline = time.monotonic() + 6
+                while time.monotonic() < deadline:
+                    if window.evaluate_js("Boolean(document.querySelector('.transfer-check[data-key=new]')?.checked)"):
+                        break
+                    time.sleep(.1)
+                if not window.evaluate_js("fixtureEditorNode===document.querySelector('#skill-method') && "
+                    "fixtureEditorNode.value==='fixture unsaved method edit' && "
+                    "document.querySelector('#edit-version').value===fixtureEditorVersion && "
+                    "document.querySelector('.transfer-check[data-key=existing]').disabled && "
+                    "document.querySelector('.transfer-check[data-key=new]').checked"):
+                    raise RuntimeError('Native transfer lost editor or selection state')
+                window.evaluate_js("document.querySelector('#method-transfer-close').click()")
+                if direction == 'download':
+                    window.evaluate_js("document.querySelector('#upload-methods').click()")
+            result['transfer_preserved_dirty_editor'] = True
             if not all(result[key] for key in (
                 'refresh_completed', 'refresh_detail_marker',
                 'refresh_preserved_modal', 'refresh_preserved_candidate',

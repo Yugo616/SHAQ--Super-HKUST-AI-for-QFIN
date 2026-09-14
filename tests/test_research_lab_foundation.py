@@ -69,7 +69,17 @@ class ResearchLabFoundationTests(unittest.TestCase):
                 copy = lab.copy_local_version(version_id='main', author='team')
                 saved = lab.finalize_local_version(draft_id=copy['draft_id'], description='local copy')
                 actual = lab.registry.effective_skills(saved['version_id'], saved['author'])
-            self.assertEqual(actual, lab.registry.effective_skills('main', 'team'))
+            baseline = lab.registry.effective_skills('main', 'team')
+            self.assertEqual({k: actual[k] for k in baseline}, baseline)
+            # The saved transfer now freezes the previously implicit computation
+            # defaults as well, without changing the legacy main identity.
+            from shaq_daily_oracle.skill_versions import COMPLETE_METHOD_PATHS
+            from shaq_daily_oracle.module_rules import MODULES
+            self.assertEqual(set(actual), COMPLETE_METHOD_PATHS)
+            for module in MODULES:
+                document = lab.module_document(module=module, version_id='main', author='team')
+                self.assertEqual(actual[f'modules/{module}/compute.js'], document['script'])
+                self.assertEqual(actual[f'modules/{module}/cases.json'], document['cases'])
 
     def test_github_username_case_does_not_hide_saved_local_version(self):
         with tempfile.TemporaryDirectory() as tmp:

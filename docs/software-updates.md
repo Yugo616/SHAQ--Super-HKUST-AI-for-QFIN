@@ -33,7 +33,7 @@ The dialog shows current/target version, last check and last successful update w
 
 ## Method updates are different
 
-Use **Edit Versions → Team Sync → Upload Version / Download Team Version** for immutable method packages on the `versions` branch. This does not change the application executable or `main` source. A software update does not silently select, enable, resize, replay or rewrite a method or historical trade.
+Use **Edit Versions → Download (`下载`) / Upload (`上传`)** for the two in-app, multi-select dialogs for immutable method packages on the `versions` branch. Upload lists saved locally owned versions; opening a dialog does not publish anything. This does not change the application executable or `main` source. A software update does not silently select, enable, resize, replay or rewrite a method or historical trade.
 
 ## Release engineering boundary
 

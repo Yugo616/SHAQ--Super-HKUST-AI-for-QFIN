@@ -19,7 +19,7 @@ Open **Connection Settings** from the app header and complete the four cards.
 
 ### 1. Connect an analysis model
 
-The model card has three buttons: **Connect Codex**, **Connect Claude Code**, and **Configure API**. Choose one route:
+The model card has three equal choices: **Connect Codex**, **Connect Claude Code**, and **Connect API (`连接 API`)**. Choose one route:
 
 - **Codex** uses a detected, usable Codex CLI logged in on this computer. Installing the chat app alone is not enough; see [official CLI setup](https://learn.chatgpt.com/docs/codex/cli) and [authentication](https://learn.chatgpt.com/docs/auth).
 - **Claude Code** uses the Claude Code CLI already installed and logged in. A Claude website or desktop-chat login is not the same login.
@@ -42,7 +42,7 @@ API secrets and GitHub credentials go to macOS Keychain or Windows Credential Ma
 
 Choose **Sign in to GitHub** and finish the browser device flow. The repository application ID is already configured. Read-only members can download team methods; uploading requires repository write permission.
 
-Software source and method versions are deliberately separate. Team methods live on the `versions` branch. Use **Edit Versions → Team Sync** to upload or download them; this never upgrades the application.
+Software source and method versions are deliberately separate. Team methods live on the `versions` branch. Use **Edit Versions → Download (`下载`) / Upload (`上传`)** to open the corresponding in-app dialog; this never upgrades the application.
 
 ### 3. Enter the SEC research identity
 
@@ -74,9 +74,13 @@ Automatic runs are off until explicitly enabled. Their method selection is separ
 
 ### Edit Versions
 
-Choose a base version and **Copy Version (`复制版本`)** before editing; **Save Changes (`保存修改`)** saves draft edits. A method package contains the eight Skill documents, agent metadata, references, module code/tests, and decision code/tests. Validation rejects arbitrary Python, binaries, workflow files, credentials, runtime data, and local paths. Decision JavaScript runs in a restricted local sandbox without file, network, shell, credential, broker, or result-label access.
+Choose a base version and **New Local Draft (`新建本地草稿`)** inside the editor before editing; **Save Changes (`保存修改`)** saves draft edits. A method package contains the eight Skill documents, agent metadata, references, module code/tests, and decision code/tests. Validation rejects arbitrary Python, binaries, workflow files, credentials, runtime data, and local paths. Decision JavaScript runs in a restricted local sandbox without file, network, shell, credential, broker, or result-label access.
 
-**Save Version** creates a local immutable method version. **Team Sync → Upload Version (`上传版本`) / Download Team Version (`下载团队版本`)** is a separate explicit action. It adds a complete package without overwriting earlier versions or application source.
+**Save as New Version (`保存为新版本`)** creates a local immutable method version. Unchanged copies reuse the original saved content without reassigning authorship. Save module/Skill/decision edits to the draft before saving the version.
+
+The toolbar has exactly two transfer buttons, **Download (`下载`)** and **Upload (`上传`)**. Both open in-app dialogs and read the current configured `versions/shadow_versions` catalog. Select one or more eligible versions, then choose **Download Selected Versions (`下载选中版本`)** or **Upload Selected Versions (`上传选中版本`)**. Opening a dialog never publishes anything. Read-only members can download but not upload. Upload lists saved local versions owned by the logged-in author, not mutable drafts. Each item reports success or failure; successful transfers remain valid when another fails. Retry keeps only incomplete selections. Close or press Escape to return to your editor; ordinary state refresh keeps its unsaved inputs.
+
+Transfer comparison uses a separately verified hash of all runnable method files, excluding display names, envelope authors and Git branch tips. Expand the short content hash to read/copy the full value or inspect original source aliases. Equivalent content is not uploaded or downloaded again. Creation time is labelled as creation time, not an invented GitHub upload time. Old partial packages with an unverifiable baseline explicitly show unavailable content identity and cannot be uploaded as complete methods; create a new complete local draft first. Old immutable manifests, saved aliases, historical runs and account balances are not rewritten. Downloads use the exact verified snapshot displayed by the dialog even when the branch advances; path collisions never overwrite an existing version.
 
 ### View Results
 

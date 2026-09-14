@@ -724,6 +724,7 @@ class GitHubSkillClient:
         login: str,
         manifest: SkillVersionManifest,
         files: dict[str, str],
+        deduplicate_content: bool = False,
     ) -> dict[str, Any]:
         if manifest.author != _safe_component(login, name="GitHub login"):
             raise SkillVersionError("manifest author differs from the authenticated user")
@@ -736,6 +737,9 @@ class GitHubSkillClient:
             ).hexdigest():
                 raise SkillVersionError("manifest Skill hash differs from uploaded bytes")
         branch = self.config.catalog_branch
+        content_id = transfer_content_identity(manifest, files) if deduplicate_content else None
+        if deduplicate_content and content_id is None:
+            raise SkillVersionError('上传需要完整且已核验基底的方法版本')
         root = PurePosixPath(self.config.skill_package_root) / manifest.author / manifest.version_id
         if self.content_exists((root / "manifest.json").as_posix(), ref=branch):
             raise SkillVersionError(
@@ -763,6 +767,15 @@ class GitHubSkillClient:
             if not head:
                 branch = self.ensure_catalog_branch()
                 continue
+            if content_id:
+                # Recheck at precisely the parent of this non-force update, on
+                # every retry. Branch movement can never publish a second copy.
+                for row in self.list_remote_versions(catalog_sha=head, include_legacy=False, allow_missing_root=True):
+                    other, other_files, _ = self.download_version(branch=branch,
+                        author=row['author'], version_id=row['version_id'], commit_sha=head)
+                    if transfer_content_identity(other, other_files) == content_id:
+                        return {'branch': branch, 'commit_sha': head,
+                            'manifest': other.as_dict(), 'already_remote': True}
             if self.content_exists((root / "manifest.json").as_posix(), ref=head):
                 raise SkillVersionError(
                     "this immutable Shadow version id already exists in the team catalog"
@@ -800,16 +813,18 @@ class GitHubSkillClient:
             }
         raise SkillVersionError("team catalog upload conflict retries were exhausted")
 
-    def list_remote_versions(self) -> list[dict[str, Any]]:
+    def list_remote_versions(self, *, catalog_sha: str | None = None,
+                             include_legacy: bool = True, allow_missing_root: bool = False) -> list[dict[str, Any]]:
         """Discover immutable manifests without executing remote repository content."""
 
         versions_by_identity: dict[str, dict[str, Any]] = {}
         root = self.config.skill_package_root
         sources: list[dict[str, str]] = []
-        catalog_sha = self.ref_sha(self.config.catalog_branch)
+        catalog_sha = catalog_sha or self.ref_sha(self.config.catalog_branch)
         if catalog_sha:
             sources.append({"name": self.config.catalog_branch, "sha": catalog_sha})
-        sources.extend(self.list_shadow_branches())
+        if include_legacy:
+            sources.extend(self.list_shadow_branches())
         for branch_row in sources:
             branch = branch_row["name"]
             commit_sha = branch_row["sha"]
@@ -823,7 +838,7 @@ class GitHubSkillClient:
                 # A personal branch is created from main before its first upload,
                 # so a missing package root is a valid empty catalog. The shared
                 # catalog and all non-404 provider failures remain fail-closed.
-                if shared or _http_status_code(exc) != 404:
+                if (shared and not allow_missing_root) or _http_status_code(exc) != 404:
                     raise
                 continue
             for author_row in author_rows:
@@ -850,12 +865,13 @@ class GitHubSkillClient:
                     if version_id != raw_version:
                         continue
                     manifest_path = f"{author_path}/{version_id}/manifest.json"
+                    raw_manifest = self.get_content(manifest_path, ref=commit_sha)
                     try:
                         manifest = SkillVersionManifest.from_dict(json.loads(
-                            self.get_content(manifest_path, ref=commit_sha).decode("utf-8")
+                            raw_manifest.decode("utf-8")
                         ))
-                    except (UnicodeDecodeError, json.JSONDecodeError, SkillVersionError):
-                        continue
+                    except (UnicodeDecodeError, json.JSONDecodeError, SkillVersionError) as exc:
+                        raise SkillVersionError('remote catalog contains an invalid manifest') from exc
                     if manifest.author != author or manifest.version_id != version_id:
                         continue
                     row = {
@@ -864,7 +880,11 @@ class GitHubSkillClient:
                         "commit_sha": commit_sha,
                         "manifest_sha256": manifest.identity(),
                     }
-                    versions_by_identity.setdefault(manifest.identity(), row)
+                    canonical = versions_by_identity.setdefault(manifest.identity(), row)
+                    canonical.setdefault('source_aliases', []).append({
+                        'author': author, 'version_id': version_id, 'branch': branch,
+                        'commit_sha': commit_sha, 'legacy_source': not shared,
+                    })
         return sorted(
             versions_by_identity.values(),
             key=lambda row: (
@@ -874,14 +894,14 @@ class GitHubSkillClient:
         )
 
     def download_version(
-        self, *, branch: str, author: str, version_id: str
+        self, *, branch: str, author: str, version_id: str, commit_sha: str | None = None
     ) -> tuple[SkillVersionManifest, dict[str, str], str]:
         safe_author = _safe_component(author, name="author")
         safe_version = _safe_component(version_id, name="version id")
         expected_branch = self.config.personal_branch(safe_author)
         if branch not in {self.config.catalog_branch, expected_branch}:
             raise SkillVersionError("Shadow package source branch is not allowed")
-        commit_sha = self.ref_sha(branch)
+        commit_sha = commit_sha or self.ref_sha(branch)
         if not commit_sha:
             raise SkillVersionError("remote Shadow source branch is unavailable")
         root = PurePosixPath(self.config.skill_package_root) / safe_author / safe_version
@@ -905,6 +925,25 @@ class GitHubSkillClient:
                 raise SkillVersionError("remote Skill bytes differ from their manifest")
             files[relative_path] = content
         return manifest, files, commit_sha
+
+
+def transfer_content_identity(manifest: SkillVersionManifest, files: dict[str, str]) -> str | None:
+    """Byte identity for transfer only; never an account or run identity.
+
+    Legacy deltas without a verified complete baseline deliberately have no
+    transfer identity. In particular current bundled main is not that baseline.
+    """
+    if set(files) != set(manifest.skill_hashes):
+        raise SkillVersionError("transfer files differ from their manifest")
+    hashes = {}
+    for path, content in sorted(files.items()):
+        validate_skill_text(path, content)
+        hashes[path] = hashlib.sha256(content.encode('utf-8')).hexdigest()
+        if hashes[path] != manifest.skill_hashes[path]:
+            raise SkillVersionError("transfer bytes failed their manifest hash")
+    if set(files) != COMPLETE_METHOD_PATHS:
+        return None
+    return sha256_payload(hashes)
 
 
 class LocalSkillRegistry:
@@ -1008,6 +1047,18 @@ class LocalSkillRegistry:
             row for row in self.list_versions()
             if row.get("schema_version") == 2 and row.get("method_name")
         ], key=lambda row: str(row["method_name"]))
+
+    def transfer_package(self, version_id: str, author: str) -> tuple[SkillVersionManifest, dict[str, str]]:
+        """Read saved bytes without overlaying today's mutable bundled main."""
+        target = self.root / _safe_component(author, name='author') / _safe_component(version_id, name='version id')
+        value = json.loads((target / 'manifest.json').read_text(encoding='utf-8'))
+        manifest = SkillVersionManifest.from_dict({k: v for k, v in value.items()
+            if k not in {'manifest_sha256', 'source_commit_sha'}})
+        if (manifest.author, manifest.version_id) != (author, version_id) or value.get('manifest_sha256') != manifest.identity():
+            raise SkillVersionError('installed transfer manifest identity mismatch')
+        files = {p: (target / _stored_artifact_path(p)).read_bytes().decode('utf-8') for p in manifest.skill_hashes}
+        transfer_content_identity(manifest, files)
+        return manifest, files
 
     def selectable_versions(self) -> list[dict[str, Any]]:
         """Prefer canonical methods while retaining personal installed versions."""

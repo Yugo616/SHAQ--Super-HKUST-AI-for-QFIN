@@ -29,7 +29,9 @@ Existing **0.6.1/0.6.2** installations require a first full install of the manag
 
 - **Connect Codex** detects a usable, signed-in Codex CLI and tests a structured response. Merely installing the chat app is not sufficient. [Official CLI setup](https://learn.chatgpt.com/docs/codex/cli).
 - **Connect Claude Code** uses the Claude Code CLI and its login, not the Claude chat website/app login.
-- **Configure API** accepts an official OpenAI/Anthropic protocol or compatible relay: enter its HTTPS base URL, API key, exact model ID and supported context limit. API-only users need neither CLI.
+- **Connect API (`连接 API`)** accepts an official OpenAI/Anthropic protocol or compatible relay: enter its HTTPS base URL, API key, exact model ID and supported context limit. API-only users need neither CLI.
+
+In **Edit Versions**, the toolbar has **Download (`下载`)** and **Upload (`上传`)**. Each opens an in-app multi-select dialog and checks the configured team `versions` catalog. Downloads mark equivalent local content as already present; uploads list saved, locally owned complete versions, never unsaved drafts. Confirm selected items to transfer; failures can be retried without repeating successes. Method sharing does not update the application or change historical run/account identities.
 
 Relay model ID, key group/permissions and protocol must match the provider's live catalog. The connection test shows observed HTTP status, bounded service code/message and request ID when available. HTTP 400 alone does not establish a cause: check URL, protocol, model and key permissions. SHAQ never silently switches provider or model. See [connection details](docs/user-guide.md#1-connect-an-analysis-model).
 

@@ -16,7 +16,13 @@ Integrate supported pinned Python SDK and matching vpk CLI. Early lifecycle hook
 
 ## Task 3: Existing feature acceptance and documentation
 
-Verify account continuity/canonical aliases/volatility sizing unchanged, missing-minute UI not zero trade, preliminary/rechecked/revised labels, replay selection stability, progress isolation, comparison identity distinctions, GUI labels and auto-run editing. Patch only actual gaps using TDD. Human README Chinese/English with real redacted screenshot and truthful installation/update/connection instructions.
+Verify account continuity/canonical aliases/volatility sizing unchanged, missing-minute UI not zero trade, preliminary/rechecked/revised labels, replay selection stability, progress isolation, comparison identity distinctions, GUI labels and auto-run editing. Patch only actual gaps using TDD. Human README Chinese/English with truthful installation/update/connection instructions. The user declined publication of private replay screenshots; do not capture or publish them.
+
+### Approved addition: two method-transfer dialogs
+
+Keep the editor and its save action. The top toolbar offers Download and Upload, each opening an in-app multiselect dialog. Download discovers the configured versions catalog, displays names/authors/version metadata, and disables already-installed equivalent content. Upload lists saved locally-owned methods absent from the remote catalog, with explicit confirmation and per-item results. Opening either dialog does not publish anything.
+
+Use a deterministic full-method content digest for transfer deduplication, separate from existing manifest, run, and account identities. Unrelated branch commits or display-name changes do not require a repeated download/upload. Verify content, preserve immutable versions and provenance, pin selected remote snapshots, and recheck concurrent uploads. Unresolvable legacy baselines must not be treated as equal to current main. Do not rewrite historical accounts or existing method packages. Cover batch transfer, partial failure, no-write-before-confirmation, duplicate content, changed content, concurrency, read-only accounts, and preservation of editor state.
 
 ## Task 4: Release gate
 

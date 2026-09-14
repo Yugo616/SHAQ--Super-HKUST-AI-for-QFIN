@@ -97,6 +97,12 @@ class LabService:
 
     def copy_local_version(self, *, version_id: str, author: str) -> dict[str, Any]:
         files = self.registry.effective_skills(version_id, author)
+        # Freeze the editor's actual default computation and fixed cases too.
+        from .module_rules import MODULES
+        for module in MODULES:
+            document = self.module_document(module=module, version_id=version_id, author=author)
+            files[f'modules/{module}/compute.js'] = document['script']
+            files[f'modules/{module}/cases.json'] = document['cases']
         draft_id = "edit-" + datetime.now().strftime("%Y%m%d-%H%M%S-%f")
         self.registry.save_draft(
             author=self._local_author(), draft_id=draft_id, files=files,
@@ -107,12 +113,26 @@ class LabService:
     def finalize_local_version(self, *, draft_id: str, description: str) -> dict[str, Any]:
         author = self._local_author()
         metadata, files = self.registry.load_draft(author=author, draft_id=draft_id)
-        # Store the complete package so future main edits cannot alter this version.
-        complete = {**self.registry.effective_skills("main", "team"), **files}
+        from .skill_versions import COMPLETE_METHOD_PATHS, transfer_content_identity
+        # Only a complete frozen draft can become a new transferable version.
+        # Old partial drafts must be recreated from an explicit selected version.
+        if set(files) != COMPLETE_METHOD_PATHS:
+            raise LabServiceError('旧草稿基底不完整，请从所选版本新建草稿后保存')
+        complete = files
         manifest = SkillVersionManifest.create(
             version_id=draft_id, author=author, base_main_sha=metadata["base_main_sha"],
             files=complete, description=description.strip() or draft_id,
         )
+        content_id = transfer_content_identity(manifest, complete)
+        for row in self.registry.list_versions():
+            if row['version_id'] == 'main':
+                continue
+            try:
+                original, original_files = self.registry.transfer_package(row['version_id'], row['author'])
+                if transfer_content_identity(original, original_files) == content_id:
+                    return {'version_id': original.version_id, 'author': original.author, 'already_local': True}
+            except Exception:
+                continue
         self.registry.install(manifest=manifest, files=complete, commit_sha="local:" + manifest.identity())
         return {"version_id": draft_id, "author": author}
 
@@ -599,20 +619,26 @@ class LabService:
         }
 
     def check_team_updates(self) -> list[dict[str, Any]]:
-        client = self._github_client(require_token=False)
-        installed = {
-            (row.get("author"), row.get("version_id"), row.get("source_commit_sha"))
-            for row in self.registry.list_versions()
-        }
-        output = []
-        for row in client.list_remote_versions():
-            output.append({
-                **row,
-                "installed": (
-                    row.get("author"), row.get("version_id"), row.get("commit_sha")
-                ) in installed,
-            })
-        return output
+        transfer = self._method_transfer()
+        return [transfer.public(row) for row in transfer.catalog(self._github_client())]
+
+    def _method_transfer(self):
+        from .method_transfer import MethodTransfer
+        if not hasattr(self, '_transfer'):
+            self._transfer = MethodTransfer(self.registry)
+        return self._transfer
+
+    def open_method_transfer(self, direction):
+        settings = self.settings.load()
+        return self._method_transfer().open(direction, self._github_client(),
+            login=str(settings.get('github_login', '')),
+            upload_allowed=settings.get('github_upload_allowed') is True)
+
+    def transfer_methods(self, operation_id, keys):
+        settings = self.settings.load()
+        return self._method_transfer().execute(operation_id, keys, self._github_client(),
+            login=str(settings.get('github_login', '')),
+            upload_allowed=settings.get('github_upload_allowed') is True)
 
     def install_team_version(self, *, branch: str, author: str, version_id: str) -> dict[str, Any]:
         manifest, files, commit = self._github_client().download_version(
