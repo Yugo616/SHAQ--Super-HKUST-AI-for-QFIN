@@ -56,3 +56,12 @@
 #method-transfer-modal::backdrop{background:rgba(20,30,45,.45)}
 #method-transfer-detail{overflow:auto;max-height:72vh}
 .transfer-table{overflow-x:auto}.transfer-hash{overflow-wrap:anywhere;user-select:text}
+/* Choice controls must never inherit full-width text-field geometry. */
+input[type=checkbox],input[type=radio]{width:16px;height:16px;min-width:16px;flex:0 0 16px;padding:0;margin:0;vertical-align:middle;accent-color:var(--blue)}
+.check-row,.card label.check-row{display:flex;align-items:flex-start;gap:8px;line-height:1.5}
+.check-row input{margin-top:3px}
+/* Long provider errors and model names must wrap inside the settings grid. */
+.setup-steps>section{grid-template-columns:36px minmax(0,1fr)}
+.setup-steps>section>div,.form-grid>*,.connection-choices>*{min-width:0}
+.inline-status{overflow-wrap:anywhere}
+.replay-modal-header{margin-bottom:0}

@@ -111,6 +111,8 @@ jobs:
         run: python packaging/build_native.py
       - name: Validate all application tests
         run: python -m unittest discover -s tests -v
+      - name: Check native desktop layout at normal and narrow widths
+        run: python tests/native_layout_check.py --output desktop-layout.json
       - name: Full installed native delta update and replay acceptance
         run: python packaging/installed_update_acceptance.py
       - name: Collect complete Windows delivery acceptance, then fail on any unsuccessful stage

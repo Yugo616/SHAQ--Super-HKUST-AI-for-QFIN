@@ -16,7 +16,7 @@ function renderSoftwareUpdate(value) {
   target.innerHTML=`<h3>${labels[value.status]||'检查完成'}</h3><p>${esc(value.platform||'')} · 当前 ${esc(value.current_version)}${value.latest_version?` · 最新 ${esc(value.latest_version)}${value.internal_test_release?'（内部测试版）':''}`:''}</p>
     <p>${esc(value.waiting_for_idle?'已下载，等待本地任务运行完更新':value.message||'旧安装仅提供完整安装包：请等待分析和结算结束，关闭应用后安装。')}</p>
     ${value.target_version?`<p>更新目标版本：${esc(value.target_version)}</p>`:''}
-    <label><input type="checkbox" id="automatic-software-update" ${value.automatic_enabled?'checked':''}>自动软件更新（默认关闭）</label>
+    <label class="check-row"><input type="checkbox" id="automatic-software-update" ${value.automatic_enabled?'checked':''}>自动软件更新（默认关闭）</label>
     <p>仅在应用打开时自动检查、下载，并等待所有本地任务结束后更新重启；不会更改自动预测开关、模型或方法包。</p>
     <p>最近检查：${timestamp(value.last_checked_at)}<br>上次成功更新：${value.last_update?`${esc(value.last_update.version)} · ${value.last_update.method==='automatic'?'自动':'手动'} · ${timestamp(value.last_update.completed_at)}`:'暂无已确认记录'}</p>
     ${managed?`<p>预计下载 ${size(value.download_size_bytes)}；完整包 ${size(value.size_bytes)}</p>`:''}
