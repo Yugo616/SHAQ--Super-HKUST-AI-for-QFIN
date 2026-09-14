@@ -1,6 +1,7 @@
 """Prepare one verified public full package for the final native delta build."""
 from contextlib import nullcontext
 import json
+import os
 from pathlib import Path
 import re
 import tempfile
@@ -44,14 +45,20 @@ def prepare_public_base(root, output, version, system, machine, *, client=None):
     receipt = dict(status='first-managed-release', target_version=version, channel=channel,
                    repository=repository, base_version=None,
                    fallback='full package for clients without the selected base')
-    # A new unauthenticated client: no app/user token, Git credential or GitHub CLI state.
+    # Actions supplies only its read-only build token; never read user/Git CLI credentials.
+    # https://docs.github.com/en/actions/tutorials/authenticate-with-github_token
+    api_headers = {'Accept': 'application/vnd.github+json'}
+    build_token = os.environ.get('SHAQ_BUILD_GITHUB_TOKEN')
+    if build_token:
+        api_headers['Authorization'] = 'Bearer ' + build_token
+    # Keep authentication request-local, never on the client or asset downloads.
     with (nullcontext(client) if client is not None else httpx.Client(timeout=HTTP_TIMEOUT_SECONDS)) as request:
         candidates = []
         page = 1
         while True:
             response = request.get(f'https://api.github.com/repos/{repository}/releases',
                                    params={'per_page': RELEASES_PER_PAGE, 'page': page},
-                                   headers={'Accept': 'application/vnd.github+json'})
+                                   headers=api_headers, follow_redirects=False)
             response.raise_for_status()
             rows = response.json()
             if not isinstance(rows, list):

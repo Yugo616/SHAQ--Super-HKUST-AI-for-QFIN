@@ -1,6 +1,7 @@
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
 import tempfile
 import sys
@@ -41,6 +42,60 @@ def release(version, channel=CHANNEL):
 
 
 class ReleaseFeedTests(unittest.TestCase):
+    def test_build_token_authenticates_only_release_listing_not_downloads_or_receipts(self):
+        helper = module()
+        row, responses = release('0.7.0')
+        token = 'fixture-build-token'
+        api = f'https://api.github.com/repos/{REPO}/releases'
+        for configured in ('', token):
+            with self.subTest(authenticated=bool(configured)), tempfile.TemporaryDirectory() as directory:
+                output = Path(directory)/'feed'; calls = []
+                def transport(request):
+                    calls.append(str(request.url))
+                    if str(request.url).split('?')[0] == api:
+                        if request.headers.get('Authorization') != 'Bearer ' + token:
+                            return httpx.Response(403, json={'message': 'API rate limit exceeded'})
+                        return httpx.Response(200, json=[row])
+                    self.assertNotIn('authorization', request.headers)
+                    url = str(request.url)
+                    if request.url.host == 'github.com':
+                        return httpx.Response(302, headers={'Location': 'https://release-assets.githubusercontent.com/'+request.url.path.rsplit('/', 1)[-1]})
+                    self.assertEqual(request.url.host, 'release-assets.githubusercontent.com')
+                    value = next(value for url, value in responses.items() if url.endswith(request.url.path))
+                    return httpx.Response(200, content=value) if isinstance(value, bytes) else httpx.Response(200, json=value)
+                with patch.dict(os.environ, {'SHAQ_BUILD_GITHUB_TOKEN': configured}), \
+                        httpx.Client(transport=httpx.MockTransport(transport), follow_redirects=True) as client:
+                    if configured:
+                        receipt = helper.prepare_public_base(ROOT, output, '0.8.0', 'Darwin', 'arm64', client=client)
+                        self.assertEqual(receipt['status'], 'public-base')
+                        self.assertEqual(len(calls), 5)
+                        self.assertNotIn(token, json.dumps(receipt))
+                        self.assertTrue(all(token.encode() not in path.read_bytes() for path in output.iterdir()))
+                    else:
+                        with self.assertRaises(httpx.HTTPStatusError) as raised:
+                            helper.prepare_public_base(ROOT, output, '0.8.0', 'Darwin', 'arm64', client=client)
+                        self.assertEqual(raised.exception.response.status_code, 403)
+                        self.assertFalse(output.exists())
+                    self.assertNotIn('authorization', client.headers)
+
+    def test_authenticated_listing_redirect_is_rejected_even_with_redirect_enabled_client(self):
+        helper = module()
+        for destination in (f'https://api.github.com/repos/{REPO}/other', 'https://example.com/redirect'):
+            with self.subTest(destination=destination), tempfile.TemporaryDirectory() as directory:
+                calls = []
+                def transport(request):
+                    calls.append(str(request.url))
+                    if len(calls) == 1:
+                        return httpx.Response(302, headers={'Location': destination})
+                    return httpx.Response(200, json=[])
+                with patch.dict(os.environ, {'SHAQ_BUILD_GITHUB_TOKEN': 'fixture-build-token'}), \
+                        httpx.Client(transport=httpx.MockTransport(transport), follow_redirects=True) as client:
+                    with self.assertRaises(httpx.HTTPStatusError) as raised:
+                        helper.prepare_public_base(ROOT, Path(directory)/'feed', '0.8.0', 'Darwin', 'arm64', client=client)
+                    self.assertEqual(raised.exception.response.status_code, 302)
+                self.assertEqual(len(calls), 1)
+                self.assertFalse((Path(directory)/'feed').exists())
+
     def test_final_managed_cli_prepares_exact_pack_output_on_each_native_platform(self):
         spec = importlib.util.spec_from_file_location('build_desktop', ROOT/'packaging/build_desktop.py')
         build = importlib.util.module_from_spec(spec); spec.loader.exec_module(build)

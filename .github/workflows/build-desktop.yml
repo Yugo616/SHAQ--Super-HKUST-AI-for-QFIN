@@ -86,11 +86,13 @@ jobs:
         shell: pwsh
         env:
           SHAQ_BUILD_VERSION: ${{ steps.native-config.outputs.candidate }}
+          SHAQ_BUILD_GITHUB_TOKEN: ${{ github.token }}
         run: .\packaging\build_windows.ps1 ${{ job.status != 'success' && '-UpstreamFailed' || '' }}
       - name: Build macOS disk image
         if: runner.os == 'macOS'
         env:
           SHAQ_BUILD_VERSION: ${{ steps.native-config.outputs.candidate }}
+          SHAQ_BUILD_GITHUB_TOKEN: ${{ github.token }}
         run: zsh packaging/build_macos.sh
       - name: Install from DMG, settle both methods, reopen and inspect native window
         if: runner.os == 'macOS'
