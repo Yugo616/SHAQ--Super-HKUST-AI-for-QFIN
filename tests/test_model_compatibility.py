@@ -268,9 +268,96 @@ class ModelCompatibilityTests(unittest.TestCase):
                 os.environ, environment, clear=True
             ), patch.object(
                 model_backends.shutil, "which", return_value=str(user / "claude.cmd")
+            ), patch.object(
+                model_backends.subprocess, "run", return_value=subprocess.CompletedProcess(
+                    args=[], returncode=0, stdout="2.1.211 (Claude Code)\n", stderr=""
+                )
             ):
                 actual = model_backends._local_cli(profile)
         self.assertEqual(actual, str(native))
+
+    def test_windows_codex_discovers_bounded_versioned_vendor_install_and_skips_stale(self) -> None:
+        """Removing the bounded version scan or first-usable fallback must fail."""
+
+        with tempfile.TemporaryDirectory() as name:
+            local = Path(name) / "Users" / "李 小明" / "AppData" / "Local"
+            vendor = local / "OpenAI" / "Codex" / "bin"
+            stale = vendor / "z-stale-build" / "codex.exe"
+            usable = vendor / "a-changing-opaque-id" / "codex.exe"
+            for path in (stale, usable):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"fixture")
+            profile = ModelProfile(
+                profile_id="codex", protocol="codex-cli", base_url="",
+                model="subscription-default",
+            )
+            calls = []
+
+            def identify(command, **kwargs):
+                calls.append((command, kwargs))
+                if Path(command[0]) == stale:
+                    return subprocess.CompletedProcess(command, 1, "", "stale")
+                return subprocess.CompletedProcess(command, 0, "codex-cli 0.116.0\n", "")
+
+            with patch.object(sys, "platform", "win32"), patch.dict(
+                os.environ, {"LOCALAPPDATA": str(local)}, clear=True
+            ), patch.object(model_backends.shutil, "which", return_value=None), patch.object(
+                model_backends.subprocess, "run", side_effect=identify
+            ):
+                actual = model_backends._local_cli(profile)
+
+        self.assertEqual(actual, str(usable))
+        self.assertEqual([row[0] for row in calls], [
+            [str(stale), "--version"], [str(usable), "--version"],
+        ])
+        self.assertTrue(all(row[1]["shell"] is False for row in calls))
+
+    def test_windows_rejects_claude_desktop_alias_before_execution(self) -> None:
+        """A WindowsApps PATH alias must never be launched as Claude Code."""
+
+        profile = ModelProfile(
+            profile_id="claude", protocol="claude-code", base_url="",
+            model="subscription-default",
+        )
+        alias = str(PureWindowsPath("C:/Users/李 小明/AppData/Local/Microsoft/WindowsApps/Claude.exe"))
+        with patch.object(sys, "platform", "win32"), patch.dict(
+            os.environ, {}, clear=True
+        ), patch.object(model_backends.shutil, "which", return_value=alias), patch.object(
+            model_backends.subprocess, "run"
+        ) as run:
+            with self.assertRaisesRegex(ModelBackendError, "Claude Desktop"):
+                model_backends._local_cli(profile)
+        run.assert_not_called()
+
+    def test_windows_reports_unusable_executable_separately_from_missing(self) -> None:
+        """A present binary with an invalid identity must not be reported as absent."""
+
+        profile = ModelProfile(
+            profile_id="codex", protocol="codex-cli", base_url="",
+            model="subscription-default",
+        )
+        with tempfile.TemporaryDirectory() as name:
+            local = Path(name) / "Local"
+            candidate = local / "OpenAI/Codex/bin/build/codex.exe"
+            candidate.parent.mkdir(parents=True)
+            candidate.write_bytes(b"fixture")
+            with patch.object(sys, "platform", "win32"), patch.dict(
+                os.environ, {"LOCALAPPDATA": str(local)}, clear=True
+            ), patch.object(model_backends.shutil, "which", return_value=None), patch.object(
+                model_backends.subprocess, "run", return_value=subprocess.CompletedProcess(
+                    args=[], returncode=0, stdout="not codex\n", stderr=""
+                )
+            ):
+                with self.assertRaisesRegex(ModelBackendError, "无法使用") as unusable:
+                    model_backends._local_cli(profile)
+        self.assertEqual(unusable.exception.diagnostic["kind"], "executable_unusable")
+
+        with patch.object(sys, "platform", "win32"), patch.dict(
+            os.environ, {}, clear=True
+        ), patch.object(model_backends.shutil, "which", return_value=None):
+            with self.assertRaisesRegex(ModelBackendError, "未找到") as missing:
+                model_backends._local_cli(profile)
+        self.assertEqual(missing.exception.diagnostic["kind"], "executable_missing")
 
     def test_windows_legacy_cmd_launcher_is_rejected_before_execution(self) -> None:
         """A legacy shim must not place model arguments behind cmd.exe parsing."""
@@ -316,7 +403,10 @@ class ModelCompatibilityTests(unittest.TestCase):
             profile_id="claude", protocol="claude-code", base_url="",
             model="subscription-default",
         )
-        auth = subprocess.CompletedProcess(args=[], returncode=0, stdout="authenticated", stderr="")
+        auth = subprocess.CompletedProcess(
+            args=[], returncode=0,
+            stdout=json.dumps({"loggedIn": True, "authMethod": "claude.ai"}), stderr="",
+        )
         structured = subprocess.CompletedProcess(
             args=[], returncode=0,
             stdout=json.dumps({
@@ -376,7 +466,8 @@ class ModelCompatibilityTests(unittest.TestCase):
         )
         failed_auth = subprocess.CompletedProcess(
             args=[], returncode=1,
-            stdout="", stderr="ANTHROPIC_API_KEY=do-not-leak login expired",
+            stdout=json.dumps({"loggedIn": False}),
+            stderr="ANTHROPIC_API_KEY=do-not-leak login expired",
         )
         for platform_name, executable in (("darwin", "claude"), ("win32", "claude.exe")):
             with self.subTest(platform=platform_name), patch.object(
@@ -389,6 +480,98 @@ class ModelCompatibilityTests(unittest.TestCase):
                 with self.assertRaisesRegex(ModelBackendError, "登录") as raised:
                     probe_model_profile(profile=profile, secret="")
             self.assertNotIn("do-not-leak", str(raised.exception))
+
+    def test_local_auth_status_distinguishes_unsigned_malformed_and_timeout(self) -> None:
+        """Malformed/timeout status checks must not be mislabeled as signed-out users."""
+
+        profile = ModelProfile(
+            profile_id="claude", protocol="claude-code", base_url="",
+            model="subscription-default",
+        )
+        cases = [
+            (
+                subprocess.CompletedProcess([], 1, json.dumps({"loggedIn": False}), ""),
+                "尚未登录", "authentication",
+            ),
+            (subprocess.CompletedProcess([], 0, "not-json", ""), "JSON", "status_invalid"),
+            (subprocess.TimeoutExpired(["claude", "auth", "status"], 10), "超时", "timeout"),
+        ]
+        for outcome, message, kind in cases:
+            run_options = (
+                {"side_effect": outcome}
+                if isinstance(outcome, BaseException)
+                else {"return_value": outcome}
+            )
+            with self.subTest(kind=kind), patch.object(
+                model_backends, "_local_cli", return_value="claude.exe"
+            ), patch.object(model_backends.subprocess, "run", **run_options), patch.object(
+                model_backends, "call_structured",
+                return_value=({"status": "ready"}, {"backend": "fixture"}),
+            ) as structured:
+                with self.assertRaisesRegex(ModelBackendError, message) as raised:
+                    probe_model_profile(profile=profile, secret="")
+                self.assertIsInstance(raised.exception.diagnostic, dict)
+                if isinstance(raised.exception.diagnostic, dict):
+                    self.assertEqual(raised.exception.diagnostic["kind"], kind)
+                structured.assert_not_called()
+
+    def test_codex_unsigned_status_offers_codex_login_without_model_call(self) -> None:
+        profile = ModelProfile(
+            profile_id="codex", protocol="codex-cli", base_url="",
+            model="subscription-default",
+        )
+        unsigned = subprocess.CompletedProcess(
+            ["codex.exe", "login", "status"], 1, "Not logged in\n", ""
+        )
+        with patch.object(
+            model_backends, "_local_cli", return_value="codex.exe"
+        ), patch.object(
+            model_backends.subprocess, "run", return_value=unsigned
+        ), patch.object(model_backends, "call_structured") as structured:
+            with self.assertRaisesRegex(ModelBackendError, "尚未登录") as raised:
+                probe_model_profile(profile=profile, secret="")
+        self.assertEqual(raised.exception.diagnostic, {
+            "kind": "authentication", "protocol": "codex-cli",
+            "login_protocol": "codex-cli",
+        })
+        structured.assert_not_called()
+
+    def test_local_login_action_uses_only_fixed_native_commands_and_returns_no_raw_output(self) -> None:
+        """User-controlled data must never enter the browser-login command or receipt."""
+
+        login = getattr(model_backends, "begin_local_subscription_login", None)
+        self.assertIsNotNone(login)
+        if login is None:
+            return
+        for protocol, executable, expected in (
+            ("codex-cli", "codex.exe", ["codex.exe", "login"]),
+            ("claude-code", "claude.exe", ["claude.exe", "auth", "login"]),
+        ):
+            profile = ModelProfile(
+                profile_id="local", protocol=protocol, base_url="",
+                model="subscription-default",
+            )
+            completed = subprocess.CompletedProcess(
+                expected, 0, "https://oauth.example/do-not-persist", "token=do-not-persist"
+            )
+            with self.subTest(protocol=protocol), patch.object(
+                model_backends, "_local_cli", return_value=executable
+            ), patch.object(model_backends.subprocess, "run", return_value=completed) as run:
+                receipt = login(profile)
+            self.assertEqual(receipt, {"protocol": protocol, "status": "login-completed"})
+            self.assertEqual(run.call_args.args[0], expected)
+            self.assertIs(run.call_args.kwargs["shell"], False)
+            self.assertGreater(run.call_args.kwargs["timeout"], 0)
+            self.assertNotIn("do-not-persist", json.dumps(receipt))
+
+        api = ModelProfile(
+            profile_id="api", protocol="openai-responses",
+            base_url="https://api.openai.com/v1", model="gpt-test",
+        )
+        with patch.object(model_backends.subprocess, "run") as run:
+            with self.assertRaisesRegex(ModelBackendError, "本机订阅"):
+                login(api)
+        run.assert_not_called()
 
     def test_profile_identity_stays_stable_when_request_policy_changes(self) -> None:
         """Request transport changes must not split historical model/account series."""

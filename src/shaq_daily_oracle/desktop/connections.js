@@ -90,6 +90,12 @@ function showConnectionState(value) {
   status.textContent=value.message;
   status.dataset.status=value.status;
   actions.classList.toggle('hidden',value.status!=='failed');
+  const login=q('#login-model'),loginProtocol=value.diagnostic?.login_protocol||'';
+  if(login?.dataset) {
+    login.dataset.protocol=loginProtocol;
+    login.textContent=loginProtocol==='codex-cli'?'登录 Codex':loginProtocol==='claude-code'?'登录 Claude Code':'登录本机模型';
+    login.classList.toggle('hidden',!loginProtocol);
+  }
   for(const button of qa('#model-step button:not([data-install-model])')) {
     button.disabled=value.status==='testing';
   }
@@ -113,6 +119,20 @@ async function connectLocalModel(protocol) {
   if(await connectionController().test(profile,''))await load(false);
 }
 
+async function loginLocalModel() {
+  const protocol=q('#login-model')?.dataset?.protocol;
+  if(!['codex-cli','claude-code'].includes(protocol))return;
+  showConnectionState({status:'testing',message:'正在打开本机浏览器登录…'});
+  try {
+    await api('begin_local_model_login',protocol);
+    await connectLocalModel(protocol);
+  } catch(error) {
+    const diagnostic={...(error?.diagnostic||{}),login_protocol:protocol};
+    showConnectionState({status:'failed',diagnostic,
+      message:SHAQConnections.diagnosticMessage(error?.diagnostic,error?.message)});
+  }
+}
+
 async function copyConnectionError() {
   const text=q('#model-status').textContent;
   try {
@@ -131,6 +151,7 @@ function bindModelConnections() {
   const form=q('#model-form');
   q('#connect-codex').onclick=()=>connectLocalModel('codex-cli');
   q('#connect-claude').onclick=()=>connectLocalModel('claude-code');
+  q('#login-model').onclick=loginLocalModel;
   q('#show-api-form').onclick=()=>{
     form.classList.remove('hidden');applyProtocolPreset();
   };

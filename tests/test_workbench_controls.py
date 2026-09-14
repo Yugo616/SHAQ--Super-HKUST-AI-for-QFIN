@@ -2,7 +2,7 @@ import json
 import subprocess
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).parents[1]
 
@@ -205,6 +205,77 @@ console.log(JSON.stringify(html));''')
             opened.assert_called_once_with('https://code.claude.com/docs/en/setup')
             self.assertFalse(bridge.open_model_installation('https://evil.example')['ok'])
             self.assertEqual(opened.call_count, 1)
+
+    def test_local_login_starts_only_after_explicit_click_then_retests_before_save(self):
+        result = self.node('connections.js', '''
+(async()=>{
+const nodes={
+ '#model-status':{textContent:'',dataset:{}},
+ '#model-error-actions':{classList:{toggle(){}}},
+ '#login-model':{dataset:{},textContent:'',classList:{toggle(name,hidden){this.hidden=hidden}}}
+};
+globalThis.q=selector=>nodes[selector]||={classList:{toggle(){}}};
+globalThis.qa=()=>[];let saveAttempts=0;const calls=[];
+globalThis.api=async(name,...args)=>{calls.push([name,...args]);if(name==='save_lab_model_profile'&&++saveAttempts===1){
+ const error=new Error('尚未登录');error.diagnostic={kind:'authentication',login_protocol:'codex-cli'};throw error;
+}return {ok:true}};
+globalThis.load=async()=>{};
+await connectLocalModel('codex-cli');const before=calls.map(x=>x[0]);
+const protocol=nodes['#login-model'].dataset.protocol;
+await loginLocalModel();
+console.log(JSON.stringify({before,after:calls.map(x=>x[0]),protocol}));
+})();''')
+        self.assertEqual(result['before'], ['save_lab_model_profile'])
+        self.assertEqual(result['after'], [
+            'save_lab_model_profile', 'begin_local_model_login', 'save_lab_model_profile'
+        ])
+        self.assertEqual(result['protocol'], 'codex-cli')
+
+    def test_cancelled_local_login_does_not_retry_or_switch_provider(self):
+        result = self.node('connections.js', '''
+(async()=>{
+const nodes={
+ '#model-status':{textContent:'',dataset:{}},
+ '#model-error-actions':{classList:{toggle(){}}},
+ '#login-model':{dataset:{protocol:'claude-code'},textContent:'',classList:{toggle(){}}}
+};
+globalThis.q=selector=>nodes[selector]||={classList:{toggle(){}}};globalThis.qa=()=>[];
+const calls=[];globalThis.api=async(name,...args)=>{calls.push([name,...args]);throw new Error('用户已取消')};
+await loginLocalModel();
+console.log(JSON.stringify({calls,status:nodes['#model-status'].dataset.status,
+ message:nodes['#model-status'].textContent}));
+})();''')
+        self.assertEqual([row[0] for row in result['calls']], ['begin_local_model_login'])
+        self.assertEqual(result['calls'][0][1], 'claude-code')
+        self.assertEqual(result['status'], 'failed')
+        self.assertIn('取消', result['message'])
+
+    def test_bridge_login_action_rejects_api_protocol_without_subprocess(self):
+        from shaq_daily_oracle.desktop import DesktopBridge
+        bridge = object.__new__(DesktopBridge)
+        with patch('shaq_daily_oracle.model_backends.subprocess.run') as run:
+            result = bridge.begin_local_model_login('openai-responses')
+        self.assertFalse(result['ok'])
+        run.assert_not_called()
+
+    def test_failed_local_probe_never_reaches_profile_storage(self):
+        from shaq_daily_oracle import lab_service
+        from shaq_daily_oracle.lab_service import LabService
+        from shaq_daily_oracle.model_backends import ModelBackendError
+
+        lab = object.__new__(LabService)
+        lab.settings = Mock()
+        profile = {
+            'profile_id':'my-codex','protocol':'codex-cli','base_url':'',
+            'model':'subscription-default',
+        }
+        with patch.object(
+            lab_service, 'probe_model_profile',
+            side_effect=ModelBackendError('用户取消或登录失败'),
+        ):
+            with self.assertRaises(ModelBackendError):
+                lab.save_model_profile(profile, secret='', probe=True)
+        lab.settings.save_model_profile.assert_not_called()
 
     def test_late_comparison_response_cannot_replace_new_selection(self):
         value=self.node('comparison.js', '''

@@ -28,7 +28,8 @@ def module():
 
 
 def release(version, channel=CHANNEL):
-    tag = f'lab-v{version}-macos'
+    suffix = 'windows' if channel.startswith('win-') else 'macos'
+    tag = f'lab-v{version}-{suffix}'
     base = f'https://github.com/{REPO}/releases/download/{tag}/'
     filename = f'SHAQDailyOracleLab-{version}-{channel}-full.nupkg'
     asset = dict(PackageId='SHAQDailyOracleLab', Version=version, Type='Full',
@@ -136,7 +137,7 @@ class ReleaseFeedTests(unittest.TestCase):
                     self.assertEqual(json.loads((output/f'assets.{channel}.json').read_text()),
                                      [dict(Type='Installer', RelativeFileName=setup_name)])
 
-    def prepare(self, rows, responses, target='0.8.0'):
+    def prepare(self, rows, responses, target='0.8.0', system='Darwin', machine='arm64'):
         helper = module()
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / 'final feed 中文'
@@ -155,10 +156,27 @@ class ReleaseFeedTests(unittest.TestCase):
                 return httpx.Response(200, content=value) if isinstance(value, bytes) else httpx.Response(200, json=value)
 
             with httpx.Client(transport=httpx.MockTransport(transport)) as client:
-                receipt = helper.prepare_public_base(ROOT, output, target, 'Darwin', 'arm64', client=client)
+                receipt = helper.prepare_public_base(ROOT, output, target, system, machine, client=client)
             files = {p.name: p.read_bytes() for p in output.iterdir()}
-            self.assertEqual(json.loads(files['delta-base.osx-arm64-stable.json']), receipt)
+            self.assertEqual(json.loads(files[f'delta-base.{receipt["channel"]}.json']), receipt)
             return receipt, files, calls
+
+    def test_patch_071_windows_stages_public_070_base_without_internal_fixtures(self):
+        row, responses = release('0.7.0', 'win-x64-stable')
+        receipt, files, _ = self.prepare(
+            [row], responses, target='0.7.1', system='Windows', machine='AMD64'
+        )
+        self.assertEqual(receipt['status'], 'public-base')
+        self.assertEqual(receipt['base_version'], '0.7.0')
+        self.assertIn('SHAQDailyOracleLab-0.7.0-win-x64-stable-full.nupkg', files)
+        self.assertFalse(any(version in name for version in ('0.6.98', '0.6.99') for name in files))
+
+    def test_release_metadata_targets_patch_071(self):
+        import tomllib
+        project = tomllib.loads((ROOT / 'pyproject.toml').read_text(encoding='utf-8'))
+        tools = json.loads((ROOT / 'packaging/updater-toolchain.json').read_text(encoding='utf-8'))
+        self.assertEqual(project['project']['version'], '0.7.1')
+        self.assertEqual(tools['candidate_version'], '0.7.1')
 
     def test_first_managed_release_writes_truthful_full_only_receipt(self):
         legacy, _ = release('0.6.2'); legacy['assets'] = []

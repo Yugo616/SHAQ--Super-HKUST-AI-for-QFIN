@@ -35,6 +35,9 @@ SUPPORTED_PROTOCOLS = {
     "claude-code",
 }
 SUPPORTED_OUTPUT_MODES = {"strict", "local_validated"}
+CLI_IDENTITY_TIMEOUT_SECONDS = 5
+CLI_STATUS_TIMEOUT_SECONDS = 10
+CLI_LOGIN_TIMEOUT_SECONDS = 180
 
 
 @dataclass(frozen=True)
@@ -247,40 +250,110 @@ def find_desktop_cli(executable: str, search_roots: list[Path]) -> str | None:
     return None
 
 
+def _windows_cli_candidates(profile: ModelProfile) -> tuple[list[str], bool]:
+    """Return bounded, deterministic native candidates and whether Desktop shadowed Claude."""
+
+    executable = "codex" if profile.protocol == "codex-cli" else "claude"
+    values: list[str] = []
+
+    def add(path: Path | str | None, *, require_file: bool = True) -> None:
+        if not path:
+            return
+        candidate = Path(path)
+        if require_file and not candidate.is_file():
+            return
+        text = str(path)
+        if text not in values:
+            values.append(text)
+
+    user_profile = os.environ.get("USERPROFILE", "")
+    local_app_data = os.environ.get("LOCALAPPDATA", "")
+    app_data = os.environ.get("APPDATA", "")
+    if profile.protocol == "codex-cli":
+        if local_app_data:
+            vendor_bin = Path(local_app_data) / "OpenAI" / "Codex" / "bin"
+            add(vendor_bin / "codex.exe")
+            if vendor_bin.is_dir():
+                try:
+                    directories = sorted(
+                        (path for path in vendor_bin.iterdir() if path.is_dir()),
+                        key=lambda path: (path.name.casefold(), path.name),
+                        reverse=True,
+                    )
+                except OSError:
+                    directories = []
+                for directory in directories:
+                    add(directory / "codex.exe")
+        for value, suffix in (
+            (user_profile, Path(".local/bin")),
+            (local_app_data, Path("Programs")),
+            (app_data, Path("npm")),
+        ):
+            if value:
+                add(Path(value) / suffix / "codex.exe")
+    elif user_profile:
+        # Anthropic documents this native location; prefer it over every PATH entry.
+        add(Path(user_profile) / ".local" / "bin" / "claude.exe")
+
+    located = shutil.which(executable)
+    desktop_alias = bool(
+        profile.protocol == "claude-code"
+        and located
+        and "windowsapps" in str(located).replace("\\", "/").casefold().split("/")
+    )
+    if not desktop_alias:
+        add(located, require_file=False)
+    return values, desktop_alias
+
+
+def _verified_cli_identity(profile: ModelProfile, executable: str) -> bool:
+    try:
+        command = _cli_command(executable, ["--version"])
+        completed = subprocess.run(
+            command, text=True, encoding="utf-8", errors="replace",
+            capture_output=True, shell=False, timeout=CLI_IDENTITY_TIMEOUT_SECONDS,
+            env=_local_cli_environment(), check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired, ModelBackendError):
+        return False
+    if completed.returncode != 0:
+        return False
+    identity = (completed.stdout + "\n" + completed.stderr).strip()
+    if profile.protocol == "codex-cli":
+        return re.search(r"(?i)\bcodex(?:-cli)?\s+\d+\.\d+", identity) is not None
+    return re.search(r"(?i)\b\d+\.\d+\.\d+[^\r\n]*\(Claude Code\)", identity) is not None
+
+
 def _local_cli(profile: ModelProfile) -> str:
     executable = "codex" if profile.protocol == "codex-cli" else "claude"
     if sys.platform == "win32":
-        search_roots = [
-            Path(value) / suffix
-            for value, suffix in (
-                (os.environ.get("USERPROFILE", ""), Path(".local/bin")),
-                (os.environ.get("APPDATA", ""), Path("npm")),
-                (os.environ.get("LOCALAPPDATA", ""), Path("Programs")),
-            )
-            if value
-        ]
-        located = find_desktop_cli(f"{executable}.exe", search_roots)
-        if not located:
-            located = shutil.which(executable)
-        if not located:
-            located = next(
-                (
-                    candidate
-                    for launcher in (f"{executable}.cmd", f"{executable}.bat")
-                    if (candidate := find_desktop_cli(launcher, search_roots))
-                ),
-                None,
-            )
+        candidates, desktop_alias = _windows_cli_candidates(profile)
     else:
         located = shutil.which(executable) or find_desktop_cli(executable, [
             Path.home() / '.local/bin', Path('/opt/homebrew/bin'), Path('/usr/local/bin'),
             Path('/Applications'), Path.home() / 'Applications',
         ])
-    if not located:
+        candidates, desktop_alias = ([located] if located else []), False
+    for candidate in candidates:
+        if _verified_cli_identity(profile, candidate):
+            return candidate
+    if desktop_alias:
         raise ModelBackendError(
-            f"未找到 {executable}。请在此电脑先安装并登录，再回到应用连接。"
+            "检测到 WindowsApps 的 Claude Desktop 别名，而不是 Claude Code CLI。"
+            "请安装原生 Claude Code 后重新连接。",
+            diagnostic={"kind": "executable_unusable", "protocol": profile.protocol},
         )
-    return located
+    if candidates:
+        raise ModelBackendError(
+            f"已找到 {executable}，但无法使用或无法确认其 CLI 身份。",
+            diagnostic={"kind": "executable_unusable", "protocol": profile.protocol},
+        )
+    if not candidates:
+        raise ModelBackendError(
+            f"未找到 {executable}。请在此电脑先安装并登录，再回到应用连接。",
+            diagnostic={"kind": "executable_missing", "protocol": profile.protocol},
+        )
+    raise AssertionError("unreachable")
 
 
 def _local_cli_environment() -> dict[str, str]:
@@ -806,17 +879,59 @@ def probe_model_profile(*, profile: ModelProfile, secret: str) -> dict[str, Any]
         try:
             completed = subprocess.run(
                 command, text=True, encoding="utf-8", errors="replace",
-                capture_output=True, shell=False, timeout=10,
+                capture_output=True, shell=False, timeout=CLI_STATUS_TIMEOUT_SECONDS,
                 env=_local_cli_environment(), check=False,
             )
         except subprocess.TimeoutExpired as exc:
-            raise ModelBackendError("本地模型登录检查超时") from exc
+            raise ModelBackendError(
+                "本地模型登录状态检查超时",
+                diagnostic={"kind": "timeout", "protocol": profile.protocol,
+                            "stage": "authentication-status"},
+            ) from exc
+        except OSError as exc:
+            raise ModelBackendError(
+                "本地模型程序在登录状态检查前已无法使用",
+                diagnostic={"kind": "executable_unusable", "protocol": profile.protocol,
+                            "stage": "authentication-status"},
+            ) from exc
+        if profile.protocol == "claude-code":
+            try:
+                status = json.loads(completed.stdout)
+            except (json.JSONDecodeError, TypeError) as exc:
+                raise ModelBackendError(
+                    "Claude 登录状态未返回有效 JSON",
+                    diagnostic={"kind": "status_invalid", "protocol": profile.protocol,
+                                "stage": "authentication-status"},
+                ) from exc
+            if not isinstance(status, dict):
+                raise ModelBackendError(
+                    "Claude 登录状态 JSON 结构无效",
+                    diagnostic={"kind": "status_invalid", "protocol": profile.protocol,
+                                "stage": "authentication-status"},
+                )
+            if completed.returncode == 1:
+                raise ModelBackendError(
+                    "Claude Code 尚未登录",
+                    diagnostic={"kind": "authentication", "protocol": profile.protocol,
+                                "login_protocol": profile.protocol},
+                )
+        status_text = (completed.stdout + "\n" + completed.stderr)
+        if profile.protocol == "codex-cli" and (
+            completed.returncode == 1
+            or (completed.returncode == 0 and "Logged in" not in status_text)
+        ):
+            raise ModelBackendError(
+                "Codex 尚未登录 ChatGPT 账号",
+                diagnostic={"kind": "authentication", "protocol": profile.protocol,
+                            "login_protocol": profile.protocol},
+            )
         if completed.returncode != 0:
             detail = safe_model_error_summary(completed.stderr or completed.stdout)
-            raise ModelBackendError(f"本地模型登录检查失败：{detail}")
-        status_text = (completed.stdout + "\n" + completed.stderr)
-        if profile.protocol == "codex-cli" and "Logged in" not in status_text:
-            raise ModelBackendError("Codex 尚未登录 ChatGPT 账号")
+            raise ModelBackendError(
+                f"本地模型登录状态检查失败：{detail}",
+                diagnostic={"kind": "status_invalid", "protocol": profile.protocol,
+                            "stage": "authentication-status"},
+            )
     result, audit = call_structured(
         profile=profile,
         secret=secret,
@@ -828,3 +943,36 @@ def probe_model_profile(*, profile: ModelProfile, secret: str) -> dict[str, Any]
     if uses_local_subscription(profile):
         audit = {**audit, "connection": "local-subscription-ready"}
     return audit
+
+
+def begin_local_subscription_login(profile: ModelProfile) -> dict[str, str]:
+    """Run a fixed, user-requested native browser login without retaining its output."""
+
+    profile.validate()
+    if not uses_local_subscription(profile):
+        raise ModelBackendError("只能为本机订阅 CLI 启动登录")
+    executable = _local_cli(profile)
+    arguments = ["login"] if profile.protocol == "codex-cli" else ["auth", "login"]
+    command = _cli_command(executable, arguments)
+    try:
+        completed = subprocess.run(
+            command, text=True, encoding="utf-8", errors="replace",
+            capture_output=True, shell=False, timeout=CLI_LOGIN_TIMEOUT_SECONDS,
+            env=_local_cli_environment(), check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise ModelBackendError(
+            "登录操作超时或已取消；原有连接保持不变",
+            diagnostic={"kind": "login_timeout", "login_protocol": profile.protocol},
+        ) from exc
+    except OSError as exc:
+        raise ModelBackendError(
+            "无法启动本机登录；原有连接保持不变",
+            diagnostic={"kind": "executable_unusable", "login_protocol": profile.protocol},
+        ) from exc
+    if completed.returncode != 0:
+        raise ModelBackendError(
+            "登录未完成或已取消；原有连接保持不变",
+            diagnostic={"kind": "login_failed", "login_protocol": profile.protocol},
+        )
+    return {"protocol": profile.protocol, "status": "login-completed"}

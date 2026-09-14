@@ -168,6 +168,25 @@ class DesktopBridge:
             self.lab.save_model_profile, profile, secret=secret, probe=probe
         )
 
+    def begin_local_model_login(self, protocol: str) -> dict[str, Any]:
+        def login() -> dict[str, str]:
+            from .model_backends import (
+                ModelProfile,
+                begin_local_subscription_login,
+            )
+
+            if protocol not in {"codex-cli", "claude-code"}:
+                raise SettingsError("请选择 Codex 或 Claude Code 本机订阅")
+            profile = ModelProfile(
+                profile_id="login-check",
+                protocol=protocol,
+                base_url="",
+                model="subscription-default",
+            )
+            return begin_local_subscription_login(profile)
+
+        return self._result(login)
+
     def save_lab_setup(self, submitted: dict[str, Any]) -> dict[str, Any]:
         return self._result(self.lab.save_setup, submitted)
 
