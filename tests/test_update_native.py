@@ -30,7 +30,10 @@ class NativeUpdateTests(unittest.TestCase):
             file=Path(directory)/'bad.zip'
             for names in (('../outside',),('lib/app','lib/app')):
                 with zipfile.ZipFile(file,'w') as archive:
-                    for name in names:archive.writestr(name,b'content')
+                    for index,name in enumerate(names):
+                        if index:
+                            with self.assertWarnsRegex(UserWarning,'Duplicate name'):archive.writestr(name,b'content')
+                        else:archive.writestr(name,b'content')
                 with self.assertRaises(ValueError):update_native.package_content_sha256(file)
             for target in ('/etc/passwd','../../outside'):
                 with zipfile.ZipFile(file,'w') as archive:

@@ -3,9 +3,12 @@ import subprocess
 import json
 import time
 import unittest
+from unittest.mock import patch
+from types import SimpleNamespace
 from pathlib import Path
 
 from shaq_daily_oracle import update_gui
+from shaq_daily_oracle.update_admission import AdmissionGate, UpdateBusy, WorkerAdmission
 
 
 class Window:
@@ -23,9 +26,38 @@ class Window:
 
 
 class UpdateGuiTests(unittest.TestCase):
+    def test_paused_old_bridge_cannot_register_after_target_confirms(self):
+        with tempfile.TemporaryDirectory() as directory:
+            paths=SimpleNamespace(data_root=Path(directory),package_root=Path(__file__).parents[1])
+            old=WorkerAdmission(paths)
+            gate=old.gate
+            with gate.install():gate.mark_installing('0.7.0')
+            with gate.target_startup('0.7.0'):
+                fresh=WorkerAdmission(paths)
+                with update_gui.GuiSession(gate.root,Window(),admission=fresh):pass
+                gate.finish_restart('0.7.0')
+            with self.assertRaises(UpdateBusy):
+                with update_gui.GuiSession(gate.root,Window(),admission=old):pass
+
+    def test_registration_after_participant_discovery_is_rejected_during_install(self):
+        with tempfile.TemporaryDirectory() as directory:
+            gate=AdmissionGate(Path(directory))
+            late=update_gui.GuiSession(gate.root,Window())
+            with update_gui.GuiSession(gate.root,Window()) as owner:
+                discover=owner._live
+                def discover_then_register():
+                    participants=discover()
+                    with self.assertRaises(UpdateBusy):
+                        with late:pass
+                    return participants
+                with gate.install():
+                    gate.mark_installing('9.0.0')
+                    with patch.object(owner,'_live',side_effect=discover_then_register):owner.quiesce()
+                self.assertNotIn(late.token,owner._live())
+
     def test_target_window_does_not_consume_previous_generations_close_request(self):
         with tempfile.TemporaryDirectory() as directory:
-            root=Path(directory)
+            root=AdmissionGate(Path(directory)).root
             with update_gui.GuiSession(root, Window()) as owner:
                 owner.quiesce()
             target=Window()
@@ -57,7 +89,8 @@ console.log(JSON.stringify({other,newer,clean,partial,dataSaved:e.prepare(),froz
     def test_dirty_other_window_blocks_close_and_unfreezes_every_window(self):
         with tempfile.TemporaryDirectory() as directory:
             first, second = Window(), Window(True)
-            with update_gui.GuiSession(Path(directory), first) as owner, update_gui.GuiSession(Path(directory), second):
+            root=AdmissionGate(Path(directory)).root
+            with update_gui.GuiSession(root, first) as owner, update_gui.GuiSession(root, second):
                 with self.assertRaises(update_gui.UnsavedEdits):owner.quiesce()
                 self.assertFalse(first.closed or second.closed)
                 self.assertFalse(first.frozen or second.frozen)
@@ -65,7 +98,8 @@ console.log(JSON.stringify({other,newer,clean,partial,dataSaved:e.prepare(),froz
     def test_clean_other_window_closes_but_calling_window_waits_for_sdk_exit(self):
         with tempfile.TemporaryDirectory() as directory:
             first, second = Window(), Window()
-            with update_gui.GuiSession(Path(directory), first) as owner, update_gui.GuiSession(Path(directory), second):
+            root=AdmissionGate(Path(directory)).root
+            with update_gui.GuiSession(root, first) as owner, update_gui.GuiSession(root, second):
                 owner.quiesce()
                 self.assertTrue(second.closed)
                 self.assertFalse(first.closed)

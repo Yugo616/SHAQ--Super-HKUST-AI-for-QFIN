@@ -11,6 +11,7 @@ import uuid
 from filelock import FileLock, Timeout
 
 from .settings import _atomic_json
+from .update_admission import AdmissionGate
 
 
 class UnsavedEdits(RuntimeError):
@@ -19,17 +20,22 @@ class UnsavedEdits(RuntimeError):
 
 
 class GuiSession:
-    def __init__(self, root, window, *, timeout=10, poll=.05):
+    def __init__(self, root, window, *, admission=None, timeout=10, poll=.05):
         self.root, self.window = root / 'gui-sessions', window
+        self.admission = admission or AdmissionGate(root.parent)
         self.timeout, self.poll = timeout, poll
         self.token = uuid.uuid4().hex
         self.stop = threading.Event()
         self.request = self.root / 'request.json'
 
     def __enter__(self):
-        self.root.mkdir(parents=True, exist_ok=True)
-        self.lease = FileLock(str(self.root / (self.token + '.lock')), thread_local=False)
-        self.lease.acquire(timeout=0)
+        # Registration is work: either it is visible before install admission,
+        # or it is rejected. Production also supplies the bridge's immutable
+        # generation guard, covering a process paused across a complete update.
+        with self.admission.work():
+            self.root.mkdir(parents=True, exist_ok=True)
+            self.lease = FileLock(str(self.root / (self.token + '.lock')), thread_local=False)
+            self.lease.acquire(timeout=0)
         self.thread = threading.Thread(target=self._watch, daemon=True, name='shaq-gui-update')
         self.thread.start()
         return self

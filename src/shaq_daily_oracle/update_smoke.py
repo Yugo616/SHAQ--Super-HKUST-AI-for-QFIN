@@ -152,7 +152,7 @@ def main(argv=None):
             finally:
                 _atomic_json(root/(stage+'-result.json'),result)
                 window.destroy()
-        with GuiSession(gate.root,window) as session:
+        with GuiSession(gate.root,window,admission=bridge._runtime_admission) as session:
             runtime.gui_session=session
             webview.start(inspect,debug=False,private_mode=True)
     return 0 if result['status']=='passed' else 2

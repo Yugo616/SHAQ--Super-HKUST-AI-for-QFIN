@@ -707,7 +707,7 @@ def launch_desktop(*, smoke_output: Path | None = None) -> int:
             window.destroy()
     try:
         from .update_gui import GuiSession
-        with GuiSession(gate_for(bridge.paths).root, window) as session:
+        with GuiSession(gate_for(bridge.paths).root, window, admission=bridge._runtime_admission) as session:
             bridge._software_updater().gui_session = session
             webview.start(inspect_window if smoke_output else None, debug=False, private_mode=True)
     finally:
