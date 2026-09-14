@@ -25,12 +25,43 @@ class NativePackagingTests(unittest.TestCase):
         conditions = dict(re.findall(r'^  ([\w-]+):\n    if: ([^\n]+)',
             (ROOT / '.github/workflows/build-desktop.yml').read_text(), re.M))
         for target, expected in [('windows-layout', ['windows-layout-diagnostic']),
-                                 ('windows-check', ['windows-research-check']), ('windows', ['native'])]:
+                                 ('windows-check', ['windows-research-check']), ('windows', ['native']),
+                                 ('windows-validated', ['native'])]:
             with self.subTest(target=target):
                 script = 'const inputs={target:process.argv[2]};console.log(JSON.stringify([' + ','.join(
                     '('+condition+') ? '+json.dumps(name)+' : null' for name, condition in conditions.items()) + '].filter(Boolean)));'
                 result = subprocess.run(['node','-',target],input=script,text=True,capture_output=True,check=True)
                 self.assertEqual(json.loads(result.stdout),expected)
+
+    def test_validated_windows_keeps_clean_application_and_external_immutable_harness(self):
+        import re
+        workflow = (ROOT/'.github/workflows/build-desktop.yml').read_text()
+        native = workflow.split('\n  native:', 1)[1]
+        checkouts = re.findall(r'      - uses: actions/checkout@v4\n(.*?)(?=      - )', native, re.S)
+        self.assertEqual(len(checkouts), 2)
+        self.assertIn('ref: ${{ github.sha }}', checkouts[0])
+        self.assertIn("if: inputs.target == 'windows-validated'", checkouts[1])
+        self.assertIn('ref: ${{ inputs.application_ref }}', checkouts[1])
+        self.assertNotIn('path:', ''.join(checkouts))  # Frozen app is root, not nested/copied.
+        stage = native.split('name: Stage immutable',1)[1].split('      - uses:',1)[0]
+        for requirement in ("'^[a-fA-F0-9]{40}$'", '$validationSha -ne $env:GITHUB_SHA',
+                            "Join-Path $env:RUNNER_TEMP", 'git archive --format=tar --output=$archive $validationSha tests/native_layout_check.py tests/native_geometry.py packaging/windows_ci_display.py',
+                            'tar -xf $archive -C $harnessRoot'):
+            self.assertIn(requirement, stage)
+        self.assertIn('$applicationSha -ne $env:APPLICATION_REF -or (git status --porcelain)', native)
+        self.assertIn('application_sha=$applicationSha;validation_sha=$env:SHAQ_LAYOUT_VALIDATION_SHA', native)
+        self.assertIn('python $env:SHAQ_EXTERNAL_LAYOUT_HARNESS --output', native)
+        self.assertIn("if: inputs.target != 'windows-validated'\n        run: python tests/native_layout_check.py", native)
+        self.assertIn('$env:SHAQ_LAYOUT_APPLICATION_SHA -or (git status --porcelain)', native)
+        # Every non-layout acceptance command remains the clean application's own.
+        for command in ('python packaging/build_native.py', 'python -m unittest discover -s tests -v',
+                        'python packaging/installed_update_acceptance.py', '.\\packaging\\build_windows.ps1',
+                        'python scripts/validate_release.py'):
+            self.assertIn(command, native)
+        self.assertLess(native.index('python $env:SHAQ_EXTERNAL_DISPLAY_PREFLIGHT'), native.index('python packaging/build_native.py'))
+        diagnostic = workflow.split('  windows-layout-diagnostic:',1)[1].split('\n  native:',1)[0]
+        self.assertIn('python packaging/windows_ci_display.py --minimum-width 1520 --minimum-height 900', diagnostic)
+        self.assertLess(diagnostic.index('windows_ci_display.py'), diagnostic.index('windows_layout_dependencies.py'))
 
     def test_release_tags_never_trigger_the_three_platform_push_matrix(self):
         lines = (ROOT / '.github/workflows/build-desktop.yml').read_text().splitlines()
@@ -60,7 +91,7 @@ class NativePackagingTests(unittest.TestCase):
         lines = (ROOT / '.github/workflows/build-desktop.yml').read_text().splitlines()
         expression = next(line.strip().removeprefix('include: ') for line in lines if line.strip().startswith('include: ${{'))
         expression = expression.removeprefix('${{').removesuffix('}}')
-        expected = {'macos-arm64': ['macOS-Apple-Silicon'], 'macos-intel': ['macOS-Intel'], 'windows': ['Windows-x64'],
+        expected = {'windows-validated': ['Windows-x64'], 'macos-arm64': ['macOS-Apple-Silicon'], 'macos-intel': ['macOS-Intel'], 'windows': ['Windows-x64'],
                     'macos': ['macOS-Apple-Silicon', 'macOS-Intel'],
                     'all': ['Windows-x64', 'macOS-Apple-Silicon', 'macOS-Intel'],
                     '': ['Windows-x64', 'macOS-Apple-Silicon', 'macOS-Intel']}

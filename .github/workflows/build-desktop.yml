@@ -5,10 +5,10 @@ on:
       target:
         description: Complete acceptance for Windows, macOS, or all platforms at this commit
         type: choice
-        options: [windows, windows-check, windows-layout, macos, macos-arm64, macos-intel, all]
+        options: [windows, windows-check, windows-layout, windows-validated, macos, macos-arm64, macos-intel, all]
         default: windows
       application_ref:
-        description: Exact application commit for dependency-only Windows layout diagnostics
+        description: Exact application commit for Windows layout or validated Windows release route
         type: string
       native_run_id:
         description: Official native workflow run providing diagnostic dependency wheels
@@ -85,6 +85,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
+      - name: Provision ephemeral Windows runner display from supported native modes
+        run: python packaging/windows_ci_display.py --minimum-width 1520 --minimum-height 900 --output dist/diagnostic/display-preflight.json
       - name: Read official artifact and workflow provenance
         shell: pwsh
         run: |
@@ -130,17 +132,60 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(inputs.target == 'windows' && '[{"runner":"windows-latest","platform":"Windows-x64"}]' || inputs.target == 'macos-arm64' && '[{"runner":"macos-15","platform":"macOS-Apple-Silicon","arch":"arm64"}]' || inputs.target == 'macos-intel' && '[{"runner":"macos-15-intel","platform":"macOS-Intel","arch":"x86_64"}]' || inputs.target == 'macos' && '[{"runner":"macos-15","platform":"macOS-Apple-Silicon","arch":"arm64"},{"runner":"macos-15-intel","platform":"macOS-Intel","arch":"x86_64"}]' || '[{"runner":"windows-latest","platform":"Windows-x64"},{"runner":"macos-15","platform":"macOS-Apple-Silicon","arch":"arm64"},{"runner":"macos-15-intel","platform":"macOS-Intel","arch":"x86_64"}]') }}
+        include: ${{ fromJSON((inputs.target == 'windows' || inputs.target == 'windows-validated') && '[{"runner":"windows-latest","platform":"Windows-x64"}]' || inputs.target == 'macos-arm64' && '[{"runner":"macos-15","platform":"macOS-Apple-Silicon","arch":"arm64"}]' || inputs.target == 'macos-intel' && '[{"runner":"macos-15-intel","platform":"macOS-Intel","arch":"x86_64"}]' || inputs.target == 'macos' && '[{"runner":"macos-15","platform":"macOS-Apple-Silicon","arch":"arm64"},{"runner":"macos-15-intel","platform":"macOS-Intel","arch":"x86_64"}]' || '[{"runner":"windows-latest","platform":"Windows-x64"},{"runner":"macos-15","platform":"macOS-Apple-Silicon","arch":"arm64"},{"runner":"macos-15-intel","platform":"macOS-Intel","arch":"x86_64"}]') }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Stage immutable external layout harness outside application checkout
+        if: inputs.target == 'windows-validated'
+        shell: pwsh
+        env:
+          APPLICATION_REF: ${{ inputs.application_ref }}
+        run: |
+          if ($env:APPLICATION_REF -notmatch '^[a-fA-F0-9]{40}$') { throw 'Validated Windows route requires an explicit full application SHA' }
+          $validationSha = (git rev-parse HEAD).Trim()
+          if ($validationSha -ne $env:GITHUB_SHA) { throw 'Validation checkout identity mismatch' }
+          $harnessRoot = Join-Path $env:RUNNER_TEMP 'shaq-external-layout'
+          New-Item -ItemType Directory -Force -Path $harnessRoot | Out-Null
+          $archive = Join-Path $env:RUNNER_TEMP 'shaq-external-layout.tar'
+          git archive --format=tar --output=$archive $validationSha tests/native_layout_check.py tests/native_geometry.py packaging/windows_ci_display.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          tar -xf $archive -C $harnessRoot
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "SHAQ_LAYOUT_VALIDATION_SHA=$validationSha" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "SHAQ_EXTERNAL_LAYOUT_HARNESS=$harnessRoot/tests/native_layout_check.py" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "SHAQ_EXTERNAL_DISPLAY_PREFLIGHT=$harnessRoot/packaging/windows_ci_display.py" | Out-File -FilePath $env:GITHUB_ENV -Append
+      - uses: actions/checkout@v4
+        if: inputs.target == 'windows-validated'
+        with:
+          ref: ${{ inputs.application_ref }}
+      - name: Verify frozen application checkout and record both identities
+        if: inputs.target == 'windows-validated'
+        shell: pwsh
+        env:
+          APPLICATION_REF: ${{ inputs.application_ref }}
+        run: |
+          $applicationSha = (git rev-parse HEAD).Trim()
+          if ($applicationSha -ne $env:APPLICATION_REF -or (git status --porcelain)) { throw 'Application must be the exact clean requested commit' }
+          "SHAQ_LAYOUT_APPLICATION_SHA=$applicationSha" | Out-File -FilePath $env:GITHUB_ENV -Append
+          New-Item -ItemType Directory -Force -Path dist/diagnostic | Out-Null
+          $geometry = Join-Path (Split-Path $env:SHAQ_EXTERNAL_LAYOUT_HARNESS) 'native_geometry.py'
+          @{application_sha=$applicationSha;validation_sha=$env:SHAQ_LAYOUT_VALIDATION_SHA;layout_sha256=(Get-FileHash $env:SHAQ_EXTERNAL_LAYOUT_HARNESS -Algorithm SHA256).Hash;geometry_sha256=(Get-FileHash $geometry -Algorithm SHA256).Hash;display_preflight_sha256=(Get-FileHash $env:SHAQ_EXTERNAL_DISPLAY_PREFLIGHT -Algorithm SHA256).Hash} | ConvertTo-Json | Out-File -Encoding utf8 dist/diagnostic/external-layout-source.json
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
+      - name: Provision external validated Windows display before native compilation
+        if: inputs.target == 'windows-validated'
+        shell: pwsh
+        run: |
+          python $env:SHAQ_EXTERNAL_DISPLAY_PREFLIGHT --minimum-width 1520 --minimum-height 900 --output dist/diagnostic/display-preflight.json
+          exit $LASTEXITCODE
       - name: Read pinned native updater toolchain
         id: native-config
         shell: bash
@@ -195,7 +240,18 @@ jobs:
       - name: Validate all application tests
         run: python -m unittest discover -s tests -v
       - name: Check native desktop layout at normal and narrow widths
+        if: inputs.target != 'windows-validated'
         run: python tests/native_layout_check.py --output dist/diagnostic/desktop-layout.json
+      - name: Check frozen application with reviewed external native layout harness
+        if: inputs.target == 'windows-validated'
+        shell: pwsh
+        env:
+          PYTHONPATH: ${{ github.workspace }}/src
+        run: |
+          python $env:SHAQ_EXTERNAL_LAYOUT_HARNESS --output dist/diagnostic/desktop-layout.json 2>&1 | Tee-Object -FilePath dist/diagnostic/desktop-layout.log
+          $layoutExit = $LASTEXITCODE
+          if ((git rev-parse HEAD).Trim() -ne $env:SHAQ_LAYOUT_APPLICATION_SHA -or (git status --porcelain)) { throw 'Layout validation changed frozen application source' }
+          exit $layoutExit
       - name: Full installed native delta update and replay acceptance
         run: python packaging/installed_update_acceptance.py
       - name: Collect complete Windows delivery acceptance, then fail on any unsuccessful stage
