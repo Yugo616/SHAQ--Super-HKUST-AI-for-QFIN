@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from shaq_daily_oracle import update_smoke
 
@@ -52,6 +53,48 @@ class InstalledAcceptanceContractTests(unittest.TestCase):
                 wait(path, timeout=.1)
             path.write_text(json.dumps({'status': 'passed', 'pid': 42}))
             self.assertEqual(wait(path, timeout=.1)['pid'], 42)
+
+    def test_rendered_target_waits_for_matching_confirmation_generation(self):
+        wait = getattr(update_smoke, 'wait_restart_confirmation', None)
+        self.assertIsNotNone(wait, 'Rendered DOM may precede asynchronous startup confirmation')
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'history.json'
+            old = {'version': '0.6.99', 'installation_id': 'previous', 'completed_at': 'earlier'}
+            same_version_stale = {**old, 'version': '0.7.0'}
+            current = {'version': '0.7.0', 'installation_id': 'current', 'completed_at': 'now'}
+            path.write_text(json.dumps(old))
+            delayed = iter([same_version_stale, current])
+            def confirm_later(_):
+                path.write_text(json.dumps(next(delayed)))
+            with patch.object(update_smoke.time, 'monotonic', side_effect=[0, .1, .2]), \
+                    patch.object(update_smoke.time, 'sleep', side_effect=confirm_later):
+                self.assertEqual(wait(path, '0.7.0', 'current', deadline=.3), current)
+
+    def test_restart_confirmation_keeps_existing_deadline_and_rejects_missing_stale_malformed(self):
+        wait = getattr(update_smoke, 'wait_restart_confirmation', None)
+        self.assertIsNotNone(wait)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'history.json'
+            cases = [None, {'version': '0.6.99', 'installation_id': 'previous', 'completed_at': 'earlier'},
+                     {'version': '0.7.0', 'installation_id': 'current', 'completed_at': ''}]
+            for value in cases:
+                if value is not None: path.write_text(json.dumps(value))
+                with patch.object(update_smoke.time, 'monotonic', side_effect=[.9, 1.0]), \
+                        patch.object(update_smoke.time, 'sleep'):
+                    with self.assertRaisesRegex(TimeoutError, 'GUI-health'):
+                        wait(path, '0.7.0', 'current', deadline=1.0)
+            path.write_text('{malformed')
+            with patch.object(update_smoke.time, 'monotonic', return_value=.9):
+                with self.assertRaises(json.JSONDecodeError):
+                    wait(path, '0.7.0', 'current', deadline=1.0)
+
+    def test_missing_health_reports_retained_target_failure_without_waiting(self):
+        with tempfile.TemporaryDirectory() as directory:
+            events = Path(directory)
+            failed = events / 'target-result.json'
+            failed.write_text(json.dumps({'status': 'failed', 'error': 'confirmation rejected'}))
+            with self.assertRaisesRegex(RuntimeError, 'confirmation rejected'):
+                update_smoke.wait_event(events / 'target-health.json', timeout=.1, failure_path=failed)
 
     def test_feed_transition_never_offers_future_version(self):
         driver = self.driver()

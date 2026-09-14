@@ -205,7 +205,7 @@ def main():
             configuration=root/('acceptance-'+str(number)+'.json');_atomic_json(configuration,config)
             events=root/config['events_directory']
             run('installed-bridge-'+str(number),[executable,'--update-smoke',configuration],timeout=300)
-            health=wait_event(events/'target-health.json',timeout=180)
+            health=wait_event(events/'target-health.json',timeout=180,failure_path=events/'target-result.json')
             time.sleep(2)
             if not process_running(health['pid']):raise RuntimeError('Target GUI exited after health')
             _atomic_json(events/'close-target.json',{'status':'passed'})

@@ -20,9 +20,13 @@ from .app_paths import app_paths, application_version
 from .settings import _atomic_json
 
 
-def wait_event(path, *, timeout=90):
+def wait_event(path, *, timeout=90, failure_path=None):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
+        if failure_path is not None and failure_path.exists():
+            failure = json.loads(failure_path.read_text(encoding='utf-8'))
+            if failure.get('status') == 'failed':
+                raise RuntimeError(str(failure))
         if path.exists():
             value = json.loads(path.read_text(encoding='utf-8'))
             if value.get('status') == 'failed':
@@ -30,6 +34,20 @@ def wait_event(path, *, timeout=90):
             return value
         time.sleep(.1)
     raise TimeoutError('Missing installed acceptance event: ' + path.name)
+
+
+def wait_restart_confirmation(path, version, installation_id, *, deadline):
+    """Observe real async GUI confirmation within the original render budget."""
+    while time.monotonic() < deadline:
+        try:
+            receipt = json.loads(path.read_text(encoding='utf-8'))
+        except FileNotFoundError:
+            receipt = {}
+        if (receipt.get('version') == version and receipt.get('installation_id') == installation_id
+                and receipt.get('completed_at')):
+            return receipt
+        time.sleep(.1)
+    raise TimeoutError('Missing GUI-health update confirmation for current installation')
 
 
 def verify_deferred(state, before, after, *, dirty):
@@ -259,8 +277,11 @@ def main(argv=None):
                     runtime.automatic_step()
                     raise RuntimeError('Native SDK apply unexpectedly returned')
                 else:
-                    receipt=json.loads((paths.data_root/'software-update-history.json').read_text())
-                    if receipt['version']!=version or not receipt['completed_at']:raise RuntimeError('Missing GUI-health update confirmation')
+                    # Rendering precedes the async confirm_desktop_ready API.
+                    # A prior transition's receipt is not failure or success:
+                    # wait for this generation without resetting the GUI budget.
+                    receipt=wait_restart_confirmation(paths.data_root/'software-update-history.json',
+                        version,bridge._runtime_admission.history,deadline=deadline)
                     result['last_update']=receipt
                     if stage=='target':
                         result['old_processes_before_data_access']=old_processes
