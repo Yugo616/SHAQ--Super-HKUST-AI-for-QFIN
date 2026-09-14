@@ -55,7 +55,7 @@ jobs:
         run: python scripts/validate_release.py
       - name: Install pinned lightweight Windows compatibility dependencies
         if: runner.os == 'Windows'
-        run: python -m pip install --constraint packaging/requirements.lock.txt httpx==0.28.1 packaging==26.3
+        run: python -m pip install --constraint packaging/requirements.lock.txt httpx==0.28.1 packaging==26.3 platformdirs==4.11.8
       - name: Run lightweight Windows compatibility tests before native compilation
         if: runner.os == 'Windows'
         shell: pwsh
