@@ -138,7 +138,7 @@ def main():
         (root/'installed').mkdir()
         if sys.platform=='darwin':
             run('bridge-unpack',['ditto','-xk',bridge_package,root/'dmg-source'])
-            run('bridge-dmg',['hdiutil','create','-volname',app_name,'-srcfolder',root/'dmg-source','-format','UDZO',root/'bridge.dmg'])
+            run('bridge-dmg',[sys.executable,project/'packaging/create_dmg.py','--volume',app_name,'--source',root/'dmg-source','--output',root/'bridge.dmg'])
             mount=root/'mount';mount.mkdir()
             run('bridge-mount',['hdiutil','attach','-nobrowse','-mountpoint',mount,root/'bridge.dmg'])
             try:run('bridge-install',['ditto',mount/(app_name+'.app'),root/'installed'/(app_name+'.app')])

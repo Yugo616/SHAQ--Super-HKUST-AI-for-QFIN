@@ -30,7 +30,7 @@ if [[ "${SHAQ_PREVIEW_ONLY:-0}" == 1 ]]; then
   exit 0
 fi
 FEED_ROOT="${SHAQ_FEED_ROOT:-${PROJECT_ROOT}/dist/update-feed}"
-"${PYTHON_BIN}" packaging/build_desktop.py --manage-existing "${APP_PATH}" --output "${FEED_ROOT}" --version "${BUILD_VERSION}"
+"${PYTHON_BIN}" packaging/build_desktop.py --manage-existing "${APP_PATH}" --output "${FEED_ROOT}" --version "${BUILD_VERSION}" --prepare-public-base
 case "$(uname -m)" in
   arm64) UPDATE_CHANNEL="osx-arm64-stable" ;;
   x86_64) UPDATE_CHANNEL="osx-x64-stable" ;;
@@ -41,5 +41,5 @@ APP_PATH="${MANAGED_ROOT}/${APP_NAME}.app"
 /usr/bin/codesign --verify --deep --strict "${APP_PATH}"
 "${PYTHON_BIN}" packaging/audit_payload.py "${APP_PATH}" --output "${OUTPUT_ROOT}/managed-native-audit.json"
 DMG_PATH="${PROJECT_ROOT}/dist/SHAQ-Daily-Oracle-Lab-macOS-${PACKAGE_ARCH}.dmg"
-hdiutil create -volname "${APP_NAME}" -srcfolder "${MANAGED_ROOT}" -ov -format UDZO "${DMG_PATH}"
+"${PYTHON_BIN}" packaging/create_dmg.py --volume "${APP_NAME}" --source "${MANAGED_ROOT}" --output "${DMG_PATH}"
 (cd "${PROJECT_ROOT}/dist"; shasum -a 256 "${DMG_PATH:t}") > "${DMG_PATH}.sha256"

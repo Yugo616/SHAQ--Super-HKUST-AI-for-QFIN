@@ -375,12 +375,19 @@ def main():
     parser.add_argument('--name', default='SHAQ Daily Oracle Lab')
     parser.add_argument('--version', help='Explicit artifact-only version override; recorded in provenance')
     parser.add_argument('--manage-existing', type=Path, help='Pack an already built full native payload with pinned Velopack')
+    parser.add_argument('--prepare-public-base', action='store_true', help='Final release only: seed fresh output with a verified public delta base')
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
     if args.manage_existing:
         version = args.version or tomllib.loads((root/'pyproject.toml').read_text())['project']['version']
+        if args.prepare_public_base:
+            from release_feed import prepare_public_base
+            receipt = prepare_public_base(root, args.output.resolve(), version, platform.system(), platform.machine())
+            print(json.dumps(receipt), flush=True)
         pack_managed(root, args.manage_existing.resolve(), args.output.resolve(), version)
         return
+    if args.prepare_public_base:
+        parser.error('--prepare-public-base requires --manage-existing')
     if sys.version_info[:2] != (3, 13):
         raise RuntimeError('Native release builds require CPython 3.13')
     import tables

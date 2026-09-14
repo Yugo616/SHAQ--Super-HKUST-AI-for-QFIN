@@ -11,6 +11,7 @@ import sys
 import tempfile
 import tomllib
 import urllib.request
+from types import SimpleNamespace
 
 
 INSTALLER = 'SHAQ-Daily-Oracle-Lab-Windows-x64-Setup.exe'
@@ -163,7 +164,7 @@ def validate_delivery(root, workspace, diagnostic, compiler, upstream_failed=Fal
     stage('payload-audit', [python, root / 'packaging/audit_payload.py', payload, '--output', reports / 'native-audit.json'],
           180, reports / 'native-audit.json', executable)
     stage('compile-installer', [python, root / 'packaging/build_desktop.py', '--manage-existing', payload,
-          '--version', version, '--output', installer.parent],
+          '--version', version, '--output', installer.parent, '--prepare-public-base'],
           600, requires=executable)
     try:
         stage('install', [installer, '--silent', '--installto', installed,
@@ -186,14 +187,61 @@ def validate_delivery(root, workspace, diagnostic, compiler, upstream_failed=Fal
     if installer.is_file():
         shutil.copy2(installer, reports / INSTALLER)
     if passed and not diagnostic:
-        target = root / 'dist' / INSTALLER
-        shutil.copy2(installer, target)
-        digest = hashlib.sha256(target.read_bytes()).hexdigest()
-        target.with_name(target.name + '.sha256').write_text(f'{digest}  {target.name}\n', encoding='utf-8')
+        try:
+            promote_final_delivery(root, installer, version)
+        except (OSError, ValueError) as exc:
+            passed = False
+            stages.append({'name': 'release-feed-promotion', 'status': 'failed', 'error': str(exc)})
     result = {'status': 'passed' if passed else 'failed', 'mode': 'diagnostic' if diagnostic else 'final',
               'release_promoted': passed and not diagnostic, 'stages': stages}
     (reports / 'windows-delivery.json').write_text(json.dumps(result, indent=2), encoding='utf-8')
     return result
+
+
+def promote_final_delivery(root, installer, version):
+    """Copy only this accepted installer's validated feed, never acceptance fixtures."""
+    from shaq_daily_oracle.software_updates import UpdateRuntime
+    from shaq_daily_oracle.update_native import verify_cached
+    updates = json.loads((root / 'config/software-updates.json').read_text())
+    tools = json.loads((root / 'packaging/updater-toolchain.json').read_text())
+    channel = updates['channels']['Windows/amd64']
+    feed_name = 'releases.' + channel + '.json'
+    receipt_name = 'delta-base.' + channel + '.json'
+    feed_root = installer.parent
+    receipt = json.loads((feed_root / receipt_name).read_text())
+    if (receipt.get('target_version') != version or receipt.get('channel') != channel or
+            receipt.get('status') not in {'public-base', 'first-managed-release'}):
+        raise ValueError('Final feed base receipt does not match the accepted build')
+    feed = json.loads((feed_root / feed_name).read_text())
+    assets = feed.get('Assets') if isinstance(feed, dict) else None
+    if not isinstance(assets, list) or not assets:
+        raise ValueError('Missing final release feed')
+    names = set()
+    target_full = []
+    for asset in assets:
+        UpdateRuntime._validate_asset(asset, updates['package_id'], channel, version)
+        if asset['Version'] in {tools['acceptance_prior_version'], tools['acceptance_bridge_version']} or asset['FileName'] in names:
+            raise ValueError('Final feed contains internal acceptance or duplicate packages')
+        verify_cached(feed_root, SimpleNamespace(**asset))
+        names.add(asset['FileName'])
+        if asset['Type'] == 'Full' and asset['Version'] == version:
+            target_full.append(asset)
+    if len(target_full) != 1:
+        raise ValueError('Final feed does not contain the accepted target full package')
+    destination = root / 'dist/update-feed'
+    if destination.exists() or destination.is_symlink():
+        raise ValueError('Final release feed destination must be fresh')
+    target = root / 'dist' / INSTALLER
+    with tempfile.TemporaryDirectory(prefix='shaq-final-feed-', dir=target.parent) as directory:
+        staged = Path(directory)
+        for name in sorted(names | {feed_name, receipt_name}):
+            shutil.copy2(feed_root / name, staged / name)
+        digest = hashlib.sha256(installer.read_bytes()).hexdigest()
+        (staged / 'delivery.json').write_text(json.dumps(dict(target_version=version, channel=channel,
+            installer=INSTALLER, installer_sha256=digest), indent=2), encoding='utf-8')
+        shutil.copy2(installer, target)
+        target.with_name(target.name + '.sha256').write_text(f'{digest}  {target.name}\n', encoding='utf-8')
+        staged.replace(destination)
 
 
 def main():

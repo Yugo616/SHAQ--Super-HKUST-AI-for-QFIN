@@ -14,6 +14,10 @@ and uninstall check under `dist/diagnostic/`, continuing independent checks afte
 Only complete acceptance creates the release-named installer/checksum in `dist/`.
 Files inside `dist/diagnostic/` are evidence, not releases. `-Diagnostic` on the Windows
 wrapper uses the identical path but never promotes an installer, even on success.
+Successful Windows delivery also retains that same build's verified channel feed,
+full/delta packages and base receipt in `dist/update-feed/`; `delivery.json` binds it
+to the accepted installer's SHA-256. Failed/upstream-failed/diagnostic delivery never
+promotes this feed. `dist/installed-update/` remains internal acceptance evidence only.
 Windows installation acceptance scripts intentionally refuse ordinary user machines.
 Early CI preflight detects Inno and WebView2; missing WebView2 is provisioned only on
 the disposable runner, after verifying the official download's Microsoft Authenticode
@@ -37,6 +41,29 @@ Python, Git, compilers and Zipline are build-runner tools, not user prerequisite
     zsh packaging/build_macos.sh
     # Windows PowerShell:
     # ./packaging/build_windows.ps1
+
+Both final build paths pass `--prepare-public-base` to the existing managed-pack
+command. Start with a fresh final feed directory: the step reads only the configured
+official GitHub repository's public releases (including public prereleases), chooses
+the latest lower version with the same architecture's channel feed, verifies package
+identity/SHA-256/size, and stages one prior full package in the exact `outputDir` used
+by Velopack. This is required for [delta generation](https://docs.velopack.io/packaging/deltas).
+`delta-base.<channel>.json` records its source or `first-managed-release` (truthfully
+full-only), with distinct receipt names when both Mac architectures are published together.
+Network errors and corrupt advertised assets fail the build; they are not treated as
+missing history. Internal acceptance versions are excluded. Older/skipped clients may
+use full fallback; previously published releases are never modified. No user tokens
+or local account configuration are read.
+
+Final and acceptance-bridge DMGs share `create_dmg.py`. It retries only exit 1 plus
+the exact `hdiutil: create failed - Resource busy` diagnostic, preserving attempt logs
+beside the image and atomically replacing the image only on success. Defaults are
+three attempts, five seconds between attempts, and a 300-second attempt timeout;
+`SHAQ_DMG_ATTEMPTS`, `SHAQ_DMG_BACKOFF_SECONDS`, and `SHAQ_DMG_TIMEOUT_SECONDS` configure
+them (at most ten attempts and 60 seconds per backoff). Other failures stop immediately.
+This handles the hosted-runner busy class documented in
+[runner-images #7522](https://github.com/actions/runner-images/issues/7522), not an
+exemption from actual DMG mount/install, installed-update, signature, or audit checks.
 
 native-sources.json pins original source URLs and hashes. build_native.py builds HDF5,
 builds PyTables without optional LZO, repairs native dependencies into relocatable wheels,

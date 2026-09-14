@@ -1,7 +1,9 @@
 from pathlib import Path
 import importlib.util
 import io
+import hashlib
 import json
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -29,12 +31,16 @@ class WindowsDeliveryTests(unittest.TestCase):
             self.assertEqual(result['exit_code'], 3)
             self.assertIn(argument, (root / 'arguments.log').read_text(encoding='utf-8'))
 
-    def exercise(self, failed_stages, diagnostic, malformed_smoke=None):
+    def exercise(self, failed_stages, diagnostic, malformed_smoke=None, upstream_failed=False):
         delivery = self.module()
         with tempfile.TemporaryDirectory() as name:
             root = Path(name)
             (root / 'project').mkdir()
             (root / 'project/pyproject.toml').write_text('[project]\nversion="0.6.0"\n', encoding='utf-8')
+            source = Path(__file__).resolve().parents[1]
+            shutil.copytree(source/'config', root/'project/config')
+            (root/'project/packaging').mkdir()
+            shutil.copy2(source/'packaging/updater-toolchain.json', root/'project/packaging/updater-toolchain.json')
             commands = []
 
             def process(args, **kwargs):
@@ -44,6 +50,7 @@ class WindowsDeliveryTests(unittest.TestCase):
                 commands.append(stage)
                 if stage == 'compile-installer':
                     self.assertIn('--manage-existing', args)
+                    self.assertIn('--prepare-public-base', args)
                 if stage == 'install':
                     self.assertIn('--installto', args)
                     self.assertIn('--silent', args)
@@ -62,6 +69,16 @@ class WindowsDeliveryTests(unittest.TestCase):
                     target = workspace / 'installer/SHAQ-Daily-Oracle-Lab-Windows-x64-Setup.exe'
                     target.parent.mkdir(parents=True)
                     target.write_bytes(b'installer')
+                    asset = dict(PackageId='SHAQDailyOracleLab', Version='0.6.0', Type='Full',
+                                 FileName='SHAQDailyOracleLab-0.6.0-win-x64-stable-full.nupkg',
+                                 Size=10, SHA256=hashlib.sha256(b'final full').hexdigest())
+                    (target.parent/asset['FileName']).write_bytes(b'final full')
+                    (target.parent/'releases.win-x64-stable.json').write_text(json.dumps({'Assets':[asset]}))
+                    (target.parent/'delta-base.win-x64-stable.json').write_text(json.dumps(dict(
+                        status='first-managed-release', target_version='0.6.0', channel='win-x64-stable')))
+                    internal = root/'project/dist/installed-update'
+                    internal.mkdir(parents=True, exist_ok=True)
+                    (internal/'internal-acceptance-0.6.99-full.nupkg').write_bytes(b'not release')
                 if stage == 'install':
                     (workspace / 'installed').mkdir()
                     (workspace / 'installed/current').mkdir()
@@ -88,8 +105,16 @@ class WindowsDeliveryTests(unittest.TestCase):
                 return Process()
 
             with patch.object(delivery.subprocess, 'Popen', process), patch.object(delivery, 'windows_prerequisites', return_value={'status':'passed'}):
-                result = delivery.validate_delivery(root / 'project', root / 'fresh stage', diagnostic, root / 'ISCC.exe')
+                result = delivery.validate_delivery(root / 'project', root / 'fresh stage', diagnostic, root / 'ISCC.exe', upstream_failed)
             promoted = root / 'project/dist/SHAQ-Daily-Oracle-Lab-Windows-x64-Setup.exe'
+            feed = root/'project/dist/update-feed'
+            self.assertEqual(feed.exists(), result['release_promoted'])
+            if result['release_promoted']:
+                self.assertEqual((feed/'SHAQDailyOracleLab-0.6.0-win-x64-stable-full.nupkg').read_bytes(), b'final full')
+                self.assertFalse((feed/'internal-acceptance-0.6.99-full.nupkg').exists())
+                receipt = json.loads((feed/'delivery.json').read_text())
+                self.assertEqual(receipt['installer_sha256'], hashlib.sha256(promoted.read_bytes()).hexdigest())
+                self.assertEqual(receipt['target_version'], '0.6.0')
             self.assertEqual(json.loads((root / 'project/dist/diagnostic/windows-delivery.json').read_text(encoding='utf-8')), result)
             return result, commands, promoted.exists()
 
@@ -119,6 +144,11 @@ class WindowsDeliveryTests(unittest.TestCase):
                 result, _, promoted = self.exercise(set(), diagnostic)
                 self.assertEqual(result['status'], 'passed')
                 self.assertEqual(promoted, not diagnostic)
+
+    def test_upstream_failure_never_promotes_the_final_installer_or_feed(self):
+        result, _, promoted = self.exercise(set(), False, upstream_failed=True)
+        self.assertEqual(result['status'], 'failed')
+        self.assertFalse(promoted)
 
     def test_timed_out_process_is_terminated_and_reported(self):
         delivery = self.module()
