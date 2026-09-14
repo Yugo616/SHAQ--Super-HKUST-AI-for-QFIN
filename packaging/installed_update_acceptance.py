@@ -44,6 +44,14 @@ def verify_cache(cache, current):
     return files
 
 
+def uninstall_windows(run, installed, project, output):
+    run('uninstall',[installed/'Update.exe','uninstall','--silent'])
+    # Update.exe schedules its own deletion after exit. Use the same bounded,
+    # read-only completion probe as final Windows delivery, retaining leftovers.
+    run('uninstall-check',[sys.executable,project/'packaging/verify_uninstall.py',installed,
+        '--output',output/'uninstall-report.json'],timeout=45)
+
+
 def retain_failed_package_comparison(expected, cached, output):
     """Failure-only diagnostics: entry identities, never extracted program data."""
     def describe(path):
@@ -220,7 +228,7 @@ def main():
         if sys.platform=='darwin':
             if installed.parent != root/'installed' or installed.is_symlink():raise RuntimeError('Unexpected uninstall target')
             shutil.rmtree(installed)
-        else:run('uninstall',[installed/'Update.exe','uninstall','--silent'])
+        else:uninstall_windows(run,installed,project,output)
         if installed.exists():raise RuntimeError('Isolated native uninstall left the installed app')
         server.shutdown()
         assets=[]

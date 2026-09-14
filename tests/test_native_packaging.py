@@ -13,12 +13,49 @@ import zipfile
 import base64
 import io
 import inspect
+from types import SimpleNamespace
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 class NativePackagingTests(unittest.TestCase):
+    def test_installed_update_waits_for_native_self_delete_and_rejects_persistent_leftovers(self):
+        acceptance=self.module('installed_update_acceptance')
+        verify=self.module('verify_uninstall')
+        self.assertTrue(hasattr(acceptance,'uninstall_windows'))
+        for cleanup in (True,False):
+            with self.subTest(cleanup=cleanup), tempfile.TemporaryDirectory() as directory:
+                output=Path(directory); installed=output/'installed';installed.mkdir()
+                updater=installed/'Update.exe';updater.write_bytes(b'updater')
+                now=[0.0]; stages=[]
+                def sleep(seconds):
+                    now[0]+=seconds
+                    if cleanup and now[0]>=.5 and installed.exists():
+                        updater.unlink();installed.rmdir()
+                def run(name,command,timeout=1200):
+                    stages.append(name)
+                    if name=='uninstall':
+                        self.assertEqual(command,[updater,'uninstall','--silent'])
+                        self.assertTrue(installed.exists())  # Native exit is not self-delete completion.
+                    else:
+                        self.assertEqual(name,'uninstall-check')
+                        self.assertEqual(command[:3],[sys.executable,ROOT/'packaging/verify_uninstall.py',installed])
+                        self.assertEqual(timeout,45)
+                        with patch.object(sys,'argv',[str(x) for x in command[1:]]), \
+                                patch.object(verify,'time',SimpleNamespace(monotonic=lambda:now[0],sleep=sleep)):
+                            if verify.main():raise RuntimeError('uninstall-check failed')
+                if cleanup:
+                    acceptance.uninstall_windows(run,installed,ROOT,output)
+                else:
+                    with self.assertRaisesRegex(RuntimeError,'uninstall-check failed'):
+                        acceptance.uninstall_windows(run,installed,ROOT,output)
+                self.assertEqual(stages,['uninstall','uninstall-check'])
+                report=json.loads((output/'uninstall-report.json').read_text())
+                self.assertEqual(report['status'],'passed' if cleanup else 'failed')
+                self.assertEqual(report['leftovers'],[] if cleanup else ['.','Update.exe'])
+                self.assertLessEqual(now[0],report['timeout_seconds'])
+
     def test_failed_native_package_comparison_retains_entry_bytes_and_attributes(self):
         acceptance=self.module('installed_update_acceptance')
         self.assertTrue(hasattr(acceptance,'retain_failed_package_comparison'))
