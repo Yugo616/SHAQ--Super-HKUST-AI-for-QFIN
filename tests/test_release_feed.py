@@ -59,17 +59,27 @@ class ReleaseFeedTests(unittest.TestCase):
                     (packed/f'releases.{channel}.json').write_text(json.dumps({'Assets': [dict(
                         PackageId='SHAQDailyOracleLab', Version='0.8.0', Type='Full', FileName=filename,
                         SHA256=hashlib.sha256(data).hexdigest(), Size=len(data))]}))
+                    if system == 'Windows':
+                        (packed/'native-Setup.exe').write_bytes(b'fixture installer')
+                        (packed/f'assets.{channel}.json').write_text(json.dumps([
+                            dict(Type='Installer', RelativeFileName='native-Setup.exe')]))
                 client = httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(200, json=[])))
                 with patch.object(sys, 'argv', ['build_desktop', '--manage-existing', str(payload), '--output', str(output),
                                               '--version', '0.8.0', '--prepare-public-base']), \
                         patch.object(sys, 'path', [str(ROOT/'packaging'), *sys.path]), \
                         patch.object(build.platform, 'system', return_value=system), \
                         patch.object(build.platform, 'machine', return_value=machine), \
+                        patch.object(build.sys, 'platform', 'win32' if system == 'Windows' else 'darwin'), \
                         patch.object(build.subprocess, 'check_output', return_value='Velopack CLI 1.2.0,'), \
                         patch.object(build.subprocess, 'run', pack), patch('httpx.Client', return_value=client):
                     build.main()
                 feed = json.loads((output/f'releases.{channel}.json').read_text())
                 self.assertRegex(feed['Assets'][0]['ContentSHA256'], r'^[0-9a-f]{64}$')
+                if system == 'Windows':
+                    setup_name = 'SHAQ-Daily-Oracle-Lab-Windows-x64-Setup.exe'
+                    self.assertEqual((output/setup_name).read_bytes(), b'fixture installer')
+                    self.assertEqual(json.loads((output/f'assets.{channel}.json').read_text()),
+                                     [dict(Type='Installer', RelativeFileName=setup_name)])
 
     def prepare(self, rows, responses, target='0.8.0'):
         helper = module()

@@ -100,3 +100,55 @@ References supplied/primary-checked by root:
   create busy uses status 1, unlike detach 16; only precise diagnostic is retried).
 - https://github.com/actions/runner-images/issues/7522 (hosted macOS busy class).
 - https://docs.velopack.io/packaging/deltas (previous release required in outputDir).
+
+## CI portability follow-up — run 34818272343
+
+The actual Windows suite at `f07ee10` ran 567 tests with one failure, two errors and
+four platform-conditioned skips. This overrides any inference that the earlier local
+Mac suite proved cross-platform test portability. The real Windows exclusive-handle
+read/replace regression passed; no runtime-retry relaxation is supported by this evidence.
+
+Root causes found by tracing the production paths:
+
+1. `pack_managed` branches on `sys.platform == 'win32'` for `normalize_setup`, while
+   the CLI test only substituted `platform.system()` and `platform.machine()`.
+   Consequently the actual Windows host normalized both mocked platform cases;
+   neither fake pack emitted the required `assets.<channel>.json`/Setup fixture.
+2. The persistent-occupancy test used a real 0.03-second deadline and assumed more
+   than one file-write attempt must fit. Windows filesystem/lock overhead could consume
+   that budget on the first attempt. Immediate deadline failure is correct production
+   behavior, not evidence that sharing-conflict retry is broken.
+
+Changes are limited to `tests/test_release_feed.py`, `tests/test_update_gui.py` and
+this report. The CLI test now substitutes a coherent `sys.platform` per platform case,
+and the Windows fake pack supplies a Setup and its actual consumed assets manifest.
+It asserts that the real `normalize_setup` renamed both the file and manifest entry.
+The occupancy test supplies deterministic monotonic time advanced by the stop-event
+wait, retaining its original 0.03-second / 0.005-second contract. It now asserts seven
+attempts, six waits totaling the deadline, unchanged old state and no temporary files.
+No larger sleeps/timeouts, skipped tests, runtime edits, dependency changes, warning
+suppression, pushes or release operations were introduced.
+
+RED evidence:
+
+- Coherent mocked Windows platform before completing the artifact fixture reproduced
+  `FileNotFoundError: assets.win-x64-stable.json` on the local locked environment.
+  Log: `/tmp/shaq-ci-portability-feed-red.log`.
+- A controlled 40 ms delay around the real `_atomic_json` reproduced the CI assertion
+  `1 not greater than 1` in the original 30 ms real-clock test.
+  Log: `/tmp/shaq-ci-portability-clock-red.log`.
+
+GREEN commands/results:
+
+    PYTHONPATH=src:tests build/release-venv/bin/python -m unittest test_release_feed test_update_gui -v
+    build/release-venv/bin/python -m unittest discover -s tests -v
+    git diff --check
+
+Focused: 26 tests passed, one native-Windows-conditioned skip, in 2.818 seconds;
+`/tmp/shaq-ci-portability-focused-green.log`. Repeating the same 40 ms real-I/O delay
+with deterministic test time passed in 0.368 seconds;
+`/tmp/shaq-ci-portability-clock-green.log`. Full locked environment: **567 tests passed,
+one platform-conditioned skip**, 17.054 seconds, with the read-only process-status
+permission used as in the earlier full run. Its result is retained
+in `/tmp/shaq-ci-portability-full-green.log`; native Windows CI must still rerun this
+commit to establish actual Windows acceptance.

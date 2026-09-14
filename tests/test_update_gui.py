@@ -154,15 +154,23 @@ class UpdateGuiTests(unittest.TestCase):
             session.root.mkdir()
             session._write(session.request, {'phase': 'prepare'})
             attempts = []
+            now, waits = [0.0], []
+            def wait(seconds):
+                waits.append(seconds)
+                now[0] += seconds
+                return False
             def replace(*args):
                 attempts.append(args)
                 raise self.sharing_error(5)
             with patch.object(sys, 'platform', 'win32'), patch.object(os, 'replace', replace), \
-                    patch.object(update_gui, '_probe_windows_delete', side_effect=self.sharing_error(), create=True):
+                    patch.object(update_gui, '_probe_windows_delete', side_effect=self.sharing_error(), create=True), \
+                    patch.object(update_gui, 'time', SimpleNamespace(monotonic=lambda: now[0])), \
+                    patch.object(session.stop, 'wait', wait):
                 with self.assertRaises(PermissionError):
                     session._write(session.request, {'phase': 'close'})
-            self.assertGreater(len(attempts), 1)
-            self.assertLess(len(attempts), 100)
+            self.assertEqual(len(attempts), 7)
+            self.assertEqual(len(waits), 6)
+            self.assertAlmostEqual(sum(waits), session.timeout)
             self.assertEqual(session._read(session.request), {'phase': 'prepare'})
             self.assertEqual(list(session.root.glob('*.tmp')), [])
 
