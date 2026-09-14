@@ -26,6 +26,23 @@ class NativePackagingTests(unittest.TestCase):
         paths = lines.index('    paths:', push)
         self.assertEqual(lines[push + 1:paths], ['    tags-ignore:', '      - "**"'])
 
+    def test_windows_compatibility_fails_before_native_build_and_skips_delivery(self):
+        text = (ROOT / '.github/workflows/build-desktop.yml').read_text()
+        install = text.index('name: Install pinned lightweight Windows compatibility dependencies')
+        fast = text.index('name: Run lightweight Windows compatibility tests before native compilation')
+        native = text.index('name: Build native no-LZO dependencies then install locked application')
+        delivery = text.index('name: Collect complete Windows delivery acceptance')
+        self.assertLess(install, fast)
+        self.assertLess(fast, native)
+        fast_block = text[install:native]
+        self.assertIn('packaging/requirements.lock.txt', fast_block)
+        self.assertIn('tests.test_public_base_update_acceptance', fast_block)
+        self.assertIn('dist/diagnostic/windows-fast-compatibility.log', fast_block)
+        delivery_block = text[delivery:text.index('name: Build macOS disk image', delivery)]
+        self.assertIn('success()', delivery_block)
+        self.assertNotIn('!cancelled()', delivery_block)
+        self.assertNotIn('-UpstreamFailed', delivery_block)
+
     def test_dispatch_can_build_only_intel_without_changing_other_target_matrices(self):
         lines = (ROOT / '.github/workflows/build-desktop.yml').read_text().splitlines()
         expression = next(line.strip().removeprefix('include: ') for line in lines if line.strip().startswith('include: ${{'))

@@ -53,6 +53,19 @@ jobs:
       - name: Validate source privacy and eight Skills before building
         id: source-check
         run: python scripts/validate_release.py
+      - name: Install pinned lightweight Windows compatibility dependencies
+        if: runner.os == 'Windows'
+        run: python -m pip install --constraint packaging/requirements.lock.txt httpx==0.28.1 packaging==26.3
+      - name: Run lightweight Windows compatibility tests before native compilation
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          PYTHONPATH: ${{ github.workspace }}/src
+        run: |
+          New-Item -ItemType Directory -Force -Path dist/diagnostic | Out-Null
+          python -m unittest tests.test_public_base_update_acceptance -v 2>&1 | Tee-Object -FilePath dist/diagnostic/windows-fast-compatibility.log
+          $testExit = $LASTEXITCODE
+          if ($testExit -ne 0) { exit $testExit }
       - name: Inspect Inno and provision verified Microsoft WebView2 only if missing
         if: runner.os == 'Windows'
         run: python packaging/windows_delivery.py --preflight-only
@@ -84,12 +97,12 @@ jobs:
       - name: Full installed native delta update and replay acceptance
         run: python packaging/installed_update_acceptance.py
       - name: Collect complete Windows delivery acceptance, then fail on any unsuccessful stage
-        if: ${{ !cancelled() && runner.os == 'Windows' && steps.source-check.outcome == 'success' }}
+        if: ${{ success() && runner.os == 'Windows' && steps.source-check.outcome == 'success' }}
         shell: pwsh
         env:
           SHAQ_BUILD_VERSION: ${{ steps.native-config.outputs.candidate }}
           SHAQ_BUILD_GITHUB_TOKEN: ${{ github.token }}
-        run: .\packaging\build_windows.ps1 ${{ job.status != 'success' && '-UpstreamFailed' || '' }}
+        run: .\packaging\build_windows.ps1
       - name: Build macOS disk image
         if: runner.os == 'macOS'
         env:

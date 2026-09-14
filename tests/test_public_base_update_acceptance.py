@@ -39,18 +39,24 @@ class PublicBaseUpdateAcceptanceTests(unittest.TestCase):
 
     def test_loopback_proxy_bypass_is_per_apply_and_replay_child(self):
         acceptance = module()
+        cases = [
+            ({'NO_PROXY': 'existing.test'}, {'existing.test'}),
+            ({'NO_PROXY': 'upper.test', 'no_proxy': 'lower.test'}, {'upper.test', 'lower.test'}),
+        ]
         for stage in ('public-base-apply', 'public-base-replay'):
-            with self.subTest(stage=stage), patch.dict(
-                    acceptance.os.environ, {'NO_PROXY': 'existing.test', 'no_proxy': ''}, clear=True), patch.object(
-                    acceptance.subprocess, 'run', return_value=object()) as invoked:
-                before = dict(acceptance.os.environ)
-                acceptance.run_child(['app.exe'], io.StringIO(), 10, loopback=stage in acceptance.LOOPBACK_STAGES)
-                environment = invoked.call_args.kwargs['env']
-                self.assertEqual(acceptance.os.environ, before)
-                for key in ('NO_PROXY', 'no_proxy'):
-                    self.assertIn('127.0.0.1', environment[key].split(','))
-                    self.assertIn('localhost', environment[key].split(','))
-                self.assertIn('existing.test', environment['NO_PROXY'].split(','))
+            for environment, expected in cases:
+                with self.subTest(stage=stage, environment=environment), patch.object(
+                        acceptance.os, 'environ', environment), patch.object(
+                        acceptance.subprocess, 'run', return_value=object()) as invoked:
+                    before = dict(acceptance.os.environ)
+                    acceptance.run_child(['app.exe'], io.StringIO(), 10,
+                                         loopback=stage in acceptance.LOOPBACK_STAGES)
+                    child = invoked.call_args.kwargs['env']
+                    self.assertEqual(acceptance.os.environ, before)
+                    self.assertEqual(child['NO_PROXY'], child['no_proxy'])
+                    values = set(filter(None, child['NO_PROXY'].split(',')))
+                    self.assertTrue(expected.issubset(values))
+                    self.assertTrue({'127.0.0.1', 'localhost'}.issubset(values))
 
     def test_acceptance_server_serves_delta_but_rejects_target_full_fallback(self):
         acceptance = module()

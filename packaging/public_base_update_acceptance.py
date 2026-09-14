@@ -46,12 +46,27 @@ def create_acceptance_root():
     return Path(tempfile.mkdtemp(prefix='shaq-installed-update-')).resolve()
 
 
+def loopback_environment(source):
+    environment = dict(source)
+    values = []
+    for key in ('NO_PROXY', 'no_proxy'):
+        for value in environment.get(key, '').split(','):
+            value = value.strip()
+            if value and value not in values:
+                values.append(value)
+    for value in ('127.0.0.1', 'localhost'):
+        if value not in values:
+            values.append(value)
+    merged = ','.join(values)
+    # Windows treats names case-insensitively. Equal aliases prevent either
+    # CreateProcess entry from discarding existing proxy exceptions.
+    environment['NO_PROXY'] = merged
+    environment['no_proxy'] = merged
+    return environment
+
+
 def run_child(command, stream, timeout, *, loopback=False):
-    environment = dict(os.environ)
-    if loopback:
-        for key in ('NO_PROXY', 'no_proxy'):
-            environment[key] = ','.join(filter(None, (
-                environment.get(key, ''), '127.0.0.1', 'localhost')))
+    environment = loopback_environment(os.environ) if loopback else dict(os.environ)
     return subprocess.run([str(value) for value in command], stdout=stream,
                           stderr=subprocess.STDOUT, timeout=timeout, env=environment)
 
