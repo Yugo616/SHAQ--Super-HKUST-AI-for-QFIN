@@ -100,7 +100,7 @@ jobs:
           github-token: ${{ github.token }}
           path: ${{ runner.temp }}/native-layout-dependencies
           merge-multiple: true
-      - name: Verify dependency-only reuse and install locked binary wheels
+      - name: Verify reused native wheels and install locked dependencies
         shell: pwsh
         run: |
           python packaging/windows_layout_dependencies.py --application "$PWD/application" --artifact-root "$env:RUNNER_TEMP/native-layout-dependencies" --run-metadata dist/diagnostic/native-run.json --artifact-metadata dist/diagnostic/native-artifact.json --run-id $env:NATIVE_RUN_ID --artifact-id $env:NATIVE_ARTIFACT_ID --output dist/diagnostic/dependency-reuse.json 2>&1 | Tee-Object -FilePath dist/diagnostic/dependency-reuse.log

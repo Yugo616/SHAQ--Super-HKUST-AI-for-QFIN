@@ -45,6 +45,18 @@ def verify(application, artifact_root, run, artifact, run_id, artifact_id):
     return sorted(wheels)
 
 
+def install_dependencies(application, wheels):
+    pip = [sys.executable,'-m','pip']
+    subprocess.run([*pip,'install','--no-deps',*[str(p) for p in wheels]],check=True)
+    # Preserve the three verified native wheels. Other exact locked pins (for
+    # example peewee/proxy_tools) may need ordinary sdist installation wheels.
+    native_names = ','.join(sorted(p.name.split('-')[0].replace('_','-') for p in wheels))
+    subprocess.run([*pip,'install','--only-binary='+native_names,'-r',str(application/'packaging/requirements.lock.txt')],check=True)
+    subprocess.run([*pip,'install','--no-deps','--no-build-isolation','-e',str(application)],check=True)
+    subprocess.run([*pip,'check'],check=True)
+    subprocess.run([sys.executable,'-c',"import tables; assert tables.which_lib_version('lzo') is None"],check=True)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--application', type=Path, required=True)
@@ -64,13 +76,7 @@ def main():
         artifact = json.loads(args.artifact_metadata.read_text(encoding='utf-8-sig'))
         wheels = verify(args.application,args.artifact_root,run,artifact,args.run_id,args.artifact_id)
         result.update(application_sha=run['head_sha'],wheel_sha256={p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in wheels})
-        pip = [sys.executable,'-m','pip']
-        subprocess.run([*pip,'install','--no-deps',*[str(p) for p in wheels]],check=True)
-        # Refuse source builds, even if a locked third-party wheel is unavailable.
-        subprocess.run([*pip,'install','--only-binary=:all:','-r',str(args.application/'packaging/requirements.lock.txt')],check=True)
-        subprocess.run([*pip,'install','--no-deps','--no-build-isolation','-e',str(args.application)],check=True)
-        subprocess.run([*pip,'check'],check=True)
-        subprocess.run([sys.executable,'-c',"import tables; assert tables.which_lib_version('lzo') is None"],check=True)
+        install_dependencies(args.application, wheels)
         result['status']='passed'
     except Exception as exc:
         result['error']=str(exc)
