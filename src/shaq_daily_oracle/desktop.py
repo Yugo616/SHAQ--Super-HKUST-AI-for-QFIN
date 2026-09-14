@@ -21,7 +21,7 @@ from .market_calendar import market_session, next_market_session
 from .service import disable_future_runs, enable_autostart, run_worker, start_worker
 from .settings import SettingsError, SettingsStore, _atomic_json
 from .sandboxed_codex import attest_sandboxed_codex
-from .update_admission import gate_for, guarded_method
+from .update_admission import gate_for, guarded_method, WorkerAdmission
 
 
 def _tcp_ready(host: str, port: int) -> bool:
@@ -36,6 +36,7 @@ class DesktopBridge:
     @guarded_method
     def __init__(self, paths=None) -> None:
         self.paths = (paths or app_paths()).ensure()
+        self._runtime_admission = WorkerAdmission(self.paths)
         migrate_legacy_runtime(self.paths)
         self.store = SettingsStore(self.paths)
         self.index = DashboardIndex(
@@ -54,6 +55,8 @@ class DesktopBridge:
         try:
             # All bridge calls can trigger index/setting writes, including reads.
             admission = gate_for(self.paths).work() if hasattr(self, 'paths') and not _update_control else nullcontext()
+            if not _update_control and hasattr(self, '_runtime_admission'):
+                admission = self._runtime_admission.work()
             with admission:
                 return {"ok": True, "value": action(*args, **kwargs)}
         except Exception as exc:

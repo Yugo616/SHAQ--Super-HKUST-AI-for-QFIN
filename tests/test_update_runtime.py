@@ -14,6 +14,27 @@ ROOT = Path(__file__).parents[1]
 
 
 class AdmissionTests(unittest.TestCase):
+    def test_two_old_bridges_reject_writes_after_new_version_confirmation(self):
+        from test_research_lab_foundation import ResearchLabFoundationTests
+        from shaq_daily_oracle.desktop import DesktopBridge
+        from shaq_daily_oracle.update_admission import AdmissionGate
+        with tempfile.TemporaryDirectory() as directory:
+            paths=ResearchLabFoundationTests().paths(Path(directory))
+            version=['0.6.2']
+            with patch('shaq_daily_oracle.app_paths.application_version',side_effect=lambda root:version[0]):
+                first,second=DesktopBridge(paths),DesktopBridge(paths)
+                gate=AdmissionGate(paths.data_root)
+                with gate.install():gate.mark_installing('0.7.0')
+                version[0]='0.7.0';gate.finish_restart('0.7.0')
+                writes=[]
+                self.assertFalse(first._result(lambda:writes.append('old1'))['ok'])
+                self.assertFalse(second._result(lambda:writes.append('old2'))['ok'])
+                self.assertFalse(first.set_automatic_software_update(True)['ok'])
+                self.assertIn('重新',first._result(lambda:None)['error'])
+                fresh=DesktopBridge(paths)
+                self.assertTrue(fresh._result(lambda:writes.append('new'))['ok'])
+                self.assertEqual(writes,['new'])
+
     def test_old_idle_worker_exits_even_after_new_app_clears_install_intent(self):
         from shaq_daily_oracle.update_admission import AdmissionGate, WorkerAdmission, UpdateBusy
         with tempfile.TemporaryDirectory() as directory:

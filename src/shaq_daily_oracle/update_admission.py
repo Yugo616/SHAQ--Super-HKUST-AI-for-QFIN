@@ -15,6 +15,11 @@ class UpdateBusy(RuntimeError):
         super().__init__('分析、结算或后台写入正在运行，或正在安装更新；请等待结束后重试。')
 
 
+class StaleRuntime(UpdateBusy):
+    def __init__(self):
+        RuntimeError.__init__(self, '软件已更新；此旧窗口不会再执行任务，请关闭后重新打开应用。')
+
+
 class AdmissionGate:
     def __init__(self, data_root):
         self.data_root = Path(data_root)
@@ -111,7 +116,7 @@ def gate_for(paths):
 
 
 class WorkerAdmission:
-    """A long-lived worker yields admission only at explicit idle boundaries."""
+    """Shared startup-generation guard for workers, GUI calls and updates."""
     def __init__(self, paths):
         from .app_paths import application_version
         self.package_root = paths.package_root
@@ -129,15 +134,26 @@ class WorkerAdmission:
     def __enter__(self):
         lease = self.gate.work()
         lease.__enter__()
-        from .app_paths import application_version
         try:
-            if application_version(self.package_root) != self.version or self._completed_update() != self.history:
-                raise UpdateBusy()
+            self.assert_current()
         except BaseException:
             lease.__exit__(None, None, None)
             raise
         self.lease = lease
         return self
+
+    def assert_current(self):
+        from .app_paths import application_version
+        if application_version(self.package_root) != self.version or self._completed_update() != self.history:
+            raise StaleRuntime()
+
+    @contextmanager
+    def work(self):
+        # Per-call lease (not self.lease) allows concurrent GUI calls without
+        # changing this instance's immutable startup-generation baseline.
+        with self.gate.work():
+            self.assert_current()
+            yield
 
     def __exit__(self, *exc):
         if self.lease is not None:

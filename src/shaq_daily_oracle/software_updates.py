@@ -128,7 +128,9 @@ def launch_update_recovery(paths):
 
 class UpdateRuntime:
     def __init__(self, paths, *, sdk=None):
+        from .update_admission import WorkerAdmission
         self.paths, self.sdk = paths, sdk
+        self._runtime_admission = WorkerAdmission(paths)
         self._lock = threading.RLock()
         self._state = {'status': 'unchecked', 'mode': 'installer_only'}
         self._manager = self._info = None
@@ -154,13 +156,14 @@ class UpdateRuntime:
         from .update_admission import gate_for
         if type(enabled) is not bool:
             raise ValueError('自动更新开关必须为开或关')
-        with gate_for(self.paths).work():
+        with self._runtime_admission.work():
             _atomic_json(self.paths.data_root / 'software-update-preferences.json', {'automatic_enabled':enabled})
         return self.status()
 
     def automatic_step(self):
         from .update_admission import UpdateBusy
         with self._lock:
+            self._runtime_admission.assert_current()
             if not self.status()['automatic_enabled']:
                 return self.status()
             state = self._state['status']
@@ -198,7 +201,7 @@ class UpdateRuntime:
         self._automatic_thread.start()
 
     def check(self):
-        with self._lock:
+        with self._lock, self._runtime_admission.work():
             if self._state['status'] in {'downloading', 'ready', 'applying'}:
                 return self.status()
             self._manager = self._info = None
@@ -298,7 +301,7 @@ class UpdateRuntime:
             raise ValueError('更新包的平台、版本、标识、大小或 SHA256 摘要无效')
 
     def download(self):
-        with self._lock:
+        with self._lock, self._runtime_admission.work():
             if self._state['status'] == 'downloading':
                 return self.status()
             if not self._info or self._state['status'] not in {'available','download_failed'}:
@@ -333,6 +336,7 @@ class UpdateRuntime:
                 raise ValueError('更新尚未下载并校验完成')
             gate = gate_for(self.paths)
             with gate.install():
+                self._runtime_admission.assert_current()
                 gate.mark_installing(self._state['latest_version'], method)
                 self._state['waiting_for_idle'] = False
                 self._state['status'] = 'applying'
