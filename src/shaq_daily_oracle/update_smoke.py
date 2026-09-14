@@ -20,7 +20,11 @@ from .app_paths import app_paths, application_version
 from .settings import _atomic_json
 
 
-def wait_event(path, *, timeout=90, failure_path=None):
+ACCEPTANCE_EVENT_TIMEOUT_SECONDS = 90
+ADMISSION_POLL_SECONDS = .1
+
+
+def wait_event(path, *, timeout=ACCEPTANCE_EVENT_TIMEOUT_SECONDS, failure_path=None):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if failure_path is not None and failure_path.exists():
@@ -58,6 +62,26 @@ def verify_deferred(state, before, after, *, dirty):
         raise RuntimeError('Update did not remain ready with expected waiting message: ' + str(state))
     if before != after:
         raise RuntimeError('Installed program was replaced while update was deferred')
+
+
+def wait_automatic_admission(runtime, before, peer, *, dirty, deadline):
+    """Wait through real work before testing dirty or saved GUI admission."""
+    while time.monotonic() < deadline:
+        state = runtime.automatic_step()
+        if state.get('waiting_for_idle') is True:
+            verify_deferred(state, before, program_hashes(), dirty=False)
+            if peer.poll() is not None:
+                raise RuntimeError('Peer closed during active work')
+            time.sleep(min(ADMISSION_POLL_SECONDS, max(0, deadline-time.monotonic())))
+            continue
+        if dirty:
+            verify_deferred(state, before, program_hashes(), dirty=True)
+            if peer.poll() is not None:
+                raise RuntimeError('Dirty second GUI closed')
+        elif state.get('status') != 'applying':
+            raise RuntimeError('Saved GUI did not enter native apply: ' + str(state))
+        return state
+    raise TimeoutError('Native acceptance work did not become idle before phase deadline')
 
 
 def program_hashes():
@@ -256,13 +280,16 @@ def main(argv=None):
                         result['waiting_stages'].append(kind)
                         _atomic_json(events/(kind+'-release.json'),{'status':'passed'})
                         wait_event(events/(kind+'-released.json'))
-                    wait_event(events/'peer-dirty.json')
-                    state=runtime.automatic_step()
-                    verify_deferred(state,original_program,program_hashes(),dirty=True)
-                    if peer.poll() is not None:raise RuntimeError('Dirty second GUI closed')
+                    # Editor fields can be ready while other admitted GUI reads
+                    # still run. Share the existing peer-event budget, rather
+                    # than assuming the first automatic step reaches quiescence.
+                    dirty_deadline=time.monotonic()+ACCEPTANCE_EVENT_TIMEOUT_SECONDS
+                    wait_event(events/'peer-dirty.json',timeout=max(0,dirty_deadline-time.monotonic()))
+                    state=wait_automatic_admission(runtime,original_program,peer,dirty=True,deadline=dirty_deadline)
                     _atomic_json(events/'dirty-waiting.json',{'status':'passed','state':state,'peer_alive':True,'program_unchanged':True})
+                    saved_deadline=time.monotonic()+ACCEPTANCE_EVENT_TIMEOUT_SECONDS
                     _atomic_json(events/'save-peer.json',{'status':'passed'})
-                    wait_event(events/'peer-saved.json')
+                    wait_event(events/'peer-saved.json',timeout=max(0,saved_deadline-time.monotonic()))
                     # Propagate the dedicated isolated target entry through the
                     # SDK, not a parent-Python replacement simulation.
                     class Restart:
@@ -274,7 +301,7 @@ def main(argv=None):
                     runtime._manager=Restart()
                     result['status']='applying'
                     _atomic_json(events/(stage+'-result.json'),result)
-                    runtime.automatic_step()
+                    wait_automatic_admission(runtime,original_program,peer,dirty=False,deadline=saved_deadline)
                     raise RuntimeError('Native SDK apply unexpectedly returned')
                 else:
                     # Rendering precedes the async confirm_desktop_ready API.

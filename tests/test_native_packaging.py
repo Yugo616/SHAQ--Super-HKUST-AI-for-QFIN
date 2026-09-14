@@ -20,6 +20,25 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class NativePackagingTests(unittest.TestCase):
+    def test_dispatch_can_build_only_intel_without_changing_other_target_matrices(self):
+        lines = (ROOT / '.github/workflows/build-desktop.yml').read_text().splitlines()
+        expression = next(line.strip().removeprefix('include: ') for line in lines if line.strip().startswith('include: ${{'))
+        expression = expression.removeprefix('${{').removesuffix('}}')
+        expected = {'macos-intel': ['macOS-Intel'], 'windows': ['Windows-x64'],
+                    'macos': ['macOS-Apple-Silicon', 'macOS-Intel'],
+                    'all': ['Windows-x64', 'macOS-Apple-Silicon', 'macOS-Intel'],
+                    '': ['Windows-x64', 'macOS-Apple-Silicon', 'macOS-Intel']}
+        for target, platforms in expected.items():
+            with self.subTest(target=target):
+                script = 'const inputs={target:process.argv[2]}; const fromJSON=JSON.parse; console.log(JSON.stringify(' + expression + '));'
+                result = subprocess.run(['node', '-', target], input=script, text=True, capture_output=True, check=True)
+                matrix = json.loads(result.stdout)
+                self.assertEqual([row['platform'] for row in matrix], platforms)
+                if target == 'macos-intel':
+                    self.assertEqual(matrix, [{'runner': 'macos-15-intel', 'platform': 'macOS-Intel', 'arch': 'x86_64'}])
+        options = next(line.split('[', 1)[1].split(']', 1)[0] for line in lines if line.strip().startswith('options:'))
+        self.assertIn('macos-intel', [value.strip() for value in options.split(',')])
+
     def test_installed_update_waits_for_native_self_delete_and_rejects_persistent_leftovers(self):
         acceptance=self.module('installed_update_acceptance')
         verify=self.module('verify_uninstall')

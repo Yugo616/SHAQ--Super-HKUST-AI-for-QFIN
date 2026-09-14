@@ -5,7 +5,7 @@ on:
       target:
         description: Complete acceptance for Windows, macOS, or all platforms at this commit
         type: choice
-        options: [windows, macos, all]
+        options: [windows, macos, macos-intel, all]
         default: windows
   push:
     paths:
@@ -28,7 +28,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(inputs.target == 'windows' && '[{"runner":"windows-latest","platform":"Windows-x64"}]' || inputs.target == 'macos' && '[{"runner":"macos-15","platform":"macOS-Apple-Silicon","arch":"arm64"},{"runner":"macos-15-intel","platform":"macOS-Intel","arch":"x86_64"}]' || '[{"runner":"windows-latest","platform":"Windows-x64"},{"runner":"macos-15","platform":"macOS-Apple-Silicon","arch":"arm64"},{"runner":"macos-15-intel","platform":"macOS-Intel","arch":"x86_64"}]') }}
+        include: ${{ fromJSON(inputs.target == 'windows' && '[{"runner":"windows-latest","platform":"Windows-x64"}]' || inputs.target == 'macos-intel' && '[{"runner":"macos-15-intel","platform":"macOS-Intel","arch":"x86_64"}]' || inputs.target == 'macos' && '[{"runner":"macos-15","platform":"macOS-Apple-Silicon","arch":"arm64"},{"runner":"macos-15-intel","platform":"macOS-Intel","arch":"x86_64"}]' || '[{"runner":"windows-latest","platform":"Windows-x64"},{"runner":"macos-15","platform":"macOS-Apple-Silicon","arch":"arm64"},{"runner":"macos-15-intel","platform":"macOS-Intel","arch":"x86_64"}]') }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     steps:
