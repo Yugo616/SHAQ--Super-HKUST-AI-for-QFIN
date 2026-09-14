@@ -158,20 +158,38 @@ class InstalledAcceptanceContractTests(unittest.TestCase):
             if handle == ctypes.c_void_p(-1).value:
                 raise ctypes.WinError()
 
+            observed_denial = threading.Event()
+
+            class ObservedReceipt:
+                def read_text(self, **kwargs):
+                    try:
+                        return path.read_text(**kwargs)
+                    except PermissionError as exc:
+                        if exc.errno == errno.EACCES:
+                            observed_denial.set()
+                        raise
+
+            stop_release = threading.Event()
             closed = []
             def release():
-                time.sleep(.15)
+                while not observed_denial.wait(.05):
+                    if stop_release.is_set():
+                        return
                 closed.append(bool(close_handle(handle)))
 
             releaser = threading.Thread(target=release)
             releaser.start()
             try:
                 receipt = update_smoke.wait_restart_confirmation(
-                    path, '0.7.1', 'current', deadline=time.monotonic() + 2,
+                    ObservedReceipt(), '0.7.1', 'current', deadline=time.monotonic() + 2,
                 )
             finally:
+                stop_release.set()
                 releaser.join(2)
+                if not closed:
+                    close_handle(handle)
             self.assertFalse(releaser.is_alive())
+            self.assertTrue(observed_denial.is_set())
             self.assertEqual(closed, [True])
             self.assertEqual(receipt, current)
 
