@@ -16,13 +16,13 @@ SHAQ brings six specialist research domains, adversarial review and a brokerless
 
 | Your computer | Download |
 |---|---|
-| Windows 10/11, x64 | [Windows installer](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.0-windows) |
+| Windows 10/11, x64 | [Windows installer](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.1-windows) |
 | Mac with Apple Silicon (M series), macOS 15+ | [Mac DMG](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.0-macos) |
 | Intel Mac, macOS 15+ | [Intel DMG](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.0-macos) |
 
 Download the **`.exe`** or **`.dmg`** only. Other assets serve the updater, checksum verification and third-party notices. Installers include Python and the simulation engine: Git, Python, Futu and a brokerage account are not end-user prerequisites. Windows requires WebView2; the installer checks it. These are internally tested prereleases without commercial signing or notarization. Check the release page before accepting an operating-system source warning.
 
-Windows and Apple Silicon 0.7.0 packages share [source commit `56d6467`](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/commit/56d64679bb8a9291e229e29743c9be29a7a16517). Intel 0.7.0 uses [follow-up `97384db`](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/commit/97384db94f4ccf1c85b046c4c82bc170f0c9a8d0), which corrects native acceptance timing. Releases supply per-platform acceptance records and checksums; existing artifacts are not replaced.
+Windows 0.7.1 uses [source commit `bc144f1`](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/commit/bc144f1c4135b7b009e07d009f73724f95848bb7), with a tested delta upgrade from the published Windows 0.7.0. Apple Silicon remains on 0.7.0 ([`56d6467`](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/commit/56d64679bb8a9291e229e29743c9be29a7a16517)); Intel remains on 0.7.0 ([`97384db`](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/commit/97384db94f4ccf1c85b046c4c82bc170f0c9a8d0)). Releases supply per-platform acceptance records and checksums; existing artifacts are not replaced.
 
 ## Your first run
 

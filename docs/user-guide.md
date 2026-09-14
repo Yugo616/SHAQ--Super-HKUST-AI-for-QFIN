@@ -6,7 +6,7 @@ SHAQ Daily Oracle Lab is a local comparative-research workbench. Its research mo
 
 Download the installer for your computer from the platform page. Use only the packages actually listed there; each architecture has its own acceptance record:
 
-- [Windows 10/11 x64 installer](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.0-windows)
+- [Windows 10/11 x64 installer](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.1-windows)
 - [macOS 15+ Apple Silicon and Intel disk images](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.0-macos)
 
 On Mac, choose the disk image matching the computer's processor. On Windows, WebView2 Evergreen Runtime is required; the installer identifies a missing runtime before installation. Python and Git are not end-user prerequisites. The GitHub pages mark these builds as prereleases, and they are not commercially signed or notarized, so review the release page, checksum, and operating-system warning before first launch.
@@ -32,7 +32,7 @@ For example, Packy's [OpenAI-compatible CLI guide](https://docs.packyapi.com/doc
 
 On Windows, local-subscription discovery accepts the provider's native `.exe` or `.com` CLI. Shell launchers are not accepted because they do not meet the desktop process boundary; an API profile remains available instead. Use the official installation links in the dialog when a native CLI is absent.
 
-The 0.7.1 Windows correction also detects Codex's vendor-managed version directories, without requiring them on PATH. It checks that a candidate is the actual CLI before using it. Claude's native CLI is preferred over a WindowsApps desktop-chat alias. When the CLI is found but unauthenticated, choose **Log in to Codex / Claude Code (`登录 Codex` / `登录 Claude Code`)** to open its own browser sign-in, then complete the model test. SHAQ does not copy credentials from another app. If 0.7.1 is not yet listed on the Windows release page, this correction has not yet been delivered to installed users.
+The 0.7.1 Windows correction also detects Codex's vendor-managed version directories, without requiring them on PATH. It checks that a candidate is the actual CLI before using it. Claude's native CLI is preferred over a WindowsApps desktop-chat alias. When the CLI is found but unauthenticated, choose **Log in to Codex / Claude Code (`登录 Codex` / `登录 Claude Code`)** to open its own browser sign-in, then complete the model test. SHAQ does not copy credentials from another app. Existing Windows 0.7.0 users can install this correction through **Software Update → Check → Download → Update and Restart**.
 
 The app performs a small structured-response probe before saving a profile. A malformed response, authentication error, rate limit, timeout, or schema failure is shown with **Retry**, **Edit Connection**, and **Copy Error** actions. It does not silently switch provider, endpoint, or model. Ordinary setup has no temperature field; each protocol sends only parameters supported by that profile.
 

@@ -4,7 +4,7 @@ Application updates and research-method updates are separate. **0.7.0 is the fir
 
 ## Platform downloads and acceptance
 
-- [0.7.0 Windows 10/11 x64 release page](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.0-windows)
+- [0.7.1 Windows 10/11 x64 release page](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.1-windows)
 - [0.7.0 macOS 15+ release page, separate Apple Silicon and Intel packages](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.0-macos)
 
 Use a page only after its packages, checksums and acceptance record exist. Check each architecture's acceptance record for its exact build source; separately accepted additions may name an explicitly recorded follow-up commit. A candidate branch, CI fixture run or this document is not proof of successful installation on your machine. Native acceptance covers Windows x64, macOS ARM64 and macOS x64 separately. Live personal model connections remain a separate check.
@@ -28,6 +28,8 @@ Old program files may be replaced/removed before the target application starts. 
 Open **Software Update** in the app header. A managed, supported installation can check the official release for its operating system and architecture, download a verified update, and offer **Update and Restart**. Matching deltas are preferred when available; a verified full package is the fallback. Missing/corrupt packages or the wrong architecture/feed must fail safely rather than install unverified content. Source and unmanaged installs retain installer-only guidance.
 
 Downloads do not end active work. Apply waits for analysis, settlement and background writes to finish; unsaved GUI edits must be resolved before restart. Cross-process runtime admission prevents an old window or scheduled worker from resuming writes after installation. A queued manual update can be cancelled before installation begins. Automatic software updates are a separate saved preference and remain off until explicitly enabled; turning them on does not enable automatic research.
+
+Manual route: **Check → Download → Update and Restart**. Downloading alone does not authorize installation. With **Automatic software updates** enabled, checking, downloading and applying when idle are automatic. Both routes preserve local user data and wait for active work before replacement.
 
 The dialog shows current/target version, last check and last successful update when recorded. An update is successful only after the target version has launched and passed native GUI health confirmation. Download completion, a launched installer or a background process alone is not success. If replacement or target startup fails, reopen or reinstall the target full package without deleting user data. Do not assume the old executable remains usable.
 
