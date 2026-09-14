@@ -1,9 +1,17 @@
 from pathlib import Path
 import hashlib
+import functools
+import http.server
+import io
 import importlib.util
 import json
+import os
 import tempfile
+import threading
 import unittest
+import urllib.error
+import urllib.request
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -20,6 +28,58 @@ def module():
 
 
 class PublicBaseUpdateAcceptanceTests(unittest.TestCase):
+    def test_root_uses_system_temp_even_when_runner_temp_differs(self):
+        acceptance = module()
+        expected = Path(tempfile.gettempdir()) / 'shaq-installed-update-fixture'
+        with patch.dict(os.environ, {'RUNNER_TEMP': str(expected / 'runner-temp')}), patch.object(
+                acceptance.tempfile, 'mkdtemp', return_value=str(expected)) as created:
+            root = acceptance.create_acceptance_root()
+        self.assertEqual(root, expected.resolve())
+        created.assert_called_once_with(prefix='shaq-installed-update-')
+
+    def test_loopback_proxy_bypass_is_per_apply_and_replay_child(self):
+        acceptance = module()
+        for stage in ('public-base-apply', 'public-base-replay'):
+            with self.subTest(stage=stage), patch.dict(
+                    acceptance.os.environ, {'NO_PROXY': 'existing.test', 'no_proxy': ''}, clear=True), patch.object(
+                    acceptance.subprocess, 'run', return_value=object()) as invoked:
+                before = dict(acceptance.os.environ)
+                acceptance.run_child(['app.exe'], io.StringIO(), 10, loopback=stage in acceptance.LOOPBACK_STAGES)
+                environment = invoked.call_args.kwargs['env']
+                self.assertEqual(acceptance.os.environ, before)
+                for key in ('NO_PROXY', 'no_proxy'):
+                    self.assertIn('127.0.0.1', environment[key].split(','))
+                    self.assertIn('localhost', environment[key].split(','))
+                self.assertIn('existing.test', environment['NO_PROXY'].split(','))
+
+    def test_acceptance_server_serves_delta_but_rejects_target_full_fallback(self):
+        acceptance = module()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            delta = root / 'SHAQDailyOracleLab-0.7.1-win-x64-stable-delta.nupkg'
+            full = root / 'SHAQDailyOracleLab-0.7.1-win-x64-stable-full.nupkg'
+            manifest = root / 'releases.win-x64-stable.json'
+            delta.write_bytes(b'actual delta')
+            full.write_bytes(b'forbidden fallback')
+            manifest.write_text('{"Assets":[]}', encoding='utf-8')
+            blocked = []
+            handler = functools.partial(acceptance.DeltaOnlyHandler, directory=str(root),
+                                        blocked_filename=full.name, blocked_requests=blocked)
+            server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), handler)
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            base = f'http://127.0.0.1:{server.server_port}/'
+            try:
+                self.assertEqual(opener.open(base + delta.name).read(), b'actual delta')
+                self.assertEqual(opener.open(base + manifest.name).read(), b'{"Assets":[]}')
+                with self.assertRaises(urllib.error.HTTPError) as rejected:
+                    opener.open(base + full.name)
+                self.assertEqual(rejected.exception.code, 409)
+                self.assertEqual(blocked, [full.name])
+            finally:
+                server.shutdown()
+                server.server_close()
+
     def fixture(self, directory):
         feed = Path(directory)
         package_id = 'SHAQDailyOracleLab'

@@ -14,6 +14,7 @@ import tempfile
 import threading
 import time
 from types import SimpleNamespace
+import urllib.parse
 
 import httpx
 from packaging.version import Version
@@ -21,6 +22,38 @@ from packaging.version import Version
 
 INSTALLER = 'SHAQ-Daily-Oracle-Lab-Windows-x64-Setup.exe'
 APP = 'SHAQ Daily Oracle Lab'
+LOOPBACK_STAGES = frozenset({'public-base-apply', 'public-base-replay'})
+
+
+class DeltaOnlyHandler(http.server.SimpleHTTPRequestHandler):
+    """Serve the final feed/delta while making any target-full fallback fatal."""
+    def __init__(self, *args, blocked_filename, blocked_requests, **kwargs):
+        self.blocked_filename = blocked_filename
+        self.blocked_requests = blocked_requests
+        super().__init__(*args, **kwargs)
+
+    def do_GET(self):
+        requested = urllib.parse.unquote(urllib.parse.urlsplit(self.path).path).lstrip('/')
+        if requested == self.blocked_filename:
+            self.blocked_requests.append(requested)
+            self.send_error(409, 'Target full fallback is forbidden in delta acceptance')
+            return
+        super().do_GET()
+
+
+def create_acceptance_root():
+    # Released 0.7.0 accepts only a direct child of tempfile.gettempdir().
+    return Path(tempfile.mkdtemp(prefix='shaq-installed-update-')).resolve()
+
+
+def run_child(command, stream, timeout, *, loopback=False):
+    environment = dict(os.environ)
+    if loopback:
+        for key in ('NO_PROXY', 'no_proxy'):
+            environment[key] = ','.join(filter(None, (
+                environment.get(key, ''), '127.0.0.1', 'localhost')))
+    return subprocess.run([str(value) for value in command], stdout=stream,
+                          stderr=subprocess.STDOUT, timeout=timeout, env=environment)
 
 
 def validate_transition(root, feed_root, target_version):
@@ -126,8 +159,7 @@ def main(argv=None):
     def run(name, command, timeout=300):
         log = args.output.with_name(args.output.stem + '-' + name + '.log')
         with log.open('w', encoding='utf-8') as stream:
-            completed = subprocess.run([str(value) for value in command], stdout=stream,
-                                       stderr=subprocess.STDOUT, timeout=timeout)
+            completed = run_child(command, stream, timeout, loopback=name in LOOPBACK_STAGES)
         stages.append({'name': name, 'returncode': completed.returncode})
         if completed.returncode:
             raise RuntimeError(name + ' failed; see retained log')
@@ -136,7 +168,7 @@ def main(argv=None):
         if sys.platform != 'win32':
             raise RuntimeError('Public base native acceptance requires Windows')
         identity = validate_transition(project, args.feed.resolve(), args.target_version)
-        root = Path(tempfile.mkdtemp(prefix='shaq-installed-update-', dir=os.environ['RUNNER_TEMP'])).resolve()
+        root = create_acceptance_root()
         installed = root / 'installed' / APP
         setup = root / INSTALLER
         download_verified(identity['installer_source_url'], setup, identity['installer_size'], identity['installer_sha256'])
@@ -147,7 +179,10 @@ def main(argv=None):
         cache = root / 'packages'
         cache.mkdir()
         shutil.copy2(args.feed / identity['base_filename'], cache / identity['base_filename'])
-        handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(args.feed.resolve()))
+        blocked_requests = []
+        handler = functools.partial(DeltaOnlyHandler, directory=str(args.feed.resolve()),
+                                    blocked_filename=identity['target_filename'],
+                                    blocked_requests=blocked_requests)
         server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), handler)
         threading.Thread(target=server.serve_forever, daemon=True).start()
         config = dict(bridge_version=identity['base_version'], target_version=identity['target_version'],
@@ -172,6 +207,8 @@ def main(argv=None):
         if process_running(health['pid']):
             raise RuntimeError('Updated target did not close after health confirmation')
         peer = wait_event(events / 'peer-result.json')
+        if blocked_requests:
+            raise RuntimeError('Native updater requested the target full fallback during delta acceptance')
         cache_files = verify_cache(cache, identity['target_filename'])
         program_copies = verify_program_copies(installed, sys.platform)
         run('public-base-replay', [executable, '--update-smoke', configuration, '--update-stage', 'replay'], timeout=120)
@@ -185,6 +222,7 @@ def main(argv=None):
         result = dict(status='passed', identity=identity, event_identity=event_identity,
                       bridge=bridge, target=target, peer=peer, replay=replay,
                       cache_files=cache_files, program_copies=program_copies, uninstalled=True,
+                      target_full_requests=blocked_requests,
                       stages=stages, limitations=['Windows GitHub-hosted runner only',
                       'one public-base-to-final transition; internal multi-version soak remains separate'])
     except Exception as exc:
@@ -192,6 +230,7 @@ def main(argv=None):
     finally:
         if server is not None:
             server.shutdown()
+            server.server_close()
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(result, indent=2), encoding='utf-8')
     print(json.dumps(result), flush=True)
