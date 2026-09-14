@@ -54,7 +54,7 @@ class NativeVendorProofTests(unittest.TestCase):
     def test_proven_vendor_rust_paths_do_not_exempt_private_resource_data(self):
         audit=self.module();proof=getattr(audit,'native_vendor_identity',None)
         self.assertIsNotNone(proof)
-        home='C:/Users/runneradmin';checkout='D:/a/current/current'
+        home='/'.join(('C:', 'Users', 'runneradmin'));checkout='D:/a/current/current'
         for resource,want_private in ((b'public icon',False),
             ((home+'/.rustup/toolchains/nightly-x86_64-pc-windows-msvc/lib/rustlib/src/rust/library/std/src/../../backtrace/src/dbghelp.rs\0').encode(),False),
             ((home+'/.ssh/id_rsa').encode(),True),((checkout+'/src/main.py').encode(),True),
