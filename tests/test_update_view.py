@@ -26,7 +26,7 @@ await startDesktop();console.log(JSON.stringify({failed,success:calls}));})();
     def test_manual_handler_renders_exact_busy_queue_message(self):
         source=(Path(__file__).parents[1]/'src/shaq_daily_oracle/desktop/software_updates.js').read_text()
         script='''
-const nodes=new Map();const q=s=>{if(!nodes.has(s))nodes.set(s,{dataset:{},innerHTML:''});return nodes.get(s)};
+const nodes=new Map();const q=s=>{if(!nodes.has(s))nodes.set(s,{dataset:{},innerHTML:'',open:false,scrollTop:0,contains(){return false},querySelector:q,addEventListener(){}});return nodes.get(s)};
 const document={querySelector:q};const esc=x=>String(x||'');const setTimeout=()=>0;const clearTimeout=()=>{};
 const api=async()=>({status:'ready',mode:'managed',waiting_for_idle:true,queued_apply_method:'manual',message:'已下载，等待本地任务运行完更新'});
 '''+source+'''
@@ -43,7 +43,7 @@ console.log(JSON.stringify({html:q('#software-update-detail').innerHTML}));})();
         source=(Path(__file__).parents[1]/'src/shaq_daily_oracle/desktop/software_updates.js').read_text()
         script='''
 const nodes=new Map();const calls=[];
-const q=s=>{if(!nodes.has(s))nodes.set(s,{dataset:{},innerHTML:'',showModal(){},checked:false});return nodes.get(s)};
+const q=s=>{if(!nodes.has(s))nodes.set(s,{dataset:{},innerHTML:'',open:false,scrollTop:0,contains(){return false},querySelector:q,addEventListener(){},showModal(){this.open=true},checked:false});return nodes.get(s)};
 const document={querySelector:q};const esc=x=>String(x||'');const setTimeout=()=>0;const clearTimeout=()=>{};
 const api=async(method,value)=>{calls.push(method);if(method==='check_software_update')throw Error('offline');
 return {status:'check_failed',automatic_enabled:method==='software_update_status',last_update:{version:'0.6.2',method:'manual',completed_at:'2026-09-14T01:00:00Z'}};};
@@ -61,7 +61,7 @@ await q('#automatic-software-update').onchange();console.log(JSON.stringify({cal
         source=(Path(__file__).parents[1]/'src/shaq_daily_oracle/desktop/software_updates.js').read_text()
         script='''
 const nodes=new Map();const calls=[];
-const q=s=>{if(!nodes.has(s))nodes.set(s,{dataset:{},innerHTML:'',showModal(){}});return nodes.get(s)};
+const q=s=>{if(!nodes.has(s))nodes.set(s,{dataset:{},innerHTML:'',open:false,scrollTop:0,contains(){return false},querySelector:q,addEventListener(){},showModal(){this.open=true}});return nodes.get(s)};
 const document={querySelector:q};const esc=x=>String(x||'');const notice=()=>{};
 const setTimeout=()=>0;const clearTimeout=()=>{};
 async function api(method){calls.push(method);return {mode:'managed',status:method==='check_software_update'?'available':method==='download_software_update'?'downloading':'ready',current_version:'0.6.2',latest_version:'0.7.0',size_bytes:1024,download_size_bytes:100,progress:100,notes:'Fix'};}
@@ -80,7 +80,7 @@ console.log(JSON.stringify({calls,html:q('#software-update-detail').innerHTML}))
         source=(Path(__file__).parents[1]/'src/shaq_daily_oracle/desktop/software_updates.js').read_text()
         script='''
 const nodes=new Map();const calls=[];
-const q=s=>{if(!nodes.has(s))nodes.set(s,{dataset:{},innerHTML:'',showModal(){},checked:false});return nodes.get(s)};
+const q=s=>{if(!nodes.has(s))nodes.set(s,{dataset:{},innerHTML:'',open:false,scrollTop:0,contains(){return false},querySelector:q,addEventListener(){},showModal(){this.open=true},checked:false});return nodes.get(s)};
 const document={querySelector:q};const esc=x=>String(x||'');const setTimeout=()=>0;const clearTimeout=()=>{};
 const api=async(method,value)=>{calls.push([method,value]);return {status:'ready',mode:'managed',automatic_enabled:value,last_update:{version:'0.6.2',method:'automatic',completed_at:'2026-09-14T01:00:00Z'}};};
 '''+source+'''

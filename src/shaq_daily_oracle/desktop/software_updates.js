@@ -7,6 +7,12 @@ function renderSoftwareUpdate(value) {
   const managed=value.mode==='managed';
   const timestamp=value=>value?`<time datetime="${esc(value)}">${esc(new Date(value).toLocaleString())}</time>`:'暂无记录';
   const size=bytes=>`${(Number(bytes||0)/1048576).toFixed(1)} MB`;
+  const signature=JSON.stringify(value);
+  if(target.dataset.renderedValue!==signature){
+  const expanded=target.querySelector('details')?.open===true;
+  const focus=target.contains(document.activeElement)?document.activeElement.id:null;
+  const scroll=target.scrollTop;
+  const previousError=target.querySelector('#software-update-error')?.textContent||'';
   target.innerHTML=`<h3>${labels[value.status]||'检查完成'}</h3><p>${esc(value.platform||'')} · 当前 ${esc(value.current_version)}${value.latest_version?` · 最新 ${esc(value.latest_version)}${value.internal_test_release?'（内部测试版）':''}`:''}</p>
     <p>${esc(value.waiting_for_idle?'已下载，等待本地任务运行完更新':value.message||'旧安装仅提供完整安装包：请等待分析和结算结束，关闭应用后安装。')}</p>
     ${value.target_version?`<p>更新目标版本：${esc(value.target_version)}</p>`:''}
@@ -21,6 +27,11 @@ function renderSoftwareUpdate(value) {
     <p id="software-update-error" role="alert"></p>
     <details><summary>发布说明</summary><pre class="release-notes">${esc(value.notes||'暂无发布说明')}</pre></details>
     ${!['downloading','applying'].includes(value.status)?'<button class="secondary" id="retry-software-check">重新检查</button>':''}`;
+  target.dataset.renderedValue=signature;
+  target.querySelector('details').open=expanded;
+  target.querySelector('#software-update-error').textContent=previousError;
+  target.scrollTop=scroll;
+  if(focus)document.getElementById(focus)?.focus({preventScroll:true});
   if(['available','download_failed'].includes(value.status))q('#download-software').onclick=async()=>{
     try {
       if(!managed){await api('open_software_release');return;}
@@ -40,10 +51,12 @@ function renderSoftwareUpdate(value) {
     catch(error){q('#software-update-error').textContent=error.message;}
   };
   if(!['downloading','applying'].includes(value.status))q('#retry-software-check').onclick=checkSoftwareUpdate;
+  }
   clearTimeout(softwareUpdateTimer);
-  if(value.status==='downloading'||value.waiting_for_idle||value.automatic_enabled)softwareUpdateTimer=setTimeout(pollSoftwareUpdate,700);
+  if(q('#software-update-modal').open&&(value.status==='downloading'||value.waiting_for_idle||value.automatic_enabled))softwareUpdateTimer=setTimeout(pollSoftwareUpdate,700);
 }
 async function pollSoftwareUpdate() {
+  if(!q('#software-update-modal').open||q('#software-update-detail').dataset.checking==='true')return;
   try {renderSoftwareUpdate(await api('software_update_status'));}
   catch(error){q('#software-update-error').textContent=error.message;softwareUpdateTimer=setTimeout(pollSoftwareUpdate,2000);}
 }
@@ -52,7 +65,8 @@ async function checkSoftwareUpdate() {
   q('#software-update-modal').showModal();
   if(target.dataset.checking==='true')return;
   target.dataset.checking='true';
-  target.innerHTML='<p role="status">正在检查这台电脑适用的软件版本…</p>';
+  // Keep an already-open explanation visible while checking in the background.
+  if(!target.dataset.renderedValue)target.innerHTML='<p role="status">正在检查这台电脑适用的软件版本…</p>';
   try {
     renderSoftwareUpdate(await api('check_software_update'));
   } catch(error) {
@@ -66,3 +80,4 @@ async function checkSoftwareUpdate() {
   } finally {target.dataset.checking='false';}
 }
 document.querySelector('#software-update-button').onclick=checkSoftwareUpdate;
+document.querySelector('#software-update-modal').addEventListener('close',()=>clearTimeout(softwareUpdateTimer));

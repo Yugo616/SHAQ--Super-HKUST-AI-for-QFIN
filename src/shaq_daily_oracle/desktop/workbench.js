@@ -14,6 +14,9 @@ function openUtility(page,title){let layer=q('#utility');if(!layer){layer=docume
 function teamSync(){openUtility('upload','团队同步');const bar=document.createElement('div');bar.className='editor-tabs';bar.innerHTML='<button class="secondary" id="sync-upload">上传版本</button><button class="secondary" id="sync-download">下载团队版本</button>';q('#utility-content').prepend(bar);q('#sync-upload').onclick=()=>teamSync();q('#sync-download').onclick=()=>{q('#upload').classList.remove('active');document.querySelector('main').append(q('#upload'));q('#utility-content').append(q('#updates'));q('#updates').classList.add('active');renderUpdates()}}
 renderRun=function(){
   const s=state.data.settings, versions=state.data.versions||[], profiles=s.model_profiles||[];
+  // Move the live form across a run-list refresh instead of replacing user input.
+  const previousPanel=q('#automatic-panel')||wb.automaticPanel;
+  const focusedAutomatic=previousPanel?.contains(document.activeElement)?document.activeElement:null;
   const progressJobs=(state.data.jobs||[]).map(job=>({...job,research_selection:wb.researchSelections[job.job_id]||{}}));
   if(state.runSelections===null)state.runSelections=new Set(versions.filter(v=>v.status_badge==='正式基准').map(versionKey));
   const rows=versions.map(v=>`<tr><td><input class="version-check" type="checkbox" data-author="${esc(v.author||'team')}" data-version="${esc(v.version_id)}" ${state.runSelections.has(versionKey(v))?'checked':''}></td><td>${esc(versionName(v))} <span class="method-badge">${esc(v.status_badge||'本地版本')}</span><br><small>${esc(v.description||'')}</small></td><td>${esc(v.author||'团队')}</td><td>${esc(changed(v))}</td></tr>`).join('');
@@ -55,26 +58,34 @@ renderRun=function(){
     const id=panel.closest('[data-progress-job]').dataset.progressJob;
     wb.researchSelections[id]={...(wb.researchSelections[id]||{}),outerOpen:panel.open};
   });
-  const panel=q('#automatic-panel');panel.classList.toggle('hidden',!wb.autoPanelOpen);
+  if(previousPanel)q('#automatic-panel').replaceWith(previousPanel);
+  const panel=q('#automatic-panel');wb.automaticPanel=panel;
+  panel.classList.toggle('hidden',!wb.autoPanelOpen);
+  focusedAutomatic?.focus({preventScroll:true});
   q('#edit-automatic').onclick=()=>{wb.autoPanelOpen=!wb.autoPanelOpen;panel.classList.toggle('hidden',!wb.autoPanelOpen)};
   renderAutomatic();estimate();
 };
-async function renderAutomatic(){
+async function renderAutomatic(force=false){
   const target=q('#automatic-settings'), summary=q('#automatic-summary');
+  const request=wb.scheduleRequest=(wb.scheduleRequest||0)+1;
   try{
     const x=await api('get_research_schedule');
-    if(!target.isConnected)return;
+    if(!target.isConnected||request!==wb.scheduleRequest)return;
     summary.textContent=SHAQProgress.scheduleText(x);
+    if(target.querySelector('#auto-time')&&!force)return;
     const versions=state.data.versions||[], profiles=state.data.settings.model_profiles||[];
     const chosen=new Set(SHAQAccounts.normalizeSelections(versions,x.selections||[]).map(v=>`${v.author}/${v.version_id}`));
     target.innerHTML=`<label class="check-row"><input id="auto-enabled" type="checkbox" ${x.enabled?'checked':''}>每天自动运行</label><label>美东启动时间 <input id="auto-time" type="time" value="${esc(x.start_et.slice(0,5))}"></label><p>${esc(x.local_start||'')} ${esc(x.status_message||'')}</p><label>自动运行模型<select id="auto-model">${profiles.map(p=>`<option value="${esc(p.profile_id)}" ${p.profile_id===x.model_profile_id?'selected':''}>${esc(p.model)} · ${esc(p.profile_id)}</option>`).join('')}</select></label><p>自动运行的版本（独立于手动运行选择）</p>${versions.map(v=>`<label class="check-row"><input class="auto-version" type="checkbox" data-author="${esc(v.author)}" data-version="${esc(v.version_id)}" ${chosen.has(versionKey(v))?'checked':''}>${esc(versionName(v))}</label>`).join('')}<p>保存只修改后续任务。电脑需要保持开机、联网。</p><button class="secondary" id="save-automatic">保存自动运行设置</button>`;
+    target.oninput=target.onchange=()=>{wb.autoRevision=(wb.autoRevision||0)+1};
     q('#save-automatic').onclick=async()=>{
+      const revision=wb.autoRevision||0;
+      const button=q('#save-automatic');button.disabled=true;
       try{
         await api('save_research_schedule',{enabled:q('#auto-enabled').checked,start_et:q('#auto-time').value,selections:qa('.auto-version:checked').map(v=>({author:v.dataset.author,version_id:v.dataset.version})),model_profile_id:q('#auto-model').value});
-        notice('自动运行设置已保存');renderAutomatic();
-      }catch(e){notice(e.message,true)}
+        notice('自动运行设置已保存');renderAutomatic((wb.autoRevision||0)===revision);
+      }catch(e){notice(e.message,true)}finally{button.disabled=false}
     };
-  }catch(e){target.textContent=e.message;summary.textContent='自动运行状态读取失败，请展开检查'}
+  }catch(e){if(!target.isConnected||request!==wb.scheduleRequest)return;if(!target.querySelector('#auto-time'))target.textContent=e.message;summary.textContent='自动运行状态读取失败，已保留正在编辑的设置'}
 }
 renderEditor=function(){oldRenderEditor();const tools=q('.editor-toolbar');tools.insertAdjacentHTML('beforeend','<button class="primary" id="copy-version">复制版本</button><button class="secondary" id="team-sync">团队同步</button>');q('#team-sync').onclick=teamSync;q('#copy-version').onclick=async()=>{try{const [author,version_id]=q('#edit-version').value.split('/');const value=await api('copy_local_version',version_id,author);wb.draft=value.draft_id;q('#draft-id').value=wb.draft;notice('已复制为本地草稿，可开始修改')}catch(e){notice(e.message,true)}};q('#save-draft').textContent='保存修改';q('.package-footer').insertAdjacentHTML('beforeend','<div class="card"><label>修改说明<input id="version-description" placeholder="这次改了什么"></label><button class="primary" id="publish-local">保存版本</button></div>');q('#publish-local').onclick=async()=>{try{await api('finalize_local_version',q('#draft-id').value,q('#version-description').value);notice('新版本已保存，可在开始运行中选择');await load(false)}catch(e){notice(e.message,true)}};const container=document.createElement('div');container.className='module-workspace';const menu=document.createElement('aside');menu.className='module-menu';menu.innerHTML=Object.keys(state.data.skill_explanations).map(id=>`<button class="module-button" data-module="${esc(id)}">${esc(moduleName(id))}</button>`).join('')+'<button class="module-button" data-module="decision">最终决策</button>';const body=document.createElement('div');body.className='module-body';[...q('#editor').children].filter(x=>x!==tools).forEach(x=>body.append(x));container.append(menu,body);q('#editor').append(container);qa('[data-module]').forEach(b=>b.onclick=()=>{qa('[data-module]').forEach(x=>x.classList.toggle('active',x===b));if(b.dataset.module==='decision'){q('.decision-editor').scrollIntoView({behavior:'smooth',block:'start'})}else{q('#edit-skill').value=b.dataset.module;loadSkill()}});q('#edit-skill').closest('label').classList.add('hidden');q('.package-intro').classList.add('hidden');if(wb.draft)q('#draft-id').value=wb.draft;};
 saveDraft=async function(){const id=q('#draft-id').value.trim();if(!id)return notice('请先复制版本',true);try{await api('save_skill_package_draft',q('#edit-skill').value,q('#skill-method').value,q('#skill-foundations').value,{display_name:q('#agent-display-name').value,short_description:q('#agent-description').value,default_prompt:q('#agent-prompt').value},id);wb.draft=id;notice('领域修改已保存到本地草稿')}catch(e){notice(e.message,true)}};

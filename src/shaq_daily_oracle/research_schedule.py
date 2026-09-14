@@ -4,9 +4,13 @@ from __future__ import annotations
 import json
 import os
 import plistlib
+import re
 import subprocess
 import sys
 import time
+import tempfile
+from pathlib import Path
+from xml.etree import ElementTree
 from datetime import datetime, time as clock_time, timedelta
 from zoneinfo import ZoneInfo
 
@@ -15,6 +19,7 @@ from filelock import FileLock, Timeout
 from .market_calendar import market_session, next_market_session
 from .settings import _atomic_json
 from .update_admission import guarded_worker
+from .background_process import background_process_options
 
 ET = ZoneInfo("America/New_York")
 SERVICE_LABEL = "org.shaq.daily-oracle.research"
@@ -46,6 +51,51 @@ def worker_command():
     return [sys.executable, "-m", "shaq_daily_oracle.desktop", "--research-worker"]
 
 
+def _register_windows_worker(paths):
+    # Current logged-in user only: no password prompt, elevation or SYSTEM task.
+    # Task Scheduler checks once per minute; due_status remains the single ET gate.
+    options = dict(capture_output=True, timeout=30, check=False, **background_process_options())
+    identity = subprocess.run(['whoami', '/user', '/fo', 'csv', '/nh'], **options)
+    sid = re.search(rb'\bS-1-(?:\d+-)*\d+\b', identity.stdout)
+    if identity.returncode or sid is None:
+        raise ValueError('无法识别当前 Windows 登录用户，未启用自动运行')
+    namespace = 'http://schemas.microsoft.com/windows/2004/02/mit/task'
+    ElementTree.register_namespace('', namespace)
+    task = ElementTree.Element('{'+namespace+'}Task', version='1.3')
+    def element(parent, tag, text=None, **attributes):
+        node = ElementTree.SubElement(parent, '{'+namespace+'}'+tag, attributes)
+        node.text = text
+        return node
+    triggers = element(task, 'Triggers')
+    trigger = element(triggers, 'TimeTrigger')
+    element(trigger, 'StartBoundary', datetime.now().astimezone().isoformat(timespec='seconds'))
+    repetition = element(trigger, 'Repetition')
+    element(repetition, 'Interval', 'PT1M')
+    element(repetition, 'StopAtDurationEnd', 'false')
+    principal = element(element(task, 'Principals'), 'Principal', id='ResearchUser')
+    element(principal, 'UserId', sid.group().decode('ascii'))
+    element(principal, 'LogonType', 'InteractiveToken')
+    element(principal, 'RunLevel', 'LeastPrivilege')
+    settings = element(task, 'Settings')
+    for tag, text in [('MultipleInstancesPolicy','IgnoreNew'),
+                      ('DisallowStartIfOnBatteries','false'), ('StopIfGoingOnBatteries','false'),
+                      ('StartWhenAvailable','true'), ('ExecutionTimeLimit','PT0S')]:
+        element(settings, tag, text)
+    action = element(element(task, 'Actions', Context='ResearchUser'), 'Exec')
+    command = worker_command()
+    element(action, 'Command', command[0])
+    element(action, 'Arguments', subprocess.list2cmdline(command[1:]))
+    element(action, 'WorkingDirectory', str(paths.package_root))
+    with tempfile.TemporaryDirectory(prefix='shaq-research-task-') as directory:
+        definition = Path(directory) / 'task.xml'
+        definition.write_bytes(ElementTree.tostring(task, encoding='utf-16', xml_declaration=True))
+        result = subprocess.run(['schtasks', '/Create', '/F', '/TN', SERVICE_LABEL,
+                                 '/XML', str(definition)], **options)
+    if result.returncode:
+        detail = (result.stderr or result.stdout).decode('utf-8', errors='replace').strip()
+        raise ValueError('Windows 自动运行注册失败：' + detail[:1000])
+
+
 def save_schedule(paths, lab, submitted):
     start = clock_time.fromisoformat(str(submitted.get("start_et", "08:35")))
     if start.tzinfo is not None or not clock_time(4) <= start < clock_time(8, 50):
@@ -59,9 +109,11 @@ def save_schedule(paths, lab, submitted):
         lab.settings.model_profile(submitted.get("model_profile_id"))
     value = {"enabled": enabled, "start_et": start.isoformat(), "selections": selected,
              "model_profile_id": str(submitted.get("model_profile_id", ""))}
-    if enabled:
+    if enabled and sys.platform == 'win32':
+        _register_windows_worker(paths)
+    elif enabled:
         if sys.platform != "darwin":
-            raise ValueError("当前本机预览版的自动运行适用于macOS")
+            raise ValueError("自动运行支持 Windows 和 macOS")
         from pathlib import Path
         destination = Path.home() / "Library/LaunchAgents" / (SERVICE_LABEL + ".plist")
         destination.parent.mkdir(parents=True, exist_ok=True)

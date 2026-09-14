@@ -51,6 +51,22 @@ class JsonResponse:
         return self.value
 
 
+class BackgroundCliTests(unittest.TestCase):
+    def test_windows_identity_and_browser_login_do_not_allocate_console(self):
+        for protocol, output in [('codex-cli', 'codex-cli 1.2.3'),
+                                 ('claude-code', '1.2.3 (Claude Code)')]:
+            profile = replace(relay_profile(), protocol=protocol)
+            def external(command, **options):
+                self.assertEqual(options.get('creationflags'), 0x08000000)
+                self.assertFalse(options.get('shell'))
+                return subprocess.CompletedProcess(command, 0, output, '')
+            with patch.object(model_backends.sys, 'platform', 'win32'), \
+                    patch.object(model_backends, '_local_cli', return_value='provider.exe'), \
+                    patch.object(model_backends.subprocess, 'run', side_effect=external):
+                self.assertTrue(model_backends._verified_cli_identity(profile, 'provider.exe'))
+                model_backends.begin_local_subscription_login(profile)
+
+
 class MalformedJsonResponse(JsonResponse):
     def json(self) -> object:
         raise json.JSONDecodeError("invalid", "not-json", 0)
@@ -427,6 +443,9 @@ class ModelCompatibilityTests(unittest.TestCase):
                 audit = probe_model_profile(profile=profile, secret="")
 
             self.assertEqual(run.call_count, 2)
+            for call in run.call_args_list:
+                self.assertEqual(call.kwargs.get("creationflags"),
+                                 0x08000000 if platform_name == "win32" else None)
             self.assertEqual(run.call_args_list[0].args[0][0], executable)
             self.assertEqual(run.call_args_list[0].args[0][1:], ["auth", "status"])
             self.assertIn("-p", run.call_args_list[1].args[0])

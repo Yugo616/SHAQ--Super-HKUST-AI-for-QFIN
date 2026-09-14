@@ -5,7 +5,7 @@ on:
       target:
         description: Complete acceptance for Windows, macOS, or all platforms at this commit
         type: choice
-        options: [windows, macos, macos-intel, all]
+        options: [windows, windows-check, macos, macos-intel, all]
         default: windows
   push:
     tags-ignore:
@@ -24,7 +24,24 @@ on:
 permissions:
   contents: read
 jobs:
+  windows-research-check:
+    if: inputs.target == 'windows-check'
+    runs-on: windows-latest
+    timeout-minutes: 10
+    env:
+      PYTHONUTF8: '1'
+      PYTHONPATH: src
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install only scheduler test dependencies
+        run: python -m pip install --constraint packaging/requirements.lock.txt platformdirs filelock pandas-market-calendars
+      - name: Register and run isolated task; verify no console window
+        run: python -m unittest discover -s tests -p test_research_schedule.py -v
   native:
+    if: inputs.target != 'windows-check'
     env:
       PYTHONUTF8: '1'
     strategy:

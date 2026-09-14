@@ -8,7 +8,8 @@ window.SHAQUpdateExit=(()=>{
     save_skill_package_draft:()=>`skill:${args[0]}`,
     save_module_draft:()=>`module:${args[0]}`,
     save_decision_draft:()=> 'decision',
-    finalize_local_version:()=> 'version-description'
+    finalize_local_version:()=> 'version-description',
+    save_research_schedule:()=> 'automatic-run'
   }[name]?.());
   const changed=event=>{
     const field=event.target;
@@ -16,6 +17,7 @@ window.SHAQUpdateExit=(()=>{
       if(field.name!=='protocol')dirty(`connection:${document.querySelector('#model-form').elements.protocol.value}`);
     }else if(field.closest?.('#data-form'))dirty('data');
     else if(field.closest?.('#research-form'))dirty('research');
+    else if(field.closest?.('#automatic-settings'))dirty('automatic-run');
     else if(field.closest?.('#editor')){
       if(['skill-method','skill-foundations','agent-display-name','agent-description','agent-prompt','agent-policy'].includes(field.id))dirty(`skill:${document.querySelector('#edit-skill').value}`);
       else if(['module-code','module-cases'].includes(field.id))dirty(`module:${wb.selectedModule}`);

@@ -740,6 +740,45 @@ def launch_desktop(*, smoke_output: Path | None = None) -> int:
             else:
                 raise RuntimeError('Native software update view failed')
             result['installer_update_view'] = True
+            # Exercise real DOM refresh, not just the rendered text. No model,
+            # scheduler registration or updater action is invoked by these checks.
+            result['update_refresh_preserves_disclosure'] = bool(window.evaluate_js("""
+                (()=>{
+                    document.querySelector('#software-update-detail details').open=true;
+                    renderSoftwareUpdate({status:'current',mode:'installer_only',current_version:'fixture',
+                        automatic_enabled:false,notes:'fixture refreshed notes'});
+                    return document.querySelector('#software-update-detail details').open;
+                })()
+            """))
+            window.evaluate_js("""
+                document.querySelector('#software-update-modal').close();
+                document.querySelector('.nav[data-page=run]').click();
+                window.scheduleRefreshCheck=null;
+                (async()=>{
+                    await renderAutomatic();
+                    document.querySelector('#edit-automatic').click();
+                    const input=document.querySelector('#auto-time');
+                    input.value='08:12';input.focus();
+                    const model=document.querySelector('#auto-model').value;
+                    const version=document.querySelector('.auto-version');
+                    version.checked=!version.checked;const chosen=version.checked;
+                    await load(false);await renderAutomatic();
+                    window.scheduleRefreshCheck=Boolean(
+                        document.querySelector('#auto-time')===input && input.value==='08:12' &&
+                        document.activeElement===input && document.querySelector('.auto-version').checked===chosen &&
+                        document.querySelector('#auto-model').value===model &&
+                        !document.querySelector('#automatic-panel').classList.contains('hidden'));
+                })().catch(error=>window.scheduleRefreshCheck=String(error));
+            """)
+            deadline=time.monotonic()+6
+            while time.monotonic()<deadline:
+                checked=window.evaluate_js('window.scheduleRefreshCheck')
+                if checked is not None:
+                    break
+                time.sleep(.1)
+            result['automatic_refresh_preserves_edit']=checked is True
+            if not result['update_refresh_preserves_disclosure'] or not result['automatic_refresh_preserves_edit']:
+                raise RuntimeError('Refresh discarded update disclosure or automatic-run form state')
             window.evaluate_js("document.querySelector('#software-update-modal').close(); "
                                "document.querySelector('.nav[data-page=editor]').click()")
             deadline = time.monotonic() + 6

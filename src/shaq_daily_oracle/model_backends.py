@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .background_process import background_process_options
+
 import hashlib
 import json
 import os
@@ -313,6 +315,7 @@ def _verified_cli_identity(profile: ModelProfile, executable: str) -> bool:
             command, text=True, encoding="utf-8", errors="replace",
             capture_output=True, shell=False, timeout=CLI_IDENTITY_TIMEOUT_SECONDS,
             env=_local_cli_environment(), check=False,
+            **background_process_options(),
         )
     except (OSError, subprocess.TimeoutExpired, ModelBackendError):
         return False
@@ -436,6 +439,7 @@ def _codex_cli_call(
                 capture_output=True, shell=False,
                 cwd=root, env=_local_cli_environment(), timeout=profile.timeout_seconds,
                 check=False,
+                **background_process_options(),
             )
         except subprocess.TimeoutExpired as exc:
             raise ModelBackendError("Codex 本地调用超时") from exc
@@ -475,6 +479,7 @@ def _claude_code_call(
             command, input=prompt, text=True, encoding="utf-8", errors="replace",
             capture_output=True, shell=False,
             env=_local_cli_environment(), timeout=profile.timeout_seconds, check=False,
+            **background_process_options(),
         )
     except subprocess.TimeoutExpired as exc:
         raise ModelBackendError("Claude 本地调用超时") from exc
@@ -881,6 +886,7 @@ def probe_model_profile(*, profile: ModelProfile, secret: str) -> dict[str, Any]
                 command, text=True, encoding="utf-8", errors="replace",
                 capture_output=True, shell=False, timeout=CLI_STATUS_TIMEOUT_SECONDS,
                 env=_local_cli_environment(), check=False,
+                **background_process_options(),
             )
         except subprocess.TimeoutExpired as exc:
             raise ModelBackendError(
@@ -958,6 +964,7 @@ def begin_local_subscription_login(profile: ModelProfile) -> dict[str, str]:
             command, text=True, encoding="utf-8", errors="replace",
             capture_output=True, shell=False, timeout=CLI_LOGIN_TIMEOUT_SECONDS,
             env=_local_cli_environment(), check=False,
+            **background_process_options(),
         )
     except subprocess.TimeoutExpired as exc:
         raise ModelBackendError(
