@@ -38,6 +38,7 @@ class NativePackagingTests(unittest.TestCase):
         self.assertIn('packaging/requirements.lock.txt', fast_block)
         self.assertIn('platformdirs==4.11.8', fast_block)
         self.assertIn('tests.test_public_base_update_acceptance', fast_block)
+        self.assertIn('test_windows_restart_confirmation_survives_exclusive_receipt_publish_window', fast_block)
         self.assertIn('dist/diagnostic/windows-fast-compatibility.log', fast_block)
         delivery_block = text[delivery:text.index('name: Build macOS disk image', delivery)]
         self.assertIn('success()', delivery_block)

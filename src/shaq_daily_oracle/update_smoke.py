@@ -6,6 +6,7 @@ delta synthesis, process exit, replacement and restart are actual Velopack.
 import argparse
 from contextlib import nullcontext
 from dataclasses import replace
+import errno
 import hashlib
 import json
 import os
@@ -14,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import traceback
 import urllib.request
 
 from .app_paths import app_paths, application_version
@@ -22,6 +24,17 @@ from .settings import _atomic_json
 
 ACCEPTANCE_EVENT_TIMEOUT_SECONDS = 90
 ADMISSION_POLL_SECONDS = .1
+
+
+def failure_diagnostic(exc):
+    """Retain private native-acceptance evidence for exact failure diagnosis."""
+    return {
+        'error': str(exc),
+        'exception_type': type(exc).__name__,
+        'errno': getattr(exc, 'errno', None),
+        'winerror': getattr(exc, 'winerror', None),
+        'traceback': traceback.format_exc(),
+    }
 
 
 def wait_event(path, *, timeout=ACCEPTANCE_EVENT_TIMEOUT_SECONDS, failure_path=None):
@@ -42,16 +55,31 @@ def wait_event(path, *, timeout=ACCEPTANCE_EVENT_TIMEOUT_SECONDS, failure_path=N
 
 def wait_restart_confirmation(path, version, installation_id, *, deadline):
     """Observe real async GUI confirmation within the original render budget."""
+    last_read_denial = None
     while time.monotonic() < deadline:
         try:
             receipt = json.loads(path.read_text(encoding='utf-8'))
         except FileNotFoundError:
             receipt = {}
+            last_read_denial = None
+        except PermissionError as exc:
+            # An async atomic publisher may briefly deny this observer's CRT
+            # read on Windows. Only that EACCES case and this bounded receipt
+            # poll tolerate the possible publication window.
+            if sys.platform != 'win32' or exc.errno != errno.EACCES:
+                raise
+            receipt = {}
+            last_read_denial = exc
+        else:
+            last_read_denial = None
         if (receipt.get('version') == version and receipt.get('installation_id') == installation_id
                 and receipt.get('completed_at')):
             return receipt
         time.sleep(.1)
-    raise TimeoutError('Missing GUI-health update confirmation for current installation')
+    error = TimeoutError('Missing GUI-health update confirmation for current installation')
+    if last_read_denial is not None:
+        raise error from last_read_denial
+    raise error
 
 
 def verify_deferred(state, before, after, *, dirty):
@@ -319,7 +347,7 @@ def main(argv=None):
                         result['remained_open_after_health']=True
                     result['status']='passed'
             except Exception as exc:
-                result['error']=str(exc)
+                result.update(failure_diagnostic(exc))
             finally:
                 if stage!='peer' or result.get('error'):
                     _atomic_json(events/(stage+'-result.json'),result)

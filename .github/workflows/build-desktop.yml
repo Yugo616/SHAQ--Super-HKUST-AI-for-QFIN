@@ -63,7 +63,7 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}/src
         run: |
           New-Item -ItemType Directory -Force -Path dist/diagnostic | Out-Null
-          python -m unittest tests.test_public_base_update_acceptance -v 2>&1 | Tee-Object -FilePath dist/diagnostic/windows-fast-compatibility.log
+          python -m unittest tests.test_public_base_update_acceptance tests.test_update_smoke.InstalledAcceptanceContractTests.test_windows_restart_confirmation_survives_exclusive_receipt_publish_window -v 2>&1 | Tee-Object -FilePath dist/diagnostic/windows-fast-compatibility.log
           $testExit = $LASTEXITCODE
           if ($testExit -ne 0) { exit $testExit }
       - name: Inspect Inno and provision verified Microsoft WebView2 only if missing

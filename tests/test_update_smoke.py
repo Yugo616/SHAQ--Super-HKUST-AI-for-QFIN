@@ -1,8 +1,12 @@
 import importlib.util
+import errno
 import json
 import os
 from pathlib import Path
+import sys
 import tempfile
+import threading
+import time
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -89,6 +93,88 @@ class InstalledAcceptanceContractTests(unittest.TestCase):
                 with self.assertRaises(json.JSONDecodeError):
                     wait(path, '0.7.0', 'current', deadline=1.0)
 
+    def test_restart_confirmation_retries_only_bounded_windows_read_denial(self):
+        wait = update_smoke.wait_restart_confirmation
+        current = {'version': '0.7.1', 'installation_id': 'current', 'completed_at': 'now'}
+        denied = PermissionError(errno.EACCES, 'receipt temporarily inaccessible')
+
+        class Receipt:
+            def __init__(self, outcomes):
+                self.outcomes = iter(outcomes)
+
+            def read_text(self, **_kwargs):
+                outcome = next(self.outcomes)
+                if isinstance(outcome, BaseException):
+                    raise outcome
+                return json.dumps(outcome)
+
+        with patch.object(update_smoke.sys, 'platform', 'win32'), \
+                patch.object(update_smoke.time, 'monotonic', side_effect=[0, .1]), \
+                patch.object(update_smoke.time, 'sleep'):
+            self.assertEqual(wait(Receipt([denied, current]), '0.7.1', 'current', deadline=.2), current)
+
+        persistent = PermissionError(errno.EACCES, 'receipt remained inaccessible')
+        with patch.object(update_smoke.sys, 'platform', 'win32'), \
+                patch.object(update_smoke.time, 'monotonic', side_effect=[0, .1, .2]), \
+                patch.object(update_smoke.time, 'sleep'):
+            with self.assertRaisesRegex(TimeoutError, 'GUI-health') as raised:
+                wait(Receipt([persistent, persistent]), '0.7.1', 'current', deadline=.2)
+        self.assertIs(raised.exception.__cause__, persistent)
+
+        with patch.object(update_smoke.sys, 'platform', 'darwin'), \
+                patch.object(update_smoke.time, 'monotonic', return_value=0):
+            with self.assertRaises(PermissionError):
+                wait(Receipt([denied]), '0.7.1', 'current', deadline=.2)
+
+        wrong_code = PermissionError(errno.EPERM, 'not a Windows sharing-style read denial')
+        with patch.object(update_smoke.sys, 'platform', 'win32'), \
+                patch.object(update_smoke.time, 'monotonic', return_value=0):
+            with self.assertRaises(PermissionError):
+                wait(Receipt([wrong_code]), '0.7.1', 'current', deadline=.2)
+
+    @unittest.skipUnless(sys.platform == 'win32', 'requires Windows file-sharing semantics')
+    def test_windows_restart_confirmation_survives_exclusive_receipt_publish_window(self):
+        import ctypes
+        from ctypes import wintypes
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'software-update-history.json'
+            current = {'version': '0.7.1', 'installation_id': 'current', 'completed_at': 'now'}
+            path.write_text(json.dumps(current), encoding='utf-8')
+            kernel32 = ctypes.windll.kernel32
+            create_file = kernel32.CreateFileW
+            create_file.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                                    wintypes.LPVOID, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+            create_file.restype = wintypes.HANDLE
+            close_handle = kernel32.CloseHandle
+            close_handle.argtypes = [wintypes.HANDLE]
+            close_handle.restype = wintypes.BOOL
+            generic_read = 0x80000000
+            open_existing = 3
+            file_attribute_normal = 0x80
+            handle = create_file(
+                str(path), generic_read, 0, None, open_existing, file_attribute_normal, None,
+            )
+            if handle == ctypes.c_void_p(-1).value:
+                raise ctypes.WinError()
+
+            closed = []
+            def release():
+                time.sleep(.15)
+                closed.append(bool(close_handle(handle)))
+
+            releaser = threading.Thread(target=release)
+            releaser.start()
+            try:
+                receipt = update_smoke.wait_restart_confirmation(
+                    path, '0.7.1', 'current', deadline=time.monotonic() + 2,
+                )
+            finally:
+                releaser.join(2)
+            self.assertFalse(releaser.is_alive())
+            self.assertEqual(closed, [True])
+            self.assertEqual(receipt, current)
+
     def test_missing_health_reports_retained_target_failure_without_waiting(self):
         with tempfile.TemporaryDirectory() as directory:
             events = Path(directory)
@@ -96,6 +182,20 @@ class InstalledAcceptanceContractTests(unittest.TestCase):
             failed.write_text(json.dumps({'status': 'failed', 'error': 'confirmation rejected'}))
             with self.assertRaisesRegex(RuntimeError, 'confirmation rejected'):
                 update_smoke.wait_event(events / 'target-health.json', timeout=.1, failure_path=failed)
+
+    def test_private_acceptance_failure_diagnostic_retains_stack_and_system_codes(self):
+        failure = PermissionError(errno.EACCES, 'receipt inaccessible')
+        failure.winerror = 32
+        try:
+            raise failure
+        except PermissionError as exc:
+            diagnostic = update_smoke.failure_diagnostic(exc)
+        self.assertEqual(diagnostic['error'], str(failure))
+        self.assertEqual(diagnostic['exception_type'], 'PermissionError')
+        self.assertEqual(diagnostic['errno'], errno.EACCES)
+        self.assertEqual(diagnostic['winerror'], 32)
+        self.assertIn('raise failure', diagnostic['traceback'])
+        self.assertIn('PermissionError', diagnostic['traceback'])
 
     def test_dirty_and_saved_gui_wait_for_real_work_admission_without_resetting_budget(self):
         wait = getattr(update_smoke, 'wait_automatic_admission', None)
