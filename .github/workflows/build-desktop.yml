@@ -11,7 +11,7 @@ on:
         description: Exact application commit for Windows layout or validated Windows release route
         type: string
       native_run_id:
-        description: Official native workflow run providing diagnostic dependency wheels
+        description: Official native workflow run providing optional verified dependency wheels
         type: string
       native_artifact_id:
         description: Official Windows artifact ID from that run
@@ -127,8 +127,12 @@ jobs:
           path: dist/diagnostic/**
   native:
     if: inputs.target != 'windows-check' && inputs.target != 'windows-layout'
+    permissions:
+      contents: read
+      actions: read
     env:
       PYTHONUTF8: '1'
+      GH_TOKEN: ${{ github.token }}
     strategy:
       fail-fast: false
       matrix:
@@ -144,20 +148,24 @@ jobs:
         shell: pwsh
         env:
           APPLICATION_REF: ${{ inputs.application_ref }}
+          NATIVE_RUN_ID: ${{ inputs.native_run_id }}
+          NATIVE_ARTIFACT_ID: ${{ inputs.native_artifact_id }}
         run: |
           if ($env:APPLICATION_REF -notmatch '^[a-fA-F0-9]{40}$') { throw 'Validated Windows route requires an explicit full application SHA' }
+          if (($env:NATIVE_RUN_ID -or $env:NATIVE_ARTIFACT_ID) -and ($env:NATIVE_RUN_ID -notmatch '^\d+$' -or $env:NATIVE_ARTIFACT_ID -notmatch '^\d+$')) { throw 'Dependency reuse requires both official numeric run and artifact IDs' }
           $validationSha = (git rev-parse HEAD).Trim()
           if ($validationSha -ne $env:GITHUB_SHA) { throw 'Validation checkout identity mismatch' }
           $harnessRoot = Join-Path $env:RUNNER_TEMP 'shaq-external-layout'
           New-Item -ItemType Directory -Force -Path $harnessRoot | Out-Null
           $archive = Join-Path $env:RUNNER_TEMP 'shaq-external-layout.tar'
-          git archive --format=tar --output=$archive $validationSha tests/native_layout_check.py tests/native_geometry.py packaging/windows_ci_display.py
+          git archive --format=tar --output=$archive $validationSha tests/native_layout_check.py tests/native_geometry.py packaging/windows_ci_display.py packaging/installed_update_acceptance.py packaging/installed_setup_recovery.py packaging/windows_layout_dependencies.py packaging/windows_release_dependencies.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           tar -xf $archive -C $harnessRoot
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           "SHAQ_LAYOUT_VALIDATION_SHA=$validationSha" | Out-File -FilePath $env:GITHUB_ENV -Append
           "SHAQ_EXTERNAL_LAYOUT_HARNESS=$harnessRoot/tests/native_layout_check.py" | Out-File -FilePath $env:GITHUB_ENV -Append
           "SHAQ_EXTERNAL_DISPLAY_PREFLIGHT=$harnessRoot/packaging/windows_ci_display.py" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "SHAQ_EXTERNAL_PACKAGING=$harnessRoot/packaging" | Out-File -FilePath $env:GITHUB_ENV -Append
       - uses: actions/checkout@v4
         if: inputs.target == 'windows-validated'
         with:
@@ -173,7 +181,9 @@ jobs:
           "SHAQ_LAYOUT_APPLICATION_SHA=$applicationSha" | Out-File -FilePath $env:GITHUB_ENV -Append
           New-Item -ItemType Directory -Force -Path dist/diagnostic | Out-Null
           $geometry = Join-Path (Split-Path $env:SHAQ_EXTERNAL_LAYOUT_HARNESS) 'native_geometry.py'
-          @{application_sha=$applicationSha;validation_sha=$env:SHAQ_LAYOUT_VALIDATION_SHA;layout_sha256=(Get-FileHash $env:SHAQ_EXTERNAL_LAYOUT_HARNESS -Algorithm SHA256).Hash;geometry_sha256=(Get-FileHash $geometry -Algorithm SHA256).Hash;display_preflight_sha256=(Get-FileHash $env:SHAQ_EXTERNAL_DISPLAY_PREFLIGHT -Algorithm SHA256).Hash} | ConvertTo-Json | Out-File -Encoding utf8 dist/diagnostic/external-layout-source.json
+          $extraHashes = @{}
+          Get-ChildItem "$env:SHAQ_EXTERNAL_PACKAGING/*.py" | ForEach-Object { $extraHashes[$_.Name] = (Get-FileHash $_.FullName -Algorithm SHA256).Hash }
+          @{application_sha=$applicationSha;validation_sha=$env:SHAQ_LAYOUT_VALIDATION_SHA;layout_sha256=(Get-FileHash $env:SHAQ_EXTERNAL_LAYOUT_HARNESS -Algorithm SHA256).Hash;geometry_sha256=(Get-FileHash $geometry -Algorithm SHA256).Hash;display_preflight_sha256=(Get-FileHash $env:SHAQ_EXTERNAL_DISPLAY_PREFLIGHT -Algorithm SHA256).Hash;external_packaging_sha256=$extraHashes} | ConvertTo-Json | Out-File -Encoding utf8 dist/diagnostic/external-layout-source.json
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -238,7 +248,36 @@ jobs:
         if: runner.os == 'macOS'
         run: test "$(uname -m)" = "${{ matrix.arch }}"
       - name: Build native no-LZO dependencies then install locked application
+        if: inputs.target != 'windows-validated' || inputs.native_artifact_id == ''
         run: python packaging/build_native.py
+      - name: Read official completed native dependency provenance
+        if: inputs.target == 'windows-validated' && inputs.native_artifact_id != ''
+        shell: pwsh
+        env:
+          NATIVE_RUN_ID: ${{ inputs.native_run_id }}
+          NATIVE_ARTIFACT_ID: ${{ inputs.native_artifact_id }}
+        run: |
+          gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:NATIVE_RUN_ID" > dist/diagnostic/native-run.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          gh api "repos/$env:GITHUB_REPOSITORY/actions/artifacts/$env:NATIVE_ARTIFACT_ID" > dist/diagnostic/native-artifact.json
+          exit $LASTEXITCODE
+      - uses: actions/download-artifact@v4
+        if: inputs.target == 'windows-validated' && inputs.native_artifact_id != ''
+        with:
+          artifact-ids: ${{ inputs.native_artifact_id }}
+          run-id: ${{ inputs.native_run_id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/native-release-dependencies
+          merge-multiple: true
+      - name: Verify and restore native dependencies with complete distribution provenance
+        if: inputs.target == 'windows-validated' && inputs.native_artifact_id != ''
+        shell: pwsh
+        env:
+          NATIVE_RUN_ID: ${{ inputs.native_run_id }}
+          NATIVE_ARTIFACT_ID: ${{ inputs.native_artifact_id }}
+        run: |
+          python "$env:SHAQ_EXTERNAL_PACKAGING/windows_release_dependencies.py" --application "$PWD" --artifact-root "$env:RUNNER_TEMP/native-release-dependencies" --run-metadata dist/diagnostic/native-run.json --artifact-metadata dist/diagnostic/native-artifact.json --run-id $env:NATIVE_RUN_ID --artifact-id $env:NATIVE_ARTIFACT_ID --output dist/diagnostic/release-dependency-reuse.json
+          exit $LASTEXITCODE
       - name: Validate all application tests
         run: python -m unittest discover -s tests -v
       - name: Check native desktop layout at normal and narrow widths
@@ -255,7 +294,18 @@ jobs:
           if ((git rev-parse HEAD).Trim() -ne $env:SHAQ_LAYOUT_APPLICATION_SHA -or (git status --porcelain)) { throw 'Layout validation changed frozen application source' }
           exit $layoutExit
       - name: Full installed native delta update and replay acceptance
+        if: inputs.target != 'windows-validated'
         run: python packaging/installed_update_acceptance.py
+      - name: Full installed frozen-app acceptance with bounded pre-apply setup recovery
+        if: inputs.target == 'windows-validated'
+        shell: pwsh
+        env:
+          PYTHONPATH: ${{ github.workspace }}/src
+        run: |
+          python "$env:SHAQ_EXTERNAL_PACKAGING/installed_update_acceptance.py" --application "$PWD" --recover-initial-admission
+          $acceptanceExit = $LASTEXITCODE
+          if ((git rev-parse HEAD).Trim() -ne $env:SHAQ_LAYOUT_APPLICATION_SHA -or (git status --porcelain)) { throw 'Installed validation changed frozen application source' }
+          exit $acceptanceExit
       - name: Collect complete Windows delivery acceptance, then fail on any unsuccessful stage
         if: ${{ success() && runner.os == 'Windows' && steps.source-check.outcome == 'success' }}
         shell: pwsh

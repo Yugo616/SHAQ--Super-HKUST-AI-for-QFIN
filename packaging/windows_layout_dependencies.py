@@ -23,6 +23,11 @@ def verify(application, artifact_root, run, artifact, run_id, artifact_id):
             origin.get('head_sha') != sha or origin.get('repository_id') != repo['id'] or
             origin.get('head_repository_id') != repo['id']):
         raise ValueError('Dependency artifact must belong to the official native workflow and exact application commit')
+    return verify_wheels(application, artifact_root)
+
+
+def verify_wheels(application, artifact_root):
+    """Common wheel integrity checks; source identity is checked by each caller."""
     directory = artifact_root/'build/native-dependencies'
     hashes = json.loads((directory/'wheel-sha256.json').read_text())
     pins = {name.lower().replace('-','_'): version for name,version in re.findall(

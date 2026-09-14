@@ -76,6 +76,17 @@ class NativePackagingTests(unittest.TestCase):
             result = subprocess.run(['node','-',target],input=script,text=True,capture_output=True,check=True)
             self.assertEqual(result.stdout.strip(), expected)
 
+    def test_validated_route_uses_external_acceptance_and_verified_dependency_only_reuse(self):
+        native=(ROOT/'.github/workflows/build-desktop.yml').read_text().split('\n  native:',1)[1]
+        self.assertIn('packaging/installed_setup_recovery.py packaging/windows_layout_dependencies.py packaging/windows_release_dependencies.py',native)
+        self.assertIn('python "$env:SHAQ_EXTERNAL_PACKAGING/installed_update_acceptance.py" --application "$PWD" --recover-initial-admission',native)
+        self.assertIn("if: inputs.target != 'windows-validated' || inputs.native_artifact_id == ''\n        run: python packaging/build_native.py",native)
+        self.assertIn('python "$env:SHAQ_EXTERNAL_PACKAGING/windows_release_dependencies.py"',native)
+        self.assertIn('artifact-ids: ${{ inputs.native_artifact_id }}',native)
+        self.assertIn('run-id: ${{ inputs.native_run_id }}',native)
+        self.assertIn("if: inputs.target != 'windows-validated'\n        run: python packaging/installed_update_acceptance.py",native)
+        self.assertIn('python -m unittest discover -s tests -v',native)
+
     def test_release_tags_never_trigger_the_three_platform_push_matrix(self):
         lines = (ROOT / '.github/workflows/build-desktop.yml').read_text().splitlines()
         push = lines.index('  push:')

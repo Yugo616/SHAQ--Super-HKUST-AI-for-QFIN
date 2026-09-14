@@ -128,12 +128,20 @@ def main():
     parser.add_argument('--prior-version')
     parser.add_argument('--target-version')
     parser.add_argument('--reuse-payloads',action='store_true')
+    parser.add_argument('--application',type=Path)
+    parser.add_argument('--recover-initial-admission',action='store_true')
     args=parser.parse_args()
-    project=Path(__file__).resolve().parents[1]
+    project=(args.application or Path(__file__).resolve().parents[1]).resolve()
+    if args.recover_initial_admission:
+        if (sys.platform != 'win32' or args.application is None or Path(__file__).resolve().is_relative_to(project) or
+                subprocess.check_output(['git','rev-parse','HEAD'],cwd=project,text=True).strip() != os.environ.get('SHAQ_LAYOUT_APPLICATION_SHA') or
+                subprocess.check_output(['git','status','--porcelain'],cwd=project,text=True).strip()):
+            raise RuntimeError('Setup recovery requires an external driver and exact clean frozen Windows application')
     output=project/'dist/installed-update'
     output.mkdir(parents=True,exist_ok=True)
     root=Path(tempfile.mkdtemp(prefix='shaq-installed-update-中文 space-')).resolve()
     reports=[]
+    recoveries=[]
     def run(label,command,timeout=1200):
         with (output/(label+'.log')).open('w',encoding='utf-8') as stream:
             env=dict(os.environ)
@@ -204,7 +212,22 @@ def main():
                     'events_directory':'events-'+str(number)}
             configuration=root/('acceptance-'+str(number)+'.json');_atomic_json(configuration,config)
             events=root/config['events_directory']
-            run('installed-bridge-'+str(number),[executable,'--update-smoke',configuration],timeout=300)
+            if args.recover_initial_admission and number == 1:
+                from installed_setup_recovery import (file_hashes, history_hashes, probe_admission,
+                                                       verify_setup_recovery, run_with_setup_recovery)
+                from shaq_daily_oracle.update_smoke import acceptance_paths, hashes
+                program_before=file_hashes(executable.parent)
+                history_before=history_hashes(root)
+                def verify_recovery():
+                    return verify_setup_recovery(root,events,old,program_before,history_before,
+                        process_running=process_running, program_root=executable.parent,
+                        protected_hashes=lambda:hashes(acceptance_paths(root,executable,ensure=False)),
+                        expected_hashes=json.loads((root/'before-hashes.json').read_text()),
+                        admission_probe=lambda:probe_admission(root))
+                events=run_with_setup_recovery(run,'installed-bridge-'+str(number),
+                    [executable,'--update-smoke',configuration],configuration,verify_recovery,recoveries)
+            else:
+                run('installed-bridge-'+str(number),[executable,'--update-smoke',configuration],timeout=300)
             health=wait_event(events/'target-health.json',timeout=180,failure_path=events/'target-result.json')
             time.sleep(2)
             if not process_running(health['pid']):raise RuntimeError('Target GUI exited after health')
@@ -237,17 +260,18 @@ def main():
             assets.append({'name':file.name,'bytes':file.stat().st_size,'sha256':digest})
             shutil.copy2(file,output/file.name)
         shutil.copy2(feed/('releases.'+channel+'.json'),output/('releases.'+channel+'.json'))
-        result={'status':'passed','platform':key,'root':str(root),'stages':reports,'assets':assets,'target':target,'replay':replay,'transitions':transitions,
+        result={'status':'passed','platform':key,'root':str(root),'stages':reports,'setup_recoveries':recoveries,'assets':assets,'target':target,'replay':replay,'transitions':transitions,
                 'uninstalled':True,'native_sdk_download_faults':faults,'cache_files':sorted(p.name for p in cache.glob('*.nupkg')),
                 'limitations':['explicit isolated App.run bypass','deterministic model substitute','two native transitions plus seeded stale cache; not a ten-version soak test']}
     except Exception as exc:
-        result={'status':'failed','platform':key,'root':str(root),'stages':reports,'error':str(exc)}
+        result={'status':'failed','platform':key,'root':str(root),'stages':reports,'setup_recoveries':recoveries,'error':str(exc)}
         if 'current' in locals():
             try:
                 retain_failed_package_comparison(feed/current,root/'packages'/current,output/'failed-package-comparison.json')
             except Exception as diagnostic_error:
                 result['package_diagnostic_error']=str(diagnostic_error)
     for file in root.glob('*-result.json'):shutil.copy2(file,output/file.name)
+    for file in root.glob('setup-recovery-*.json'):shutil.copy2(file,output/file.name)
     for directory in root.glob('events-*'):
         shutil.copytree(directory,output/directory.name,dirs_exist_ok=True)
     (output/'acceptance.json').write_text(json.dumps(result,indent=2))
