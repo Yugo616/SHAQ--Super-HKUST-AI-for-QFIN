@@ -1,10 +1,11 @@
-"""Install the verified public Windows base, then apply the final native delta."""
+"""Install the verified public platform base, then apply the final native delta."""
 import argparse
 import functools
 import hashlib
 import http.server
 import json
 import os
+import platform
 from pathlib import Path
 import re
 import shutil
@@ -71,13 +72,13 @@ def run_child(command, stream, timeout, *, loopback=False):
                           stderr=subprocess.STDOUT, timeout=timeout, env=environment)
 
 
-def validate_transition(root, feed_root, target_version):
+def validate_transition(root, feed_root, target_version, *, system='Windows', machine='amd64'):
     """Bind public base, final full, and actual delta to one verified identity."""
     from shaq_daily_oracle.software_updates import UpdateRuntime
     from shaq_daily_oracle.update_native import verify_cached
     feed_root = Path(feed_root)
     updates = json.loads((root / 'config/software-updates.json').read_text(encoding='utf-8'))
-    channel = updates['channels']['Windows/amd64']
+    channel = updates['channels'][system + '/' + machine.lower()]
     receipt = json.loads((feed_root / f'delta-base.{channel}.json').read_text(encoding='utf-8'))
     if (receipt.get('status') != 'public-base' or receipt.get('channel') != channel or
             receipt.get('target_version') != target_version or not receipt.get('base_version')):
@@ -86,7 +87,7 @@ def validate_transition(root, feed_root, target_version):
         raise ValueError('Public base must precede the final target')
     installer_url = (f'https://github.com/{receipt.get("repository", "")}/releases/download/'
                      f'lab-v{receipt["base_version"]}-windows/{INSTALLER}')
-    if (receipt.get('installer_source_url') != installer_url or
+    if system == 'Windows' and (receipt.get('installer_source_url') != installer_url or
             not isinstance(receipt.get('installer_size'), int) or receipt['installer_size'] <= 0 or
             not re.fullmatch(r'[A-Fa-f0-9]{64}', str(receipt.get('installer_sha256', '')))):
         raise ValueError('Public base installer identity is missing or invalid')
@@ -112,9 +113,26 @@ def validate_transition(root, feed_root, target_version):
                 base_filename=base[0]['FileName'], base_sha256=base[0]['SHA256'].lower(),
                 target_filename=full[0]['FileName'], target_sha256=full[0]['SHA256'].lower(),
                 delta_filename=delta[0]['FileName'], delta_sha256=delta[0]['SHA256'].lower(),
-                installer_source_url=receipt['installer_source_url'],
-                installer_sha256=receipt['installer_sha256'].lower(), installer_size=receipt['installer_size'],
+                repository=receipt['repository'],
+                installer_source_url=receipt.get('installer_source_url'),
+                installer_sha256=str(receipt.get('installer_sha256', '')).lower(), installer_size=receipt.get('installer_size'),
                 channel=channel, package_id=updates['package_id'])
+
+
+def mac_installer_identity(release, repository, version, machine):
+    architecture = {'arm64': 'Apple-Silicon', 'x86_64': 'Intel'}[machine]
+    name = f'SHAQ-Daily-Oracle-Lab-macOS-{architecture}.dmg'
+    tag = f'lab-v{version}-macos'
+    expected = f'https://github.com/{repository}/releases/download/{tag}/{name}'
+    assets = [asset for asset in release.get('assets', []) if asset.get('name') == name]
+    if release.get('draft') or release.get('tag_name') != tag or len(assets) != 1:
+        raise ValueError('Public Mac release has no unambiguous matching disk image')
+    asset = assets[0]
+    if (asset.get('browser_download_url') != expected or type(asset.get('size')) is not int or
+            asset['size'] <= 0 or not re.fullmatch(r'sha256:[A-Fa-f0-9]{64}', str(asset.get('digest', '')))):
+        raise ValueError('Public Mac disk image identity is invalid')
+    return dict(installer_source_url=expected, installer_size=asset['size'],
+                installer_sha256=asset['digest'].split(':', 1)[1].lower())
 
 
 def download_verified(url, destination, size, digest):
@@ -180,15 +198,40 @@ def main(argv=None):
             raise RuntimeError(name + ' failed; see retained log')
 
     try:
-        if sys.platform != 'win32':
-            raise RuntimeError('Public base native acceptance requires Windows')
-        identity = validate_transition(project, args.feed.resolve(), args.target_version)
+        if sys.platform not in ('win32', 'darwin'):
+            raise RuntimeError('Public base native acceptance requires Windows or macOS')
+        identity = validate_transition(project, args.feed.resolve(), args.target_version,
+                                       system=platform.system(), machine=platform.machine())
         root = create_acceptance_root()
-        installed = root / 'installed' / APP
-        setup = root / INSTALLER
-        download_verified(identity['installer_source_url'], setup, identity['installer_size'], identity['installer_sha256'])
-        run('public-base-install', [setup, '--silent', '--installto', installed])
-        executable = installed / 'current' / (APP + '.exe')
+        if sys.platform == 'darwin':
+            headers = {'Accept': 'application/vnd.github+json'}
+            token = os.environ.get('SHAQ_BUILD_GITHUB_TOKEN')
+            if token:
+                headers['Authorization'] = 'Bearer ' + token
+            response = httpx.get(f'https://api.github.com/repos/{identity["repository"]}/releases/tags/'
+                                 f'lab-v{identity["base_version"]}-macos', headers=headers, timeout=60)
+            response.raise_for_status()
+            identity.update(mac_installer_identity(response.json(), identity['repository'],
+                                                    identity['base_version'], platform.machine()))
+            setup = root / 'public-base.dmg'
+            download_verified(identity['installer_source_url'], setup, identity['installer_size'], identity['installer_sha256'])
+            installed = root / 'installed' / (APP + '.app')
+            installed.parent.mkdir()
+            mount = root / 'mount'
+            mount.mkdir()
+            run('public-base-mount', ['hdiutil', 'attach', '-nobrowse', '-mountpoint', mount, setup])
+            try:
+                run('public-base-install', ['ditto', mount / (APP + '.app'), installed])
+            finally:
+                run('public-base-unmount', ['hdiutil', 'detach', mount])
+            run('public-base-signature', ['codesign', '--verify', '--deep', '--strict', installed])
+            executable = installed / 'Contents/MacOS' / APP
+        else:
+            installed = root / 'installed' / APP
+            setup = root / INSTALLER
+            download_verified(identity['installer_source_url'], setup, identity['installer_size'], identity['installer_sha256'])
+            run('public-base-install', [setup, '--silent', '--installto', installed])
+            executable = installed / 'current' / (APP + '.exe')
         if not executable.is_file():
             raise RuntimeError('Public base installer did not create the native executable')
         cache = root / 'packages'
@@ -231,14 +274,19 @@ def main(argv=None):
         event_identity = validate_update_events(identity, bridge, target, peer, replay)
         uninstall_output = args.output.parent / 'public-base-update'
         uninstall_output.mkdir(exist_ok=True)
-        uninstall_windows(run, installed, project, uninstall_output)
+        if sys.platform == 'darwin':
+            if installed.parent != root / 'installed' or installed.is_symlink():
+                raise RuntimeError('Unexpected isolated Mac uninstall target')
+            shutil.rmtree(installed)
+        else:
+            uninstall_windows(run, installed, project, uninstall_output)
         if installed.exists():
             raise RuntimeError('Public base acceptance left the isolated installation')
         result = dict(status='passed', identity=identity, event_identity=event_identity,
                       bridge=bridge, target=target, peer=peer, replay=replay,
                       cache_files=cache_files, program_copies=program_copies, uninstalled=True,
                       target_full_requests=blocked_requests,
-                      stages=stages, limitations=['Windows GitHub-hosted runner only',
+                      stages=stages, limitations=['native platform acceptance only',
                       'one public-base-to-final transition; internal multi-version soak remains separate'])
     except Exception as exc:
         result['error'] = str(exc)

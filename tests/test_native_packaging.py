@@ -37,8 +37,7 @@ class NativePackagingTests(unittest.TestCase):
         fast_block = text[install:native]
         self.assertIn('packaging/requirements.lock.txt', fast_block)
         self.assertIn('platformdirs==4.11.8', fast_block)
-        self.assertIn('tests.test_public_base_update_acceptance', fast_block)
-        self.assertIn('test_windows_restart_confirmation_survives_exclusive_receipt_publish_window', fast_block)
+        self.assertIn('packaging/windows_fast_checks.py', fast_block)
         self.assertIn('dist/diagnostic/windows-fast-compatibility.log', fast_block)
         delivery_block = text[delivery:text.index('name: Build macOS disk image', delivery)]
         self.assertIn('success()', delivery_block)
@@ -49,7 +48,7 @@ class NativePackagingTests(unittest.TestCase):
         lines = (ROOT / '.github/workflows/build-desktop.yml').read_text().splitlines()
         expression = next(line.strip().removeprefix('include: ') for line in lines if line.strip().startswith('include: ${{'))
         expression = expression.removeprefix('${{').removesuffix('}}')
-        expected = {'macos-intel': ['macOS-Intel'], 'windows': ['Windows-x64'],
+        expected = {'macos-arm64': ['macOS-Apple-Silicon'], 'macos-intel': ['macOS-Intel'], 'windows': ['Windows-x64'],
                     'macos': ['macOS-Apple-Silicon', 'macOS-Intel'],
                     'all': ['Windows-x64', 'macOS-Apple-Silicon', 'macOS-Intel'],
                     '': ['Windows-x64', 'macOS-Apple-Silicon', 'macOS-Intel']}

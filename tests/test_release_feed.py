@@ -178,12 +178,13 @@ class ReleaseFeedTests(unittest.TestCase):
         self.assertIn('SHAQDailyOracleLab-0.7.0-win-x64-stable-full.nupkg', files)
         self.assertFalse(any(version in name for version in ('0.6.98', '0.6.99') for name in files))
 
-    def test_release_metadata_targets_patch_071(self):
+    def test_release_metadata_matches_public_candidate_not_internal_fixture(self):
         import tomllib
         project = tomllib.loads((ROOT / 'pyproject.toml').read_text(encoding='utf-8'))
         tools = json.loads((ROOT / 'packaging/updater-toolchain.json').read_text(encoding='utf-8'))
-        self.assertEqual(project['project']['version'], '0.7.1')
-        self.assertEqual(tools['candidate_version'], '0.7.1')
+        self.assertEqual(project['project']['version'], tools['candidate_version'])
+        self.assertNotIn(tools['candidate_version'],
+                         (tools['acceptance_prior_version'], tools['acceptance_bridge_version']))
 
     def test_first_managed_release_writes_truthful_full_only_receipt(self):
         legacy, _ = release('0.6.2'); legacy['assets'] = []

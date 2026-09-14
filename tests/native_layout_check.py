@@ -22,6 +22,7 @@ def main():
     parser.add_argument('--hold', type=int, default=0)
     parser.add_argument('--screenshots', type=Path)
     args = parser.parse_args()
+    args.output.parent.mkdir(parents=True, exist_ok=True)
     report = {'checks': [], 'failures': []}
     original_start = webview.start
 
@@ -78,6 +79,8 @@ def main():
                         "document.querySelector('#show-api-form').click(); "
                         "document.querySelector('#model-status').textContent='API 错误 ' + 'endpoint/'.repeat(50)")
                     measure(f'{width} connection settings', '#setup .setup-card')
+                    window.evaluate_js("document.querySelector('#execution-policy-form').closest('details').open=true")
+                    measure(f'{width} advanced execution policy', '#execution-policy-form')
                     window.evaluate_js("document.querySelector('#close-setup').click(); "
                         "document.querySelector('#software-update-button').click()")
                     wait("Boolean(document.querySelector('#automatic-software-update'))")
@@ -88,6 +91,39 @@ def main():
                     wait("Boolean(document.querySelector('.transfer-check'))")
                     measure(f'{width} method download', '#method-transfer-modal')
                     window.evaluate_js("document.querySelector('#method-transfer-close').click()")
+                window.evaluate_js("document.querySelector('.nav[data-page=run]').click()")
+                wait("Boolean(document.querySelector('[data-progress-retry]'))")
+                window.evaluate_js("""
+                    document.querySelector('.progress-batch > details').open=true;
+                    const select=document.querySelector('[data-research-symbol]');
+                    select.value='MSFT';select.dispatchEvent(new Event('change'));
+                    document.querySelector('[data-research-section=timeline]').open=true;
+                """)
+                # Toggle events persist disclosure state before the actual refresh.
+                wait("Boolean(wb.researchSelections['fixture-recovery']?.open.includes('timeline'))")
+                window.evaluate_js("window.fixtureRefreshed=false;load(false).then(()=>window.fixtureRefreshed=true)")
+                wait('window.fixtureRefreshed')
+                if not window.evaluate_js("document.querySelector('[data-research-symbol]').value==='MSFT' && "
+                    "document.querySelector('.progress-batch > details').open && "
+                    "document.querySelector('[data-research-section=timeline]').open && "
+                    "document.querySelector('.progress-batch').textContent.includes('实际任务')"):
+                    raise AssertionError('Progress refresh changed selection or expansion')
+                report['progress_preserved_selection_and_expansion'] = True
+                window.evaluate_js("document.querySelector('[data-progress-retry]').click()")
+                wait("state.data.fixture_resumed_batch==='fixture-original-batch'")
+                report['resume_original_batch_action'] = True
+                window.evaluate_js("document.querySelector('#connections-button').click()")
+                wait("Boolean(document.querySelector('#execution-policy-form').onsubmit)")
+                if not window.evaluate_js("document.querySelector('#execution-policy-form').elements.timeout_seconds.value==='600' && "
+                    "document.querySelector('#execution-policy-form').elements.transient_retries.value==='1'"):
+                    raise AssertionError('Execution policy defaults differ from the shared policy')
+                window.evaluate_js("""
+                    const form=document.querySelector('#execution-policy-form');
+                    form.elements.timeout_seconds.value=900;form.elements.transient_retries.value=0;
+                    form.requestSubmit();
+                """)
+                wait("document.querySelector('#notice').textContent.includes('调用设置已保存')")
+                report['advanced_execution_policy_submit'] = True
                 report['status'] = 'failed' if report['failures'] else 'passed'
                 if args.hold:
                     window.evaluate_js("document.querySelector('#software-update-button').click()")

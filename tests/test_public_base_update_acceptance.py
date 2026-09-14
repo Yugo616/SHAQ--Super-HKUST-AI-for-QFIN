@@ -28,6 +28,21 @@ def module():
 
 
 class PublicBaseUpdateAcceptanceTests(unittest.TestCase):
+    def test_mac_public_installer_requires_matching_release_architecture_and_digest(self):
+        acceptance = module()
+        self.assertTrue(hasattr(acceptance, 'mac_installer_identity'))
+        url = 'https://github.com/example/repo/releases/download/lab-v0.7.0-macos/'
+        name = 'SHAQ-Daily-Oracle-Lab-macOS-Apple-Silicon.dmg'
+        asset = {'name': name, 'browser_download_url': url + name, 'size': 123,
+                 'digest': 'sha256:' + 'a' * 64}
+        release = {'tag_name': 'lab-v0.7.0-macos', 'draft': False, 'assets': [asset]}
+        valid = acceptance.mac_installer_identity(release, 'example/repo', '0.7.0', 'arm64')
+        self.assertEqual(valid['installer_source_url'], url + name)
+        for altered in [{**asset, 'digest': None}, {**asset, 'browser_download_url': 'https://other.test/app'},
+                        {**asset, 'name': name.replace('Apple-Silicon', 'Intel')}]:
+            with self.assertRaises(ValueError):
+                acceptance.mac_installer_identity({**release, 'assets': [altered]}, 'example/repo', '0.7.0', 'arm64')
+
     def test_root_uses_system_temp_even_when_runner_temp_differs(self):
         acceptance = module()
         expected = Path(tempfile.gettempdir()) / 'shaq-installed-update-fixture'
@@ -119,6 +134,24 @@ class PublicBaseUpdateAcceptanceTests(unittest.TestCase):
             self.assertEqual(identity['installer_sha256'], receipt['installer_sha256'])
             self.assertEqual(identity['delta_filename'], 'SHAQDailyOracleLab-0.7.1-win-x64-stable-delta.nupkg')
             self.assertEqual(identity['delta_sha256'], hashlib.sha256(b'actual delta').hexdigest())
+
+    def test_mac_transition_uses_its_architecture_and_checks_real_package_bytes(self):
+        acceptance = module()
+        for machine, channel in [('arm64', 'osx-arm64-stable'), ('x86_64', 'osx-x64-stable')]:
+            with self.subTest(machine=machine), tempfile.TemporaryDirectory() as directory:
+                feed, _ = self.fixture(directory)
+                for path in list(feed.iterdir()):
+                    content = path.read_bytes()
+                    if path.suffix == '.json':
+                        content = content.replace(b'win-x64-stable', channel.encode())
+                    renamed = path.with_name(path.name.replace('win-x64-stable', channel))
+                    renamed.write_bytes(content)
+                    path.unlink()
+                identity = acceptance.validate_transition(ROOT, feed, '0.7.1', system='Darwin', machine=machine)
+                self.assertEqual(identity['channel'], channel)
+                (feed / identity['delta_filename']).write_bytes(b'corrupt')
+                with self.assertRaises(ValueError):
+                    acceptance.validate_transition(ROOT, feed, '0.7.1', system='Darwin', machine=machine)
 
     def test_first_release_or_missing_actual_delta_is_not_partial_update_evidence(self):
         acceptance = module()

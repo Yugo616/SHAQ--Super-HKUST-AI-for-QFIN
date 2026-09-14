@@ -522,9 +522,44 @@ def isolated_smoke_paths(root: Path):
                                 if field.name != 'package_root'})
 
 
-def desktop_api(bridge):
+class GuiRequestLifetime:
+    """Quiesce disposable GUI RPCs before removing their owned data directory."""
+    def __init__(self):
+        from threading import Condition
+        self._condition = Condition()
+        self._closed = False
+        self._active = 0
+
+    def wrap(self, action):
+        from functools import wraps
+        from inspect import signature
+        from types import MethodType
+        @wraps(action)
+        def request(_bridge, *args, **kwargs):
+            with self._condition:
+                if self._closed:
+                    return {'ok': False, 'error': '窗口已关闭', 'error_type': 'WindowClosed'}
+                self._active += 1
+            try:
+                return action(*args, **kwargs)
+            finally:
+                with self._condition:
+                    self._active -= 1
+                    self._condition.notify_all()
+        # pywebview discovers bound methods and reads their positional names.
+        request.__signature__ = signature(action.__func__)
+        return MethodType(request, action.__self__)
+
+    def close(self):
+        with self._condition:
+            self._closed = True
+            self._condition.wait_for(lambda: self._active == 0)
+
+
+def desktop_api(bridge, *, lifetime=None):
     from types import SimpleNamespace
-    return SimpleNamespace(**{name: getattr(bridge, name) for name in dir(type(bridge))
+    return SimpleNamespace(**{name: lifetime.wrap(getattr(bridge, name)) if lifetime else getattr(bridge, name)
+                              for name in dir(type(bridge))
                               if not name.startswith('_') and callable(getattr(bridge, name))})
 
 
@@ -535,6 +570,16 @@ def _bind_gui_smoke_fixture(bridge, fixture_state, fixture_detail):
 
     def fixture_state_api(self):
         return {"ok": True, "value": fixture_state}
+
+    def fixture_ready_api(self):
+        # Disposable fixtures must never launch persistent updater workers.
+        return {'ok': True, 'value': {'ready': True}}
+
+    def fixture_resume_api(self, batch_id):
+        if batch_id != 'fixture-original-batch':
+            return {'ok': False, 'error': 'fixture requires original frozen batch'}
+        fixture_state['fixture_resumed_batch'] = batch_id
+        return {'ok': True, 'value': {'message': 'fixture original batch resumed'}}
 
     def fixture_batch_api(self, batch_id):
         return {"ok": True, "value": fixture_detail}
@@ -588,6 +633,8 @@ def _bind_gui_smoke_fixture(bridge, fixture_state, fixture_detail):
             'message': 'fixture transfer complete; no remote writes'}]}
 
     bridge.get_lab_state = MethodType(fixture_state_api, bridge)
+    bridge.confirm_desktop_ready = MethodType(fixture_ready_api, bridge)
+    bridge.resume_shadow_batch = MethodType(fixture_resume_api, bridge)
     bridge.get_shadow_batch = MethodType(fixture_batch_api, bridge)
     bridge.refresh_prices_and_results = MethodType(fixture_refresh_api, bridge)
     bridge.compare_research_runs = MethodType(fixture_compare_api, bridge)
@@ -621,14 +668,23 @@ def launch_desktop(*, smoke_output: Path | None = None) -> int:
         for variant in fixture_detail["variants"].values():
             variant["candidate_intake"]["candidates"].append(dict(second_candidate))
         fixture_state["result_refresh"] = {"status": "idle"}
+        fixture_state['jobs'] = [{
+            'job_id': 'fixture-recovery', 'batch_id': 'fixture-original-batch',
+            'status': 'partial_failure', 'started_at_et': '2026-09-10T08:00:00-04:00',
+            'variant_progress': {'team/main': 'failed'}, 'message': 'fixture unfinished call',
+            'research_progress': [{'variant_key': 'team/main', 'symbol': symbol,
+                'domain': 'price_volume', 'stage': 'failure', 'status': 'failed',
+                'occurred_at_et': '2026-09-10T08:01:00-04:00'} for symbol in ('AAPL', 'MSFT')],
+        }]
         _bind_gui_smoke_fixture(bridge, fixture_state, fixture_detail)
     page = Path(__file__).with_name("desktop") / "index.html"
     if not page.is_file():
         raise FileNotFoundError("desktop interface asset is missing")
+    lifetime = GuiRequestLifetime() if temporary else None
     window = webview.create_window(
         "SHAQ Daily Oracle Lab",
         page.as_uri(),
-        js_api=desktop_api(bridge),
+        js_api=desktop_api(bridge, lifetime=lifetime),
         width=1320,
         height=860,
         min_size=(980, 680),
@@ -861,6 +917,10 @@ def launch_desktop(*, smoke_output: Path | None = None) -> int:
             webview.start(inspect_window if smoke_output else None, debug=False, private_mode=True)
     finally:
         if temporary:
+            # pywebview dispatches RPCs on independent threads. Stop admissions
+            # and drain those short fixture requests before deleting their root.
+            # Ordinary window closure never waits for or kills analysis workers.
+            lifetime.close()
             temporary.cleanup()
     return 0 if not smoke_output or result['status'] == 'passed' else 2
 

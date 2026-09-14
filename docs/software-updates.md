@@ -4,6 +4,8 @@ Application updates and research-method updates are separate. **0.7.0 is the fir
 
 ## Platform downloads and acceptance
 
+0.7.2 is a candidate, not yet an accepted release. Planned pages: [Windows 0.7.2](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.2-windows), [Apple Silicon / Intel Mac 0.7.2](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.2-macos). Publication requires separate native acceptance for each architecture from the same frozen source, including the actual public Windows 0.7.1 and Mac 0.7.0 upgrade paths. Until then, the published downloads are:
+
 - [0.7.1 Windows 10/11 x64 release page](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.1-windows)
 - [0.7.0 macOS 15+ release page, separate Apple Silicon and Intel packages](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.0-macos)
 
@@ -32,6 +34,14 @@ Downloads do not end active work. Apply waits for analysis, settlement and backg
 Manual route: **Check → Download → Update and Restart**. Downloading alone does not authorize installation. With **Automatic software updates** enabled, checking, downloading and applying when idle are automatic. Both routes preserve local user data and wait for active work before replacement.
 
 The dialog shows current/target version, last check and last successful update when recorded. An update is successful only after the target version has launched and passed native GUI health confirmation. Download completion, a launched installer or a background process alone is not success. If replacement or target startup fails, reopen or reinstall the target full package without deleting user data. Do not assume the old executable remains usable.
+
+## Reliability controls in the 0.7.2 candidate
+
+In **Connection Settings → Advanced call settings** (`连接设置 → 高级调用设置`), the default total deadline is 600 seconds per model call and transient retry count is 1. Authentication and schema failures are not automatically retried. These are execution controls, not a new model identity or method. The provider collection worker has its own bounded lifetime and closes its owned resources; it does not substitute sources or alter official prices.
+
+For a failed or partial batch, **Resume original batch** (`恢复原批次`) reuses that batch's frozen evidence and valid checkpoints and completes only unfinished calls. It does not collect today's data into yesterday's batch. Late recovery remains research and does not backfill an on-time formal result. Progress refresh preserves selected candidates/versions and expanded details. Windows and macOS automatic research use their native schedulers; enabling software updates remains a separate choice. Closing the normal window does not terminate independently running research.
+
+中文：默认单次模型调用总时限 600 秒，临时故障重试 1 次；认证或格式校验失败不自动重试。「恢复原批次」复用原冻结数据与有效检查点，仅补未完成调用，不补造准时成绩。进度刷新保留选择及展开内容，自动研究支持 Windows 和 Mac 系统调度。更新不更改方法、模型身份、费用、余额或历史记录。
 
 ## Method updates are different
 

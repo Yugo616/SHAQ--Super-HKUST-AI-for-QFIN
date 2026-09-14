@@ -14,6 +14,10 @@ SHAQ 把六个专业研究领域、反方审查和无需券商的虚拟账户放
 
 ## 下载软件
 
+0.7.2 目前是等待各平台验收与发布的候选版。预定下载页：[Windows 0.7.2](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.2-windows)、[Mac 0.7.2](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.2-macos)。只有对应页面出现安装包、校验值和验收记录后才算发布；此前使用下方已发布版本。
+
+0.7.2 默认每次模型调用总时限为 600 秒，临时故障重试 1 次，可在「连接设置 → 高级调用设置」调整。「恢复原批次」沿用同一份冻结数据，只补未完成调用；迟到恢复仍是研究，不能变成准时正式成绩。Windows 与 Mac 均使用系统自动研究调度；刷新保留进度展开项和选择，隔离采集进程释放自身资源。不改变模型身份、方法、费用、余额或历史记录。详见[更新说明](docs/software-updates.md)。
+
 | 你的电脑 | 下载入口 |
 |---|---|
 | Windows 10/11，x64 | [Windows 安装程序](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.1-windows) |

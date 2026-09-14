@@ -5,7 +5,7 @@ on:
       target:
         description: Complete acceptance for Windows, macOS, or all platforms at this commit
         type: choice
-        options: [windows, windows-check, macos, macos-intel, all]
+        options: [windows, windows-check, macos, macos-arm64, macos-intel, all]
         default: windows
   push:
     tags-ignore:
@@ -36,10 +36,20 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Install only scheduler test dependencies
-        run: python -m pip install --constraint packaging/requirements.lock.txt platformdirs filelock pandas-market-calendars
-      - name: Register and run isolated task; verify no console window
-        run: python -m unittest discover -s tests -p test_research_schedule.py -v
+      - name: Install locked lightweight reliability dependencies without QuickJS or Zipline
+        run: python -m pip install --constraint packaging/requirements.lock.txt httpx openai jsonschema filelock platformdirs pyyaml pandas-market-calendars packaging
+      - name: Validate scheduler, workers, cache recovery and receipt publication
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist/diagnostic | Out-Null
+          python packaging/windows_fast_checks.py 2>&1 | Tee-Object -FilePath dist/diagnostic/windows-fast-compatibility.log
+          exit $LASTEXITCODE
+      - name: Retain fast gate diagnostics even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: SHAQ-Windows-fast-check
+          path: dist/diagnostic/**
   native:
     if: inputs.target != 'windows-check'
     env:
@@ -47,7 +57,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(inputs.target == 'windows' && '[{"runner":"windows-latest","platform":"Windows-x64"}]' || inputs.target == 'macos-intel' && '[{"runner":"macos-15-intel","platform":"macOS-Intel","arch":"x86_64"}]' || inputs.target == 'macos' && '[{"runner":"macos-15","platform":"macOS-Apple-Silicon","arch":"arm64"},{"runner":"macos-15-intel","platform":"macOS-Intel","arch":"x86_64"}]' || '[{"runner":"windows-latest","platform":"Windows-x64"},{"runner":"macos-15","platform":"macOS-Apple-Silicon","arch":"arm64"},{"runner":"macos-15-intel","platform":"macOS-Intel","arch":"x86_64"}]') }}
+        include: ${{ fromJSON(inputs.target == 'windows' && '[{"runner":"windows-latest","platform":"Windows-x64"}]' || inputs.target == 'macos-arm64' && '[{"runner":"macos-15","platform":"macOS-Apple-Silicon","arch":"arm64"}]' || inputs.target == 'macos-intel' && '[{"runner":"macos-15-intel","platform":"macOS-Intel","arch":"x86_64"}]' || inputs.target == 'macos' && '[{"runner":"macos-15","platform":"macOS-Apple-Silicon","arch":"arm64"},{"runner":"macos-15-intel","platform":"macOS-Intel","arch":"x86_64"}]' || '[{"runner":"windows-latest","platform":"Windows-x64"},{"runner":"macos-15","platform":"macOS-Apple-Silicon","arch":"arm64"},{"runner":"macos-15-intel","platform":"macOS-Intel","arch":"x86_64"}]') }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     steps:
@@ -72,7 +82,7 @@ jobs:
         run: python scripts/validate_release.py
       - name: Install pinned lightweight Windows compatibility dependencies
         if: runner.os == 'Windows'
-        run: python -m pip install --constraint packaging/requirements.lock.txt httpx==0.28.1 packaging==26.3 platformdirs==4.11.8
+        run: python -m pip install --constraint packaging/requirements.lock.txt httpx==0.28.1 packaging==26.3 platformdirs==4.11.8 openai jsonschema filelock pyyaml pandas-market-calendars
       - name: Run lightweight Windows compatibility tests before native compilation
         if: runner.os == 'Windows'
         shell: pwsh
@@ -80,7 +90,7 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}/src
         run: |
           New-Item -ItemType Directory -Force -Path dist/diagnostic | Out-Null
-          python -m unittest tests.test_public_base_update_acceptance tests.test_update_smoke.InstalledAcceptanceContractTests.test_windows_restart_confirmation_survives_exclusive_receipt_publish_window -v 2>&1 | Tee-Object -FilePath dist/diagnostic/windows-fast-compatibility.log
+          python packaging/windows_fast_checks.py 2>&1 | Tee-Object -FilePath dist/diagnostic/windows-fast-compatibility.log
           $testExit = $LASTEXITCODE
           if ($testExit -ne 0) { exit $testExit }
       - name: Inspect Inno and provision verified Microsoft WebView2 only if missing
@@ -112,7 +122,7 @@ jobs:
       - name: Validate all application tests
         run: python -m unittest discover -s tests -v
       - name: Check native desktop layout at normal and narrow widths
-        run: python tests/native_layout_check.py --output desktop-layout.json
+        run: python tests/native_layout_check.py --output dist/diagnostic/desktop-layout.json
       - name: Full installed native delta update and replay acceptance
         run: python packaging/installed_update_acceptance.py
       - name: Collect complete Windows delivery acceptance, then fail on any unsuccessful stage
@@ -121,12 +131,14 @@ jobs:
         env:
           SHAQ_BUILD_VERSION: ${{ steps.native-config.outputs.candidate }}
           SHAQ_BUILD_GITHUB_TOKEN: ${{ github.token }}
+          SHAQ_REUSE_CANDIDATE: ${{ github.workspace }}/dist/candidate/SHAQ Daily Oracle Lab
         run: .\packaging\build_windows.ps1
       - name: Build macOS disk image
         if: runner.os == 'macOS'
         env:
           SHAQ_BUILD_VERSION: ${{ steps.native-config.outputs.candidate }}
           SHAQ_BUILD_GITHUB_TOKEN: ${{ github.token }}
+          SHAQ_REUSE_CANDIDATE: ${{ github.workspace }}/dist/candidate/SHAQ Daily Oracle Lab.app
         run: zsh packaging/build_macos.sh
       - name: Install from DMG, settle both methods, reopen and inspect native window
         if: runner.os == 'macOS'
@@ -138,11 +150,17 @@ jobs:
           ditto "$MOUNT_POINT/SHAQ Daily Oracle Lab.app" "$INSTALL_ROOT/SHAQ Daily Oracle Lab.app"
           hdiutil detach "$MOUNT_POINT"
           "$INSTALL_ROOT/SHAQ Daily Oracle Lab.app/Contents/MacOS/SHAQ Daily Oracle Lab" --smoke --smoke-output "$PWD/dist/installed-smoke.json"
+          python packaging/worker_protocol_acceptance.py "$INSTALL_ROOT/SHAQ Daily Oracle Lab.app/Contents/MacOS/SHAQ Daily Oracle Lab" --output dist/installed-worker-protocol.json
           python -c 'import subprocess,sys; subprocess.run(sys.argv[1:],check=True,timeout=60)' "$INSTALL_ROOT/SHAQ Daily Oracle Lab.app/Contents/MacOS/SHAQ Daily Oracle Lab" --gui-smoke "$PWD/dist/installed-gui.json"
           codesign --verify --deep --strict "$INSTALL_ROOT/SHAQ Daily Oracle Lab.app"
           python packaging/audit_payload.py "$INSTALL_ROOT/SHAQ Daily Oracle Lab.app" --output dist/installed-native-audit.json
           find "$INSTALL_ROOT/SHAQ Daily Oracle Lab.app" -depth -delete
           test ! -e "$INSTALL_ROOT/SHAQ Daily Oracle Lab.app"
+      - name: Apply final Mac delta from verified actually published disk image
+        if: runner.os == 'macOS'
+        env:
+          SHAQ_BUILD_GITHUB_TOKEN: ${{ github.token }}
+        run: python packaging/public_base_update_acceptance.py --feed dist/update-feed --target-version ${{ steps.native-config.outputs.candidate }} --output dist/public-base-update.json
       - name: Retain installers, checksums, provenance, native sources and acceptance evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -153,6 +171,7 @@ jobs:
             dist/*Setup.exe
             dist/*.sha256
             dist/*.json
+            dist/public-base-update*.log
             dist/native/*.json
             dist/diagnostic/**
             dist/update-feed/**

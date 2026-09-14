@@ -14,6 +14,10 @@ SHAQ brings six specialist research domains, adversarial review and a brokerless
 
 ## Download
 
+The 0.7.2 candidate is awaiting platform acceptance and publication. Its planned pages are [Windows 0.7.2](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.2-windows) and [Mac 0.7.2](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.2-macos). Until each page contains its installer, checksum and acceptance record, use the published packages below; this source change is not a release announcement.
+
+In 0.7.2, model calls have a configurable 600-second total deadline and one transient retry by default (**Connection Settings → Advanced call settings**). **Resume original batch** fills only unfinished calls using the same frozen evidence; late recovery remains research, not on-time formal performance. Automatic research uses the native Windows/macOS scheduler. Progress refresh preserves expanded sections and selections, and isolated data collection releases its own resources. Model identity, methods, fees, balances and historical records are unchanged. See the [update guide](docs/software-updates.md).
+
 | Your computer | Download |
 |---|---|
 | Windows 10/11, x64 | [Windows installer](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.1-windows) |

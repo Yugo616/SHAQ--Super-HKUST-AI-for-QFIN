@@ -158,7 +158,16 @@ def validate_delivery(root, workspace, diagnostic, compiler, upstream_failed=Fal
 
     python = sys.executable
     version = os.environ.get('SHAQ_BUILD_VERSION') or tomllib.loads((root / 'pyproject.toml').read_text(encoding='utf-8'))['project']['version']
-    stage('build-app', [python, root / 'packaging/build_desktop.py', '--output', workspace / 'payload', '--version', version], 1200)
+    if os.environ.get('SHAQ_REUSE_CANDIDATE'):
+        payload = Path(os.environ['SHAQ_REUSE_CANDIDATE']).resolve()
+        executable = payload / (APP + '.exe')
+        stage('reuse-candidate', [python, root / 'packaging/candidate_payload.py', payload, '--version', version], 30)
+        if stages[-1]['status'] != 'passed':
+            result = {'status': 'failed', 'release_promoted': False, 'stages': stages}
+            (reports / 'windows-delivery.json').write_text(json.dumps(result, indent=2), encoding='utf-8')
+            return result
+    else:
+        stage('build-app', [python, root / 'packaging/build_desktop.py', '--output', workspace / 'payload', '--version', version], 1200)
     stage('packaged-smoke', [executable, '--smoke', '--smoke-output', reports / 'smoke.json'],
           180, reports / 'smoke.json', executable)
     stage('payload-audit', [python, root / 'packaging/audit_payload.py', payload, '--output', reports / 'native-audit.json'],
@@ -176,6 +185,8 @@ def validate_delivery(root, workspace, diagnostic, compiler, upstream_failed=Fal
               '--log', reports / 'install-velopack.log'], 180, requires=installer)
         stage('installed-smoke', [installed_exe, '--smoke', '--smoke-output', reports / 'installed-smoke.json'],
               180, reports / 'installed-smoke.json', installed_exe)
+        stage('installed-worker-protocol', [python, root / 'packaging/worker_protocol_acceptance.py', installed_exe,
+              '--output', reports / 'installed-worker-protocol.json'], 60, reports / 'installed-worker-protocol.json', installed_exe)
         stage('installed-gui', [installed_exe, '--gui-smoke', reports / 'installed-gui.json'],
               75, reports / 'installed-gui.json', installed_exe)
         stage('installed-audit', [python, root / 'packaging/audit_payload.py', installed,

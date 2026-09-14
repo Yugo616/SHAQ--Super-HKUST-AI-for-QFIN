@@ -11,8 +11,13 @@ case "$(uname -m)" in
   *) echo "Unsupported native architecture" >&2; exit 2 ;;
 esac
 BUILD_VERSION="${SHAQ_BUILD_VERSION:-$("${PYTHON_BIN}" -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')}"
-"${PYTHON_BIN}" packaging/build_desktop.py --output "${OUTPUT_ROOT}" --name "${APP_NAME}" --version "${BUILD_VERSION}"
-APP_PATH="${OUTPUT_ROOT}/${APP_NAME}.app"
+if [[ -n "${SHAQ_REUSE_CANDIDATE:-}" ]]; then
+  APP_PATH="$("${PYTHON_BIN}" packaging/candidate_payload.py "${SHAQ_REUSE_CANDIDATE}" --version "${BUILD_VERSION}")"
+  mkdir -p "${OUTPUT_ROOT}"
+else
+  "${PYTHON_BIN}" packaging/build_desktop.py --output "${OUTPUT_ROOT}" --name "${APP_NAME}" --version "${BUILD_VERSION}"
+  APP_PATH="${OUTPUT_ROOT}/${APP_NAME}.app"
+fi
 # Finder/iCloud may restore FinderInfo in a Documents checkout during signing.
 # Stage only this newly built app outside synced storage; never touch installed apps.
 SIGN_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/shaq-native-sign.XXXXXX")"
