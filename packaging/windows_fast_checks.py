@@ -25,7 +25,11 @@ TESTS = (
     'test_collection_worker.CollectionWorkerTests.test_worker_failure_diagnostic_preserves_resource_reason_not_secrets',
     'test_collection_worker.CollectionWorkerTests.test_frozen_entry_dispatches_worker_before_gui_or_updater',
     'test_collection_worker.CollectionWorkerTests.test_source_ping_and_windowless_entry_roundtrip_have_no_provider_side_effects',
-    'test_desktop_lifecycle',
+    # The real shared-fixture receipt integration also installs bundled methods
+    # and requires QuickJS. Keep it in full discovery, not this lightweight gate.
+    'test_desktop_lifecycle.DesktopLifecycleTests.test_api_retains_bound_method_discovery_and_rpc_parameter_names',
+    'test_desktop_lifecycle.DesktopLifecycleTests.test_disposable_api_drains_admitted_writer_and_rejects_late_requests',
+    'test_desktop_lifecycle.DesktopLifecycleTests.test_request_exception_releases_lifetime_without_exposing_private_methods',
     'test_worker_protocol_acceptance',
 )
 
