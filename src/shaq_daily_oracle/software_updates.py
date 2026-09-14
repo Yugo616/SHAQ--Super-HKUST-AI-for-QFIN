@@ -156,7 +156,7 @@ class UpdateRuntime:
         from .update_admission import gate_for
         if type(enabled) is not bool:
             raise ValueError('自动更新开关必须为开或关')
-        with self._runtime_admission.work():
+        with self._lock, self._runtime_admission.work():
             _atomic_json(self.paths.data_root / 'software-update-preferences.json', {'automatic_enabled':enabled})
         return self.status()
 
@@ -237,10 +237,14 @@ class UpdateRuntime:
         base = f'https://github.com/{repository}/releases/download/lab-v{version}-{suffix}/'
         try:
             sdk = self.sdk
+            locator_args = {}
             if sdk is None:
                 import velopack as sdk
+                from .update_native import native_locator
+                locator, self._native_cache = native_locator(sdk, config['package_id'])
+                locator_args['locator'] = locator
             manager = sdk.UpdateManager(sdk.HttpSource(base), sdk.UpdateOptions(
-                False, config['maximum_deltas_before_fallback'], channel))
+                False, config['maximum_deltas_before_fallback'], channel), **locator_args)
         except (ImportError, RuntimeError):
             return self.status()
         if manager.get_app_id() != config['package_id']:
@@ -276,6 +280,12 @@ class UpdateRuntime:
             raise ValueError('缺少完整更新包')
         if any(x.Type != 'Delta' or Version(x.Version) <= Version(manager.get_current_version()) for x in info.DeltasToTarget):
             raise ValueError('差分更新链版本无效')
+        self._target_content_sha = approved[info.TargetFullRelease.FileName].get('ContentSHA256')
+        if info.DeltasToTarget and not self._target_content_sha:
+            # Legacy feeds cannot authenticate a recompressed ZIP's content.
+            # Keep the same target but explicitly request the verified full.
+            info.DeltasToTarget=[]
+            info.BaseRelease=None
         self._manager, self._info = manager, info
         self._state = {**selected, 'mode':'managed', 'channel':channel, 'progress':0,
                        'size_bytes':info.TargetFullRelease.Size,
@@ -291,6 +301,8 @@ class UpdateRuntime:
         name = asset.get('FileName', '')
         kind = asset.get('Type')
         asset_version = asset.get('Version', '')
+        if 'ContentSHA256' in asset and not re.fullmatch(r'[A-Fa-f0-9]{64}', str(asset['ContentSHA256'])):
+            raise ValueError('更新包内容摘要无效')
         if (asset.get('PackageId') != package_id
                 or not re.fullmatch(r'\d+\.\d+\.\d+', str(asset_version))
                 or Version(asset_version) > Version(version)
@@ -321,7 +333,12 @@ class UpdateRuntime:
             with self._lock:
                 self._state['progress'] = max(0, min(100, int(value)))
         try:
+            if getattr(self, '_native_cache', None):
+                from .update_native import verify_cached
+                verify_cached(self._native_cache, self._info.TargetFullRelease, required=False, content_sha256=getattr(self,'_target_content_sha',None))
             self._manager.download_updates(self._info, progress)
+            if getattr(self, '_native_cache', None):
+                verify_cached(self._native_cache, self._info.TargetFullRelease, content_sha256=getattr(self,'_target_content_sha',None))
             with self._lock:
                 self._state.update(status='ready', progress=100,
                                    message='下载及校验完成；更新并重启前会检查所有分析、结算和后台写入。')
@@ -338,14 +355,32 @@ class UpdateRuntime:
             try:
                 with gate.install():
                     self._runtime_admission.assert_current()
+                    # Preference writes hold a work lease; admission therefore
+                    # serializes this final check across processes as well.
+                    # After mark_installing, preference writes cannot cancel it.
+                    if method == 'automatic' and not self.status()['automatic_enabled']:
+                        self._state.update(waiting_for_idle=False, queued_apply_method=None,
+                                           queued_apply_target_version=None)
+                        return self.status()
                     gate.mark_installing(self._state['latest_version'], method)
-                    self._state.update(waiting_for_idle=False, queued_apply_method=None,
+                    self._state.update(waiting_for_idle=False, waiting_for_edits=False, queued_apply_method=None,
                                        queued_apply_target_version=None, status='applying')
                     try:
+                        if getattr(self, '_native_cache', None):
+                            from .update_native import verify_cached
+                            verify_cached(self._native_cache, self._info.TargetFullRelease, content_sha256=getattr(self,'_target_content_sha',None))
+                        if getattr(self, 'gui_session', None):
+                            self.gui_session.quiesce()
                         self._manager.apply_updates_and_restart(self._info)
-                    except Exception:
+                    except Exception as exc:
                         gate.cancel_failed_launch()
                         self._state.update(status='ready', message='未能启动安装；当前版本及资料保留，请重试。')
+                        if getattr(self, 'gui_session', None):
+                            self.gui_session.cancel()
+                        from .update_gui import UnsavedEdits
+                        if isinstance(exc, UnsavedEdits):
+                            self._state.update(waiting_for_edits=True,message=str(exc))
+                            if method=='automatic':return self.status()
                         raise
             except StaleRuntime:
                 raise

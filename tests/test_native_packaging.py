@@ -19,6 +19,65 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class NativePackagingTests(unittest.TestCase):
+    def test_native_setup_promotion_replaces_only_named_owned_setup(self):
+        build=self.module('build_desktop')
+        with tempfile.TemporaryDirectory() as directory:
+            output=Path(directory)
+            (output/'native-Setup.exe').write_bytes(b'new')
+            (output/'SHAQ-Daily-Oracle-Lab-Windows-x64-Setup.exe').write_bytes(b'old')
+            (output/'other.exe').write_bytes(b'unrelated')
+            (output/'assets.win-x64-stable.json').write_text(json.dumps([{'Type':'Installer','RelativeFileName':'native-Setup.exe'}]))
+            build.normalize_setup(output,'win-x64-stable')
+            self.assertEqual((output/'SHAQ-Daily-Oracle-Lab-Windows-x64-Setup.exe').read_bytes(),b'new')
+            self.assertEqual((output/'other.exe').read_bytes(),b'unrelated')
+
+    def test_managed_pack_uses_architecture_feed_and_rejects_unsupported_host(self):
+        build = self.module('build_desktop')
+        args = build.managed_pack_args(ROOT,Path('payload.app'),Path('out'),'0.7.0','Darwin','arm64')
+        self.assertEqual(args[args.index('--runtime')+1], 'osx-arm64')
+        self.assertEqual(args[args.index('--channel')+1], 'osx-arm64-stable')
+        self.assertEqual(args[args.index('--packId')+1], 'SHAQDailyOracleLab')
+        with self.assertRaises(ValueError):
+            build.managed_pack_args(ROOT,Path('payload'),Path('out'),'0.7.0','Linux','arm64')
+
+    @unittest.skipUnless(sys.platform == 'darwin', 'macOS compiler path mapping')
+    def test_native_compiler_maps_checkout_outside_home(self):
+        build = self.module('build_native')
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            source = root/'example.c'
+            source.write_text('const char *source_path = __FILE__;\n')
+            target = root/'example.o'
+            subprocess.run(['cc', *build.native_prefix_flags(root), '-c', str(source), '-o', str(target)], check=True)
+            self.assertNotIn(str(root).encode(), target.read_bytes())
+            self.assertIn(b'/shaq-build', target.read_bytes())
+
+    def test_build_version_override_stages_metadata_without_mutating_source(self):
+        build = self.module('build_desktop')
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root/'pyproject.toml').write_text('[project]\nname="example"\nversion="0.6.2"\n')
+            staged = build.stage_version(root, '0.6.99')
+            self.assertIn('version="0.6.99"', staged.read_text())
+            self.assertIn('version="0.6.2"', (root/'pyproject.toml').read_text())
+            with self.assertRaises(ValueError):build.stage_version(root, '../unsafe')
+
+    def test_reviewed_license_fallback_is_pinned_and_rejects_changed_text(self):
+        build = self.module('build_desktop')
+        with tempfile.TemporaryDirectory() as name:
+            destination = Path(name)
+            result = build.reviewed_notice(destination, 'velopack', '1.2.0')
+            self.assertIn('Copyright', (destination / result[0][0]).read_text())
+            self.assertEqual(result[1]['commit'], 'f2edcbcafb81da5b3c884aaea330e225ad91d8b6')
+            with self.assertRaisesRegex(RuntimeError, 'version'):
+                build.reviewed_notice(destination, 'velopack', '1.2.1')
+            original = Path.read_bytes
+            def changed(path):
+                return b'tampered' if path.name == 'velopack-LICENSE.txt' else original(path)
+            with patch.object(Path, 'read_bytes', changed):
+                with self.assertRaisesRegex(RuntimeError, 'digest'):
+                    build.reviewed_notice(destination, 'velopack', '1.2.0')
+
     def test_upstream_proof_requires_archive_record_and_installed_bytes_to_agree(self):
         build = self.module('build_desktop')
         home = '/'.join(('C:', 'Users', 'runneradmin'))
@@ -85,6 +144,7 @@ class NativePackagingTests(unittest.TestCase):
         build = self.module('build_desktop')
         with tempfile.TemporaryDirectory() as name:
             root = Path(name)
+            (root/'pyproject.toml').write_text('[project]\nversion="0.6.2"\n')
             for file in ('packaging/native-sources.json', 'build/native-dependencies/mingw-toolchain.json',
                          'build/native-dependencies/hdf5-diagnostic-map.json', 'docs/third-party-notices.md'):
                 target = root / file

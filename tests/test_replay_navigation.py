@@ -105,14 +105,14 @@ const fs=require('fs'),path=require('path'),vm=require('vm'),assert=require('ass
 const desktop='src/shaq_daily_oracle/desktop';
 const html=fs.readFileSync(path.join(desktop,'index.html'),'utf8');
 const scripts=[...html.matchAll(/<script src="([^"]+)"/g)].map(row=>row[1]);
-assert.deepEqual(scripts,['connections.js','comparison.js','app.js','today_progress.js','workbench.js','accounts.js','review.js','software_updates.js']);
+assert.deepEqual(scripts,['connections.js','comparison.js','app.js','today_progress.js','workbench.js','accounts.js','review.js','software_updates.js','update_exit.js']);
 const cls={add(){},remove(){},toggle(){}};
 const element=()=>new Proxy({classList:cls,dataset:{},parentElement:{prepend(){}},children:[],
  append(){},prepend(){},before(){},insertBefore(){},insertAdjacentHTML(){},insertAdjacentElement(){},
  addEventListener(){},remove(){},closest(){return null},scrollIntoView(){},focus(){}},
  {get:(o,k)=>k in o?o[k]:'',set:(o,k,v)=>(o[k]=v,true)});
 const ctx={console,window:{addEventListener(){},scrollY:0,scrollTo(){}},
- document:{createElement:element,querySelector:element,querySelectorAll:()=>[]},
+ document:{createElement:element,querySelector:element,querySelectorAll:()=>[],addEventListener(){}},
  q:element,qa:()=>[],esc:String,dir:String,money:String,api:async()=>({}),notice(){},
  setInterval(){},setTimeout(){},Intl,Date};
 vm.createContext(ctx);

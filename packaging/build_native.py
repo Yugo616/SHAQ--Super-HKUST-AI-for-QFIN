@@ -18,6 +18,11 @@ def run(*args, **kwargs):
     subprocess.run([str(arg) for arg in args], check=True, **kwargs)
 
 
+def native_prefix_flags(root):
+    return ['-ffile-prefix-map=' + str(prefix) + '=/shaq-build'
+            for prefix in dict.fromkeys((Path.home(), root.resolve()))]
+
+
 def map_build_metadata(path, prefixes):
     """Normalize generated configuration text; never rewrite upstream source or notices."""
     content = path.read_text(encoding='utf-8')
@@ -113,7 +118,7 @@ def main():
         '-DBUILD_TESTING=OFF', '-DHDF5_BUILD_TOOLS=OFF', '-DHDF5_BUILD_EXAMPLES=OFF',
         '-DHDF5_ENABLE_EMBEDDED_LIBINFO=OFF',
         '-DHDF5_BUILD_HL_LIB=ON', '-DHDF5_ENABLE_Z_LIB_SUPPORT=OFF', '-DHDF5_ENABLE_SZIP_SUPPORT=OFF',
-        *([] if sys.platform == 'win32' else [f'-DCMAKE_C_FLAGS=-ffile-prefix-map={Path.home()}=/shaq-build',
+        *([] if sys.platform == 'win32' else ['-DCMAKE_C_FLAGS=' + shlex.join(native_prefix_flags(root)),
           f'-DCMAKE_OSX_ARCHITECTURES={platform.machine()}', f'-DCMAKE_OSX_DEPLOYMENT_TARGET={deployment}']))
     map_build_metadata(cmake_build / 'src/H5build_settings.c', [str(root.parent), str(Path.home())])
     run('cmake', '--build', cmake_build, '--config', 'Release', '--parallel', '3')
@@ -125,7 +130,7 @@ def main():
         env.pop(key, None)
     env.update(HDF5_DIR=str(prefix), LZO_DIR=str(empty), USE_PKGCONFIG='FALSE', DISABLE_AVX2='True')
     if sys.platform != 'win32':
-        env['CFLAGS'] = shlex.quote('-ffile-prefix-map=' + str(Path.home()) + '=/shaq-build')
+        env['CFLAGS'] = shlex.join(native_prefix_flags(root))
         env['ARCHFLAGS'] = '-arch ' + platform.machine()
         env['MACOSX_DEPLOYMENT_TARGET'] = deployment
         import blosc2

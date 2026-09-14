@@ -42,6 +42,14 @@ class WindowsDeliveryTests(unittest.TestCase):
                 # file prerequisites, report validation, cleanup and promotion run.
                 stage = Path(kwargs['stdout'].name).stem
                 commands.append(stage)
+                if stage == 'compile-installer':
+                    self.assertIn('--manage-existing', args)
+                if stage == 'install':
+                    self.assertIn('--installto', args)
+                    self.assertIn('--silent', args)
+                if stage == 'uninstall':
+                    self.assertEqual(Path(args[0]).name,'Update.exe')
+                    self.assertIn('uninstall',args)
                 workspace = root / 'fresh stage'
                 if stage == 'build-app':
                     target = workspace / 'payload/SHAQ Daily Oracle Lab/SHAQ Daily Oracle Lab.exe'
@@ -54,14 +62,14 @@ class WindowsDeliveryTests(unittest.TestCase):
                 if stage == 'install':
                     (workspace / 'installed').mkdir()
                     (workspace / 'installed/SHAQ Daily Oracle Lab.exe').write_bytes(b'app')
-                    (workspace / 'installed/unins000.exe').write_bytes(b'uninstaller')
+                    (workspace / 'installed/Update.exe').write_bytes(b'uninstaller')
                 if '--smoke-output' in args:
                     evidence = ({'status':'passed','checks':{'two_methods':True},'methods':[{},{}]}
                                 if malformed_smoke is None else malformed_smoke)
                     Path(args[args.index('--smoke-output') + 1]).write_text(json.dumps(evidence), encoding='utf-8')
                 if '--gui-smoke' in args:
                     Path(args[args.index('--gui-smoke') + 1]).write_text(json.dumps({'status':'passed','pages':['run','editor','history']}), encoding='utf-8')
-                if '--output' in args and stage != 'build-app':
+                if '--output' in args and stage not in ('build-app','compile-installer'):
                     Path(args[args.index('--output') + 1]).write_text(json.dumps({'status':'passed'}), encoding='utf-8')
                 if stage == 'uninstall':
                     for path in (workspace / 'installed').iterdir():

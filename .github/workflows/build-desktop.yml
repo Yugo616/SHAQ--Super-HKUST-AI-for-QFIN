@@ -23,6 +23,8 @@ permissions:
   contents: read
 jobs:
   native:
+    env:
+      PYTHONUTF8: '1'
     strategy:
       fail-fast: false
       matrix:
@@ -37,6 +39,15 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
+      - name: Read pinned native updater toolchain
+        id: native-config
+        shell: bash
+        run: python -c 'import json; c=json.load(open("packaging/updater-toolchain.json")); print("dotnet="+c["dotnet_sdk_version"]); print("velopack="+c["velopack_version"]); print("candidate="+c["candidate_version"])' >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ steps.native-config.outputs.dotnet }}
+      - name: Install pinned native updater tool
+        run: dotnet tool install --global vpk --version ${{ steps.native-config.outputs.velopack }}
       - name: Validate source privacy and eight Skills before building
         id: source-check
         run: python scripts/validate_release.py
@@ -68,12 +79,18 @@ jobs:
         run: python packaging/build_native.py
       - name: Validate all application tests
         run: python -m unittest discover -s tests -v
+      - name: Full installed native delta update and replay acceptance
+        run: python packaging/installed_update_acceptance.py
       - name: Collect complete Windows delivery acceptance, then fail on any unsuccessful stage
         if: ${{ !cancelled() && runner.os == 'Windows' && steps.source-check.outcome == 'success' }}
         shell: pwsh
+        env:
+          SHAQ_BUILD_VERSION: ${{ steps.native-config.outputs.candidate }}
         run: .\packaging\build_windows.ps1 ${{ job.status != 'success' && '-UpstreamFailed' || '' }}
       - name: Build macOS disk image
         if: runner.os == 'macOS'
+        env:
+          SHAQ_BUILD_VERSION: ${{ steps.native-config.outputs.candidate }}
         run: zsh packaging/build_macos.sh
       - name: Install from DMG, settle both methods, reopen and inspect native window
         if: runner.os == 'macOS'
@@ -102,6 +119,8 @@ jobs:
             dist/*.json
             dist/native/*.json
             dist/diagnostic/**
+            dist/update-feed/**
+            dist/installed-update/**
             build/third-party/**
             build/license-sources/*.tar.gz
             build/native-dependencies/sources/*.tar.gz

@@ -154,18 +154,18 @@ def validate_delivery(root, workspace, diagnostic, compiler, upstream_failed=Fal
         stages.append(result)
 
     python = sys.executable
-    stage('build-app', [python, root / 'packaging/build_desktop.py', '--output', workspace / 'payload'], 1200)
+    version = os.environ.get('SHAQ_BUILD_VERSION') or tomllib.loads((root / 'pyproject.toml').read_text(encoding='utf-8'))['project']['version']
+    stage('build-app', [python, root / 'packaging/build_desktop.py', '--output', workspace / 'payload', '--version', version], 1200)
     stage('packaged-smoke', [executable, '--smoke', '--smoke-output', reports / 'smoke.json'],
           180, reports / 'smoke.json', executable)
     stage('payload-audit', [python, root / 'packaging/audit_payload.py', payload, '--output', reports / 'native-audit.json'],
           180, reports / 'native-audit.json', executable)
-    version = tomllib.loads((root / 'pyproject.toml').read_text(encoding='utf-8'))['project']['version']
-    stage('compile-installer', [compiler, f'/DProjectRoot={root}', f'/DAppVersion={version}',
-          f'/DPayloadRoot={payload}', f'/DInstallerOutput={installer.parent}', root / 'packaging/windows-installer.iss'],
+    stage('compile-installer', [python, root / 'packaging/build_desktop.py', '--manage-existing', payload,
+          '--version', version, '--output', installer.parent],
           600, requires=executable)
     try:
-        stage('install', [installer, '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART',
-              f'/DIR={installed}', f'/LOG={reports / "install-inno.log"}'], 180, requires=installer)
+        stage('install', [installer, '--silent', '--installto', installed,
+              '--log', reports / 'install-velopack.log'], 180, requires=installer)
         stage('installed-smoke', [installed_exe, '--smoke', '--smoke-output', reports / 'installed-smoke.json'],
               180, reports / 'installed-smoke.json', installed_exe)
         stage('installed-gui', [installed_exe, '--gui-smoke', reports / 'installed-gui.json'],
@@ -173,9 +173,9 @@ def validate_delivery(root, workspace, diagnostic, compiler, upstream_failed=Fal
         stage('installed-audit', [python, root / 'packaging/audit_payload.py', installed,
               '--output', reports / 'installed-native-audit.json'], 180, reports / 'installed-native-audit.json', installed_exe)
     finally:
-        uninstaller = installed / 'unins000.exe'
-        stage('uninstall', [uninstaller, '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART',
-              f'/LOG={reports / "uninstall-inno.log"}'], 120, requires=uninstaller)
+        uninstaller = installed / 'Update.exe'
+        stage('uninstall', [uninstaller, 'uninstall', '--silent',
+              '--log', reports / 'uninstall-velopack.log'], 120, requires=uninstaller)
         stage('uninstall-check', [python, root / 'packaging/verify_uninstall.py', installed,
               '--timeout-seconds', '30', '--output', reports / 'uninstall-report.json'],
               45, reports / 'uninstall-report.json')

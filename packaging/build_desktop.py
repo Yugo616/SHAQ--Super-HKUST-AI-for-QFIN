@@ -82,6 +82,20 @@ def collect_upstream_path_provenance(destination):
     (destination / 'upstream-path-provenance.json').write_text(json.dumps(proofs, indent=2), encoding='utf-8')
 
 
+def reviewed_notice(destination, name, version):
+    directory = Path(__file__).parent / 'licenses'
+    record = json.loads((directory / 'reviewed-sources.json').read_text(encoding='utf-8'))[name]
+    if record['version'] != version:
+        raise RuntimeError('Reviewed license version mismatch')
+    content = (directory / record['file']).read_bytes()
+    if hashlib.sha256(content).hexdigest() != record['sha256']:
+        raise RuntimeError('Reviewed license digest mismatch')
+    target = destination / name / record['file']
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(content)
+    return [str(target.relative_to(destination))], record
+
+
 def source_notices(destination, name, version=None, source=None):
     if source is None:
         with urllib.request.urlopen(f'https://pypi.org/pypi/{name}/{version}/json') as response:
@@ -123,6 +137,9 @@ def source_notices(destination, name, version=None, source=None):
         target.parent.mkdir(exist_ok=True)
         shutil.copy2(Path(__file__).parent / 'licenses/proxy_tools-LICENSE.txt', target)
         notices.append(str(target.relative_to(destination)))
+    if not notices and name == 'velopack':
+        notices, license_source = reviewed_notice(destination, name, version)
+        source = {**source, 'reviewed_license': license_source}
     if not notices:
         raise RuntimeError(f'No license text found in {archive.name}; review before packaging')
     return notices, source
@@ -139,7 +156,22 @@ def stage_macos_blosc2(tables_package, destination):
     return target
 
 
-def pyinstaller_args(root, output, name, blosc2_library=None):
+def stage_version(root, version):
+    if not re.fullmatch(r'\d+\.\d+\.\d+', version):
+        raise ValueError('Build version must be a final numeric triplet')
+    text = (root / 'pyproject.toml').read_text(encoding='utf-8')
+    original = tomllib.loads(text)['project']['version']
+    text, count = re.subn(r'(?m)^(version\s*=\s*["\'])' + re.escape(original) + r'(["\'])',
+                          lambda match: match[1] + version + match[2], text)
+    if count != 1:
+        raise ValueError('Ambiguous project version')
+    target = root / 'build/version-metadata/pyproject.toml'
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(text, encoding='utf-8')
+    return target
+
+
+def pyinstaller_args(root, output, name, blosc2_library=None, project_metadata=None):
     args = ['--noconfirm', '--clean', '--windowed', '--onedir', '--name', name,
             '--paths', str(root / 'src'), '--distpath', str(output),
             '--runtime-hook', str(root / 'packaging/frozen_native.py'),
@@ -158,15 +190,15 @@ def pyinstaller_args(root, output, name, blosc2_library=None):
         args += ['--collect-data', package]
     for resource in ('config', 'governance', 'schemas', 'skills', 'decision', 'bundled_versions'):
         args += ['--add-data', f'{root / resource}:{resource}']
-    args += ['--add-data', f'{root / "pyproject.toml"}:.',
+    args += ['--add-data', f'{project_metadata or root / "pyproject.toml"}:.',
              '--add-data', f'{root / "src/shaq_daily_oracle/desktop"}:shaq_daily_oracle/desktop',
              '--add-data', f'{root / "build/third-party"}:third-party',
              str(root / 'packaging/desktop_entry.py')]
     return args
 
 
-def set_macos_bundle_identity(root, app):
-    version = str(tomllib.loads((root / 'pyproject.toml').read_text(encoding='utf-8'))['project']['version'])
+def set_macos_bundle_identity(root, app, version=None):
+    version = version or str(tomllib.loads((root / 'pyproject.toml').read_text(encoding='utf-8'))['project']['version'])
     if not re.fullmatch(r'\d+\.\d+\.\d+', version):
         raise ValueError('Native bundle version must be a final numeric project triplet')
     path = app / 'Contents/Info.plist'
@@ -176,7 +208,7 @@ def set_macos_bundle_identity(root, app):
     path.write_bytes(plistlib.dumps(data))
 
 
-def collect_notices(root):
+def collect_notices(root, version_override=None):
     destination = root / 'build/third-party'
     if destination.is_dir():
         shutil.rmtree(destination)
@@ -227,7 +259,9 @@ def collect_notices(root):
     manifest = {'source_sha': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip(),
                 'source_dirty': bool(subprocess.check_output(['git', 'status', '--porcelain'], cwd=root, text=True).strip()),
                 'python': platform.python_version(), 'architecture': platform.machine(),
-                'methods': methods, 'distributions': distributions}
+                'methods': methods, 'distributions': distributions,
+                'version_override': version_override,
+                'source_version': tomllib.loads((root / 'pyproject.toml').read_text(encoding='utf-8'))['project']['version']}
     (destination / 'manifest.json').write_text(json.dumps(manifest, indent=2), encoding='utf-8')
 
 
@@ -278,24 +312,88 @@ def collect_mingw_notices(destination, built_provenance):
     (target / 'toolchain.json').write_text(json.dumps(provenance, indent=2), encoding='utf-8')
 
 
+def managed_pack_args(root, payload, output, version, system, machine):
+    key = system + '/' + machine.lower()
+    tools = json.loads((root / 'packaging/updater-toolchain.json').read_text())
+    updates = json.loads((root / 'config/software-updates.json').read_text())
+    if key not in tools['runtimes'] or key not in updates['channels']:
+        raise ValueError('Unsupported native update architecture')
+    if not re.fullmatch(r'\d+\.\d+\.\d+', version):
+        raise ValueError('Invalid managed package version')
+    main = payload.stem if system == 'Darwin' else payload.name + '.exe'
+    args = ['pack', '--packId', updates['package_id'], '--packVersion', version,
+            '--packDir', str(payload), '--mainExe', main, '--packTitle', payload.stem,
+            '--runtime', tools['runtimes'][key], '--channel', updates['channels'][key],
+            '--outputDir', str(output)]
+    if system == 'Darwin':
+        args += ['--noInst', 'true', '--signAppIdentity', '-']
+    else:
+        args += ['--framework', 'webview2']
+    return args
+
+
+def normalize_setup(output, channel):
+    assets = json.loads((output/('assets.'+channel+'.json')).read_text())
+    installers = [asset['RelativeFileName'] for asset in assets if asset['Type']=='Installer']
+    if len(installers)!=1 or Path(installers[0]).name!=installers[0]:
+        raise RuntimeError('Expected exactly one native Setup.exe')
+    name='SHAQ-Daily-Oracle-Lab-Windows-x64-Setup.exe'
+    (output/installers[0]).replace(output/name)
+    for asset in assets:
+        if asset['RelativeFileName']==installers[0]:asset['RelativeFileName']=name
+    (output/('assets.'+channel+'.json')).write_text(json.dumps(assets),encoding='utf-8')
+
+
+def pack_managed(root, payload, output, version):
+    config = json.loads((root / 'packaging/updater-toolchain.json').read_text())
+    tool = os.environ.get('SHAQ_VPK', 'vpk')
+    help_text = subprocess.check_output([tool, '--help'], text=True)
+    actual = re.search(r'Velopack CLI (\d+\.\d+\.\d+),', help_text)
+    if not actual or actual[1] != config['velopack_version']:
+        raise RuntimeError('Pinned Velopack tool version mismatch')
+    subprocess.run([tool, *managed_pack_args(root, payload, output, version, platform.system(), platform.machine())], check=True)
+    channel = json.loads((root / 'config/software-updates.json').read_text())['channels'][platform.system()+'/'+platform.machine().lower()]
+    feed = json.loads((output / ('releases.' + channel + '.json')).read_text())
+    from shaq_daily_oracle.software_updates import UpdateRuntime
+    from shaq_daily_oracle.update_native import package_content_sha256
+    package_id = json.loads((root / 'config/software-updates.json').read_text())['package_id']
+    for asset in feed['Assets']:
+        UpdateRuntime._validate_asset(asset, package_id, channel, version)
+        file = output / asset['FileName']
+        with file.open('rb') as stream:digest=hashlib.file_digest(stream, 'sha256').hexdigest()
+        if file.stat().st_size != asset['Size'] or digest.lower() != asset['SHA256'].lower():
+            raise RuntimeError('Generated native feed failed package digest verification')
+        if asset['Type']=='Full':asset['ContentSHA256']=package_content_sha256(file)
+    (output/('releases.'+channel+'.json')).write_text(json.dumps(feed,separators=(',',':')),encoding='utf-8')
+    if sys.platform == 'win32':
+        normalize_setup(output, channel)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--name', default='SHAQ Daily Oracle Lab')
+    parser.add_argument('--version', help='Explicit artifact-only version override; recorded in provenance')
+    parser.add_argument('--manage-existing', type=Path, help='Pack an already built full native payload with pinned Velopack')
     args = parser.parse_args()
+    root = Path(__file__).resolve().parents[1]
+    if args.manage_existing:
+        version = args.version or tomllib.loads((root/'pyproject.toml').read_text())['project']['version']
+        pack_managed(root, args.manage_existing.resolve(), args.output.resolve(), version)
+        return
     if sys.version_info[:2] != (3, 13):
         raise RuntimeError('Native release builds require CPython 3.13')
     import tables
     if tables.which_lib_version('lzo') is not None:
         raise RuntimeError('Use the no-LZO source build before packaging')
-    root = Path(__file__).resolve().parents[1]
     blosc2_library = (stage_macos_blosc2(Path(tables.__file__).parent, root / 'build/native-loader')
                       if sys.platform == 'darwin' else None)
-    collect_notices(root)
+    project_metadata = stage_version(root, args.version) if args.version else None
+    collect_notices(root, args.version)
     env = dict(os.environ, PYINSTALLER_CONFIG_DIR=str(root / 'build/pyinstaller-cache'))
-    subprocess.run([sys.executable, '-m', 'PyInstaller', *pyinstaller_args(root, args.output.resolve(), args.name, blosc2_library)], check=True, env=env)
+    subprocess.run([sys.executable, '-m', 'PyInstaller', *pyinstaller_args(root, args.output.resolve(), args.name, blosc2_library, project_metadata)], check=True, env=env)
     if sys.platform == 'darwin':
-        set_macos_bundle_identity(root, args.output / (args.name + '.app'))
+        set_macos_bundle_identity(root, args.output / (args.name + '.app'), args.version)
     # pip's local installation URL is not runtime metadata. Public provenance is
     # retained in third-party/source-manifest.json and the wheel/source artifacts.
     for payload in (args.output / args.name, args.output / (args.name + '.app')):

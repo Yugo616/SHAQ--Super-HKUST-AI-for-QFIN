@@ -185,6 +185,55 @@ def asset(kind='Full', **changes):
 
 
 class UpdateRuntimeTests(unittest.TestCase):
+    def test_feed_without_content_identity_explicitly_uses_full_not_delta(self):
+        with tempfile.TemporaryDirectory() as directory:
+            runtime,manager,selected,feed=self.runtime(directory,delta=True)
+            result=self.check(runtime,selected,feed)
+            self.assertEqual(result['strategy'],'full')
+            self.assertEqual(runtime._info.DeltasToTarget,[])
+            self.assertIsNone(runtime._info.BaseRelease)
+
+    def test_unsaved_gui_blocks_sdk_and_releases_install_intent(self):
+        from shaq_daily_oracle.update_gui import UnsavedEdits
+        with tempfile.TemporaryDirectory() as directory:
+            runtime,manager,selected,feed=self.runtime(directory)
+            manager.download_updates=lambda info,progress:None
+            applied=[];manager.apply_updates_and_restart=lambda info:applied.append(info)
+            def dirty():raise UnsavedEdits()
+            runtime.gui_session=NS(quiesce=dirty,cancel=lambda:None)
+            self.check(runtime,selected,feed);runtime.download();runtime._download_thread.join(3)
+            with self.assertRaises(UnsavedEdits):runtime.apply()
+            self.assertEqual(applied,[])
+            self.assertEqual(runtime.status()['status'],'ready')
+            self.assertFalse((Path(directory)/'update-admission/installing.json').exists())
+
+    def test_automatic_dirty_window_is_visible_deferred_state_not_install_failure(self):
+        from shaq_daily_oracle.update_gui import UnsavedEdits
+        with tempfile.TemporaryDirectory() as directory:
+            runtime,manager,selected,feed=self.runtime(directory)
+            manager.download_updates=lambda info,progress:None
+            def dirty():raise UnsavedEdits()
+            runtime.gui_session=NS(quiesce=dirty,cancel=lambda:None)
+            runtime.set_automatic(True)
+            self.check(runtime,selected,feed);runtime.download();runtime._download_thread.join(3)
+            result=runtime.automatic_step()
+            self.assertTrue(result['waiting_for_edits'])
+            self.assertEqual(result['status'],'ready')
+            self.assertIn('保存',result['message'])
+
+    def test_disabled_before_automatic_admission_prevents_install(self):
+        with tempfile.TemporaryDirectory() as directory:
+            runtime,manager,selected,feed=self.runtime(directory)
+            manager.download_updates=lambda info,progress:None
+            applied=[];manager.apply_updates_and_restart=lambda info:applied.append(info)
+            runtime.set_automatic(True)
+            self.check(runtime,selected,feed);runtime.download();runtime._download_thread.join(3)
+            runtime.set_automatic(False)
+            runtime.apply(method='automatic')
+            self.assertEqual(applied,[])
+            self.assertEqual(runtime.status()['status'],'ready')
+            self.assertFalse((Path(directory)/'update-admission/installing.json').exists())
+
     def test_manual_busy_queues_once_with_automatic_off_and_can_cancel(self):
         from shaq_daily_oracle.update_admission import AdmissionGate
         with tempfile.TemporaryDirectory() as directory:
@@ -332,6 +381,15 @@ class UpdateRuntimeTests(unittest.TestCase):
         with patch.dict(sys.modules,{'velopack':fake,'shaq_daily_oracle.desktop':NS(main=lambda:events.append('desktop'))}),patch.object(sys,'frozen',True,create=True):
             with self.assertRaises(SystemExit):runpy.run_path(str(ROOT/'packaging/desktop_entry.py'),run_name='__main__')
         self.assertEqual(events,[('auto',False),'lifecycle','desktop'])
+
+    def test_isolated_smoke_never_autolocates_normal_native_cache(self):
+        import runpy
+        for flag in ('--smoke','--gui-smoke'):
+            events=[]
+            def unsafe():raise AssertionError('Production locator touched')
+            with patch.dict(sys.modules,{'velopack':NS(App=unsafe),'shaq_daily_oracle.desktop':NS(main=lambda:events.append('smoke'))}),patch.object(sys,'frozen',True,create=True),patch.object(sys,'argv',['app',flag]):
+                with self.assertRaises(SystemExit):runpy.run_path(str(ROOT/'packaging/desktop_entry.py'),run_name='__main__')
+            self.assertEqual(events,['smoke'])
 
     def runtime(self, directory, *, delta=False):
         paths=NS(package_root=ROOT, data_root=Path(directory), research_root=Path(directory)/'research')
