@@ -17,6 +17,7 @@ function renderSoftwareUpdate(value) {
     ${value.status==='downloading'?`<progress max="100" value="${Number(value.progress)||0}"></progress><span>${Number(value.progress)||0}%</span>`:''}
     ${['available','download_failed'].includes(value.status)?`<button class="primary" id="download-software">${managed?'下载更新':'下载完整安装包（首次接入更新）'}</button>`:''}
     ${value.status==='ready'?'<button class="primary" id="apply-software">更新并重启</button>':''}
+    ${value.status==='ready'&&value.queued_apply_method==='manual'?'<button id="cancel-software-wait">取消本次等待</button>':''}
     <p id="software-update-error" role="alert"></p>
     <details><summary>发布说明</summary><pre class="release-notes">${esc(value.notes||'暂无发布说明')}</pre></details>
     ${!['downloading','applying'].includes(value.status)?'<button class="secondary" id="retry-software-check">重新检查</button>':''}`;
@@ -32,6 +33,10 @@ function renderSoftwareUpdate(value) {
   };
   if(value.status==='ready')q('#apply-software').onclick=async()=>{
     try {renderSoftwareUpdate(await api('apply_software_update'));}
+    catch(error){q('#software-update-error').textContent=error.message;}
+  };
+  if(value.status==='ready'&&value.queued_apply_method==='manual')q('#cancel-software-wait').onclick=async()=>{
+    try{renderSoftwareUpdate(await api('cancel_queued_software_update'));}
     catch(error){q('#software-update-error').textContent=error.message;}
   };
   if(!['downloading','applying'].includes(value.status))q('#retry-software-check').onclick=checkSoftwareUpdate;

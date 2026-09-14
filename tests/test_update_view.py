@@ -5,6 +5,40 @@ import unittest
 
 
 class UpdateViewTests(unittest.TestCase):
+    def test_startup_ack_only_after_real_load_and_render_succeed(self):
+        source=(Path(__file__).parents[1]/'src/shaq_daily_oracle/desktop/app.js').read_text()
+        functions=source[source.index('async function load('):source.index("qa('.nav').forEach")]
+        script='''
+const state={data:null};const calls=[];const window={scrollY:0,scrollTo(){}};
+const q=()=>({open:false,scrollTop:0});const notice=()=>{};let broken=true;
+const api=async name=>{calls.push(name);return {healthy:true}};
+const render=()=>{if(broken)throw Error('render failed')};
+'''+functions+'''
+(async()=>{await startDesktop();const failed=[...calls];calls.length=0;broken=false;
+await startDesktop();console.log(JSON.stringify({failed,success:calls}));})();
+'''
+        result=subprocess.run(['node','-'],input=script,text=True,capture_output=True)
+        self.assertEqual(result.returncode,0,result.stderr)
+        value=json.loads(result.stdout)
+        self.assertEqual(value['failed'],['get_lab_state'])
+        self.assertEqual(value['success'],['get_lab_state','confirm_desktop_ready'])
+
+    def test_manual_handler_renders_exact_busy_queue_message(self):
+        source=(Path(__file__).parents[1]/'src/shaq_daily_oracle/desktop/software_updates.js').read_text()
+        script='''
+const nodes=new Map();const q=s=>{if(!nodes.has(s))nodes.set(s,{dataset:{},innerHTML:''});return nodes.get(s)};
+const document={querySelector:q};const esc=x=>String(x||'');const setTimeout=()=>0;const clearTimeout=()=>{};
+const api=async()=>({status:'ready',mode:'managed',waiting_for_idle:true,queued_apply_method:'manual',message:'已下载，等待本地任务运行完更新'});
+'''+source+'''
+(async()=>{renderSoftwareUpdate({status:'ready',mode:'managed'});await q('#apply-software').onclick();
+console.log(JSON.stringify({html:q('#software-update-detail').innerHTML}));})();
+'''
+        result=subprocess.run(['node','-'],input=script,text=True,capture_output=True)
+        self.assertEqual(result.returncode,0,result.stderr)
+        value=json.loads(result.stdout)
+        self.assertIn('已下载，等待本地任务运行完更新',value['html'])
+        self.assertIn('取消本次等待',value['html'])
+
     def test_network_failure_keeps_local_disable_toggle_and_history(self):
         source=(Path(__file__).parents[1]/'src/shaq_daily_oracle/desktop/software_updates.js').read_text()
         script='''

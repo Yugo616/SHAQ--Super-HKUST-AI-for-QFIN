@@ -185,6 +185,66 @@ def asset(kind='Full', **changes):
 
 
 class UpdateRuntimeTests(unittest.TestCase):
+    def test_manual_busy_queues_once_with_automatic_off_and_can_cancel(self):
+        from shaq_daily_oracle.update_admission import AdmissionGate
+        with tempfile.TemporaryDirectory() as directory:
+            runtime,manager,selected,feed=self.runtime(directory)
+            manager.download_updates=lambda info,progress:None
+            applied=[];manager.apply_updates_and_restart=lambda info:applied.append(info)
+            self.check(runtime,selected,feed);runtime.download();runtime._download_thread.join(3)
+            with AdmissionGate(Path(directory)).work():
+                runtime.apply()
+                self.assertEqual(runtime.status()['queued_apply_method'],'manual')
+                self.assertFalse(runtime.status()['automatic_enabled'])
+                runtime.cancel_queued_apply()
+            runtime.automatic_step();self.assertEqual(applied,[])
+            with AdmissionGate(Path(directory)).work():runtime.apply()
+            runtime.automatic_step();self.assertEqual(len(applied),1)
+            self.assertFalse(runtime.status()['automatic_enabled'])
+
+    def test_target_bootstrap_keeps_intent_until_desktop_ready_and_keeps_generation(self):
+        from test_research_lab_foundation import ResearchLabFoundationTests
+        from shaq_daily_oracle.desktop import DesktopBridge
+        from shaq_daily_oracle.update_admission import AdmissionGate
+        with tempfile.TemporaryDirectory() as directory:
+            paths=ResearchLabFoundationTests().paths(Path(directory));gate=AdmissionGate(paths.data_root)
+            old=DesktopBridge(paths)
+            with gate.install():gate.mark_installing('0.6.2')
+            self.assertTrue(hasattr(gate,'target_startup'))
+            with gate.target_startup('0.6.2'):
+                bridge=DesktopBridge(paths)
+                self.assertFalse(old._result(lambda:'old write')['ok'])
+                self.assertTrue((gate.root/'installing.json').exists())
+                self.assertFalse((paths.data_root/'software-update-history.json').exists())
+                self.assertTrue(bridge.confirm_desktop_ready()['ok'])
+                self.assertTrue(bridge._result(lambda:'still current')['ok'])
+            self.assertFalse((gate.root/'installing.json').exists())
+            self.assertEqual(json.loads((paths.data_root/'software-update-history.json').read_text())['version'],'0.6.2')
+
+    def test_worker_start_cannot_confirm_pending_install(self):
+        from test_research_lab_foundation import ResearchLabFoundationTests
+        from shaq_daily_oracle import desktop
+        from shaq_daily_oracle.update_admission import AdmissionGate
+        with tempfile.TemporaryDirectory() as directory:
+            paths=ResearchLabFoundationTests().paths(Path(directory));gate=AdmissionGate(paths.data_root)
+            with gate.install():gate.mark_installing('0.6.2')
+            with patch.object(desktop,'app_paths',return_value=paths),patch.object(sys,'frozen',True,create=True),patch.object(desktop,'run_worker',return_value=0):
+                self.assertEqual(desktop.main(['--worker']),0)
+            self.assertTrue((gate.root/'installing.json').exists())
+            self.assertFalse((paths.data_root/'software-update-history.json').exists())
+
+    def test_failed_gui_initialization_keeps_pending_install_and_no_success_time(self):
+        from test_research_lab_foundation import ResearchLabFoundationTests
+        from shaq_daily_oracle import desktop
+        from shaq_daily_oracle.update_admission import AdmissionGate
+        with tempfile.TemporaryDirectory() as directory:
+            paths=ResearchLabFoundationTests().paths(Path(directory));gate=AdmissionGate(paths.data_root)
+            with gate.install():gate.mark_installing('0.6.2')
+            with patch.object(desktop,'app_paths',return_value=paths),patch.object(sys,'frozen',True,create=True),patch.object(desktop,'launch_desktop',side_effect=RuntimeError('init failed')):
+                with self.assertRaises(RuntimeError):desktop.main([])
+            self.assertTrue((gate.root/'installing.json').exists())
+            self.assertFalse((paths.data_root/'software-update-history.json').exists())
+
     def test_managed_current_version_does_not_claim_legacy_installer(self):
         with tempfile.TemporaryDirectory() as directory:
             runtime,manager,selected,feed=self.runtime(directory)
@@ -302,7 +362,9 @@ class UpdateRuntimeTests(unittest.TestCase):
             runtime.download(); runtime._download_thread.join(3)
             self.assertEqual(runtime.status()['status'],'ready')
             with AdmissionGate(Path(directory)).work():
-                with self.assertRaises(UpdateBusy):runtime.apply()
+                waiting=runtime.apply()
+                self.assertTrue(waiting['waiting_for_idle'])
+                self.assertEqual(waiting['message'],'已下载，等待本地任务运行完更新')
             self.assertEqual(applied,[])
             runtime.apply(); self.assertEqual(len(applied),1)
 

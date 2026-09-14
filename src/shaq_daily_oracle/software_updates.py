@@ -164,15 +164,15 @@ class UpdateRuntime:
         from .update_admission import UpdateBusy
         with self._lock:
             self._runtime_admission.assert_current()
+            if self._state.get('queued_apply_method') == 'manual' and self._state['status'] == 'ready':
+                if self._state.get('queued_apply_target_version') != self._state.get('latest_version'):
+                    raise ValueError('等待更新的目标版本发生变化，请重新确认')
+                return self.apply(method='manual')
             if not self.status()['automatic_enabled']:
                 return self.status()
             state = self._state['status']
             if state == 'ready':
-                try:
-                    return self.apply(method='automatic')
-                except UpdateBusy:
-                    self._state.update(waiting_for_idle=True, message='已下载，等待本地任务运行完更新')
-                    return self.status()
+                return self.apply(method='automatic')
             if state == 'available' and self._state.get('mode') == 'managed':
                 return self.download()
             if state in {'downloading','applying'}:
@@ -330,20 +330,36 @@ class UpdateRuntime:
                 self._state.update(status='download_failed', message='下载或完整包校验失败，未安装更新；请检查网络后重试。')
 
     def apply(self, *, method='manual'):
-        from .update_admission import gate_for
+        from .update_admission import gate_for, UpdateBusy, StaleRuntime
         with self._lock:
             if self._state['status'] != 'ready':
                 raise ValueError('更新尚未下载并校验完成')
             gate = gate_for(self.paths)
-            with gate.install():
-                self._runtime_admission.assert_current()
-                gate.mark_installing(self._state['latest_version'], method)
-                self._state['waiting_for_idle'] = False
-                self._state['status'] = 'applying'
-                try:
-                    self._manager.apply_updates_and_restart(self._info)
-                except Exception:
-                    gate.cancel_failed_launch()
-                    self._state.update(status='ready', message='未能启动安装；当前版本及资料保留，请重试。')
-                    raise
+            try:
+                with gate.install():
+                    self._runtime_admission.assert_current()
+                    gate.mark_installing(self._state['latest_version'], method)
+                    self._state.update(waiting_for_idle=False, queued_apply_method=None,
+                                       queued_apply_target_version=None, status='applying')
+                    try:
+                        self._manager.apply_updates_and_restart(self._info)
+                    except Exception:
+                        gate.cancel_failed_launch()
+                        self._state.update(status='ready', message='未能启动安装；当前版本及资料保留，请重试。')
+                        raise
+            except StaleRuntime:
+                raise
+            except UpdateBusy:
+                self._state.update(waiting_for_idle=True, queued_apply_method=method,
+                                   queued_apply_target_version=self._state['latest_version'],
+                                   message='已下载，等待本地任务运行完更新')
+            return self.status()
+
+    def cancel_queued_apply(self):
+        with self._lock:
+            self._runtime_admission.assert_current()
+            if self._state['status'] == 'applying':
+                raise ValueError('安装已开始，不能取消')
+            self._state.update(waiting_for_idle=False, queued_apply_method=None,
+                               queued_apply_target_version=None, message='已取消本次等待；更新包保留，尚未安装。')
             return self.status()

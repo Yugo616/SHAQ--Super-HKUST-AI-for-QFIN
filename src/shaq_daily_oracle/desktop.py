@@ -37,6 +37,7 @@ class DesktopBridge:
     def __init__(self, paths=None) -> None:
         self.paths = (paths or app_paths()).ensure()
         self._runtime_admission = WorkerAdmission(self.paths)
+        self._startup_confirmation_pending = gate_for(self.paths).startup_allowed()
         migrate_legacy_runtime(self.paths)
         self.store = SettingsStore(self.paths)
         self.index = DashboardIndex(
@@ -49,7 +50,22 @@ class DesktopBridge:
             "requires_separate_setup": True,
         }
         self.window = None
-        self._software_updater().start_automatic_checks()
+        self._software_updater()
+
+    def confirm_desktop_ready(self):
+        """Called only after the first successful data load and UI render."""
+        def confirm():
+            if self._startup_confirmation_pending:
+                gate = gate_for(self.paths)
+                self._runtime_admission.assert_current()
+                if not gate.startup_allowed():
+                    raise SettingsError('更新启动确认已失效，请重新打开应用')
+                from .app_paths import application_version
+                gate.finish_restart(application_version(self.paths.package_root))
+                self._startup_confirmation_pending = False
+            self._software_updater().start_automatic_checks()
+            return {'ready':True}
+        return self._result(confirm, _update_control=True)
 
     def _result(self, action, *args, _update_control=False, **kwargs) -> dict[str, Any]:
         try:
@@ -208,6 +224,9 @@ class DesktopBridge:
 
     def apply_software_update(self):
         return self._result(self._software_updater().apply, _update_control=True)
+
+    def cancel_queued_software_update(self):
+        return self._result(self._software_updater().cancel_queued_apply, _update_control=True)
 
     def set_automatic_software_update(self, enabled):
         return self._result(self._software_updater().set_automatic, enabled, _update_control=True)
@@ -707,10 +726,14 @@ def main(argv: list[str] | None = None) -> int:
         paths = app_paths()
         gate = gate_for(paths)
         from .app_paths import application_version
-        gate.finish_restart(application_version(paths.package_root))
         if (gate.root / 'installing.json').exists():
             if args.worker or args.research_worker:
                 return 0  # No writes and no recovery window for scheduler launches.
+            pending = json.loads((gate.root / 'installing.json').read_text(encoding='utf-8'))
+            version = application_version(paths.package_root)
+            if pending.get('target_version') == version:
+                with gate.target_startup(version):
+                    return launch_desktop()
             from .software_updates import launch_update_recovery
             return launch_update_recovery(paths)
     if args.research_worker:

@@ -9,6 +9,10 @@ from datetime import datetime, timezone
 
 from filelock import FileLock, Timeout
 
+# Process-local, scoped permission only for the target GUI's bootstrap. Other
+# processes (especially scheduled workers) still see the persistent intent.
+_STARTUP_PERMITS = {}
+
 
 class UpdateBusy(RuntimeError):
     def __init__(self):
@@ -42,7 +46,7 @@ class AdmissionGate:
     @contextmanager
     def work(self):
         with self._admission():
-            if (self.root / 'installing.json').exists():
+            if (self.root / 'installing.json').exists() and not self.startup_allowed():
                 raise UpdateBusy()
             path = self.root / (uuid.uuid4().hex + '.lease')
             lease = FileLock(str(path), thread_local=False)
@@ -86,7 +90,29 @@ class AdmissionGate:
 
     def mark_installing(self, version, method='manual'):
         from .settings import _atomic_json
-        _atomic_json(self.root / 'installing.json', {'target_version': version, 'method':method})
+        _atomic_json(self.root / 'installing.json', {
+            'target_version': version, 'method':method, 'installation_id':uuid.uuid4().hex,
+        })
+
+    def startup_allowed(self):
+        try:
+            pending = json.loads((self.root / 'installing.json').read_text(encoding='utf-8'))
+        except FileNotFoundError:
+            return False
+        return _STARTUP_PERMITS.get(str(self.root.resolve())) == pending.get('installation_id', pending['target_version'])
+
+    @contextmanager
+    def target_startup(self, version):
+        key = str(self.root.resolve())
+        with self._admission():
+            pending = json.loads((self.root / 'installing.json').read_text(encoding='utf-8'))
+            if pending['target_version'] != version:
+                raise UpdateBusy()
+            _STARTUP_PERMITS[key] = pending.get('installation_id', pending['target_version'])
+        try:
+            yield
+        finally:
+            _STARTUP_PERMITS.pop(key, None)
 
     def cancel_failed_launch(self):
         (self.root / 'installing.json').unlink(missing_ok=True)
@@ -102,6 +128,7 @@ class AdmissionGate:
             from .settings import _atomic_json
             _atomic_json(self.data_root / 'software-update-history.json', {
                 'version':version, 'method':pending.get('method','manual'),
+                'installation_id':pending.get('installation_id', pending['target_version']),
                 'completed_at':datetime.now(timezone.utc).isoformat(),
             })
             path.unlink()
@@ -126,8 +153,16 @@ class WorkerAdmission:
         self.lease = None
 
     def _completed_update(self):
+        # One generation spans pending bootstrap and successful GUI startup;
+        # confirmation never refreshes a stale object's baseline.
         try:
-            return (self.gate.data_root / 'software-update-history.json').read_text(encoding='utf-8')
+            pending = json.loads((self.gate.root / 'installing.json').read_text(encoding='utf-8'))
+            return pending.get('installation_id', pending['target_version'])
+        except FileNotFoundError:
+            pass
+        try:
+            history = (self.gate.data_root / 'software-update-history.json').read_text(encoding='utf-8')
+            return json.loads(history).get('installation_id', history)
         except FileNotFoundError:
             return ''
 
