@@ -472,7 +472,49 @@ def _openai_responses_call(
     }
     if profile.reasoning_effort:
         request["reasoning"] = {"effort": profile.reasoning_effort}
-    response = client.responses.create(**request)
+    try:
+        response = client.responses.create(**request)
+    except Exception as exc:
+        status = getattr(exc, "status_code", None)
+        if isinstance(status, int):
+            body = getattr(exc, "body", None)
+            provider_error = body.get("error", body) if isinstance(body, dict) else {}
+            if not isinstance(provider_error, dict):
+                provider_error = {}
+            response_value = getattr(exc, "response", None)
+            response_headers = getattr(response_value, "headers", {}) or {}
+            request_id = next((
+                str(response_headers.get(name, ""))
+                for name in ("x-request-id", "request-id")
+                if response_headers.get(name)
+            ), "")
+            diagnostic = {
+                "kind": "http", "status": status,
+                "provider_code": safe_model_error_summary(
+                    provider_error.get("code", getattr(exc, "code", "")),
+                    sensitive_values=(secret,), maximum_length=120,
+                ),
+                "provider_message": safe_model_error_summary(
+                    provider_error.get("message", ""), sensitive_values=(secret,),
+                    maximum_length=400,
+                ) if provider_error.get("message") else "",
+                "request_id": safe_model_error_summary(
+                    request_id, sensitive_values=(secret,), maximum_length=160,
+                ) if request_id else "",
+            }
+            raise ModelBackendError(
+                f"model endpoint request failed: HTTP {status}", diagnostic=diagnostic
+            ) from exc
+        if isinstance(exc, TimeoutError) or "timeout" in type(exc).__name__.lower():
+            raise ModelBackendError(
+                "model endpoint request failed: timeout",
+                diagnostic={"kind": "timeout", "status": None, "provider_code": "",
+                            "provider_message": "", "request_id": ""},
+            ) from exc
+        detail = safe_model_error_summary(exc, sensitive_values=(secret,))
+        raise ModelBackendError(
+            f"model endpoint request failed: {type(exc).__name__}: {detail}"
+        ) from exc
     parsed = _json_from_text(getattr(response, "output_text", None))
     usage = getattr(response, "usage", None)
     if hasattr(usage, "model_dump"):

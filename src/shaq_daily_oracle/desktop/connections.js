@@ -26,6 +26,10 @@ const SHAQConnections = {
     };
     return drafts;
   },
+  clearDraftSecret(drafts, protocol) {
+    const draft=drafts?.get(protocol);
+    if(draft)draft.secret='';
+  },
   controller(invoke, show) {
     let busy = false;
     return {
@@ -60,6 +64,7 @@ function showConnectionState(value) {
 
 let modelConnectionController;
 let lastConnectionProtocol;
+let providerDrafts;
 function connectionController() {
   if(!modelConnectionController)modelConnectionController=SHAQConnections.controller(
     (profile,secret,test)=>api('save_lab_model_profile',profile,secret,test),showConnectionState);
@@ -110,7 +115,7 @@ function bindModelConnections() {
     try {await api('open_model_installation',button.dataset.installModel);}
     catch(error){notice(error.message,true);}
   });
-  SHAQConnections.bindProviderDrafts(form,applyProtocolPreset);
+  providerDrafts=SHAQConnections.bindProviderDrafts(form,applyProtocolPreset);
   form.onsubmit=async event=>{
     event.preventDefault();
     const profile=Object.fromEntries(new FormData(form).entries()),secret=profile.secret;
@@ -125,6 +130,7 @@ function bindModelConnections() {
       reasoning_effort:'high',input_price_per_million:optional(profile.input_price_per_million),
       output_price_per_million:optional(profile.output_price_per_million)});
     if(await connectionController().test(profile,secret)) {
+      SHAQConnections.clearDraftSecret(providerDrafts,profile.protocol);
       form.elements.secret.value='';await load(false);q('#setup').classList.remove('hidden');
     }
   };

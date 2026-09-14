@@ -57,6 +57,52 @@ class MalformedJsonResponse(JsonResponse):
 
 
 class ModelCompatibilityTests(unittest.TestCase):
+    def test_openai_sdk_http_and_timeout_errors_use_safe_structured_diagnostics(self) -> None:
+        class SDKError(Exception):
+            def __init__(self, status: int) -> None:
+                super().__init__("Authorization: Bearer sdk-secret")
+                self.status_code = status
+                self.code = "invalid_api_key"
+                self.body = {"error": {"code": "invalid_api_key", "message": "bad sdk-secret"}}
+                self.response = httpx.Response(
+                    status, request=httpx.Request("POST", "https://api.openai.com/v1/responses"),
+                    headers={"x-request-id": f"sdk-{status}"},
+                )
+
+        class Responses:
+            failure: Exception
+
+            def create(self, **request):
+                raise self.failure
+
+        class Client:
+            def __init__(self, **kwargs):
+                self.responses = Responses()
+
+        profile = ModelProfile(
+            profile_id="official", protocol="openai-responses",
+            base_url="https://api.openai.com/v1", model="gpt-test",
+        )
+        for failure, expected_kind, expected_status in [
+            *((SDKError(status), "http", status) for status in (400, 401, 403, 429)),
+            (TimeoutError("sdk-secret timeout"), "timeout", None),
+        ]:
+            with self.subTest(failure=type(failure).__name__, status=expected_status), patch(
+                "openai.OpenAI", Client
+            ):
+                Responses.failure = failure
+                with self.assertRaises(ModelBackendError) as raised:
+                    model_backends._openai_responses_call(
+                        profile=profile, secret="sdk-secret", prompt="packet", schema=READY_SCHEMA,
+                    )
+            diagnostic = raised.exception.diagnostic
+            self.assertEqual(diagnostic["kind"], expected_kind)
+            self.assertEqual(diagnostic["status"], expected_status)
+            self.assertNotIn("sdk-secret", str(raised.exception))
+            self.assertNotIn("sdk-secret", json.dumps(diagnostic))
+            if expected_status:
+                self.assertEqual(diagnostic["request_id"], f"sdk-{expected_status}")
+
     def test_http_diagnostics_keep_bounded_provider_details_and_request_id(self) -> None:
         for status in (400, 401, 403, 429):
             with self.subTest(status=status):

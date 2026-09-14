@@ -87,6 +87,18 @@ console.log(JSON.stringify(states.at(-1)));})();''')
         self.assertIn('req_123', result['message'])
         self.assertEqual(result['diagnostic']['status'], 429)
 
+    def test_successful_api_save_clears_provider_draft_secret(self):
+        result = self.node('connections.js', '''
+const fields={protocol:{value:'openai-responses'},model:{value:'gpt-a'},secret:{value:'saved-key'},
+ base_url:{value:'https://api.openai.com/v1'},relay_base_url:{value:''},auth_style:{value:'bearer'},
+ output_mode:{value:'strict'},maximum_context_tokens:{value:'128000'}};
+const form={elements:fields},drafts=SHAQConnections.bindProviderDrafts(form,()=>{});
+SHAQConnections.clearDraftSecret(drafts,'openai-responses');fields.secret.value='';
+fields.protocol.value='anthropic-messages';fields.protocol.onchange();
+fields.protocol.value='openai-responses';fields.protocol.onchange();
+console.log(JSON.stringify({secret:fields.secret.value,draft:drafts.get('openai-responses').secret}));''')
+        self.assertEqual(result, {'secret': '', 'draft': ''})
+
     def test_comparison_renders_unknowns_and_costs_without_false_zero_or_html(self):
         result = self.node('comparison.js', '''
 const html=SHAQComparison.html({left:{label:'<img src=x>',trade_date:'2026-09-09'},
