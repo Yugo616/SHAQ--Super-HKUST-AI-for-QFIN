@@ -211,3 +211,63 @@ class MethodTransferTests(unittest.TestCase):
         transfer.open('download',self.client,login='alice',upload_allowed=True)
         self.assertEqual((target/'manifest.json').read_bytes(),before)
         self.assertEqual(VariantSelection.from_registry_row(self.registry.list_versions()[1]).identity(),identity)
+
+    def test_accepted_patch_lost_response_retry_verifies_equivalence_without_more_writes(self):
+        package=self.package()
+        self.registry.install(manifest=package,files=self.files,commit_sha='local:'+package.identity())
+        transfer=self.transfer()
+        opened=transfer.open('upload',self.client,login='alice',upload_allowed=True)
+        original=self.client._request
+        writes=[]
+        lose_response=True
+        def accepted_then_lost(method,path,**kwargs):
+            nonlocal lose_response
+            if method!='GET':writes.append((method,path))
+            result=original(method,path,**kwargs)
+            if method=='PATCH' and lose_response:
+                lose_response=False
+                raise sv.SkillVersionError('network lost accepted PATCH response')
+            return result
+        self.client._request=accepted_then_lost
+        keys=[opened['rows'][0]['key']]
+        first=transfer.execute(opened['operation_id'],keys,self.client,login='alice',upload_allowed=True)
+        self.assertEqual(first[0]['status'],'failed')
+        self.assertEqual(len(self.client.list_remote_versions()),1)
+        writes_before_retry=len(writes)
+        second=transfer.execute(opened['operation_id'],keys,self.client,login='alice',upload_allowed=True)
+        self.assertEqual(second[0]['status'],'complete',second)
+        self.assertEqual(second[0]['message'],'远端已有相同内容')
+        self.assertEqual(len(writes),writes_before_retry)
+        self.assertEqual(len(self.client.list_remote_versions()),1)
+
+    def test_same_path_different_verified_content_remains_a_hard_collision(self):
+        changed={**self.files,'modules/market/compute.js':self.files['modules/market/compute.js']+'\n'}
+        self.remote.seed('versions',self.package(files=changed),changed)
+        head=self.remote.refs['versions']
+        with self.assertRaisesRegex(sv.SkillVersionError,'already exists'):
+            self.client.upload_version(login='alice',manifest=self.package(),files=self.files,deduplicate_content=True)
+        self.assertEqual(self.remote.refs['versions'],head)
+
+    def test_upload_confirmation_rejects_changed_destination_before_any_request(self):
+        from dataclasses import replace
+        package=self.package()
+        self.registry.install(manifest=package,files=self.files,commit_sha='local:'+package.identity())
+        for field,value in [('owner','other'),('repository','other'),('catalog_branch','other'),
+                            ('skill_package_root','other'),('api_base_url','https://other.invalid')]:
+            with self.subTest(field=field):
+                transfer=self.transfer()
+                opened=transfer.open('upload',self.client,login='alice',upload_allowed=True)
+                altered=sv.GitHubSkillClient(config=self.client.config,token='test')
+                # The client normally also rejects non-governed roots. Exercise
+                # the adapter boundary independently so it stays pinned even if
+                # a different validated client configuration is later supported.
+                altered.config=replace(self.client.config,**{field:value})
+                requests=[]
+                def forbidden(*args,**kwargs):
+                    requests.append(args)
+                    raise AssertionError('changed destination must not receive a request')
+                altered._request=forbidden
+                with self.assertRaisesRegex(sv.SkillVersionError,'目标.*变化|destination'):
+                    transfer.execute(opened['operation_id'],[opened['rows'][0]['key']],altered,login='alice',upload_allowed=True)
+                self.assertEqual(requests,[])
+                self.assertEqual(self.remote.refs,{'main':'main-sha'})

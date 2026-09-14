@@ -33,6 +33,11 @@ class MethodTransferUiTests(unittest.TestCase):
             self.assertTrue(value['ok'], value)
             self.assertEqual(len(value['value']['rows']),2)
         self.assertFalse(bridge.transfer_methods('fixture',['new'])['ok'])
+        completed=bridge.transfer_methods('fixture-download',['new'])
+        self.assertTrue(completed['ok'],completed)
+        self.assertEqual(completed['value'][0]['status'],'complete')
+        self.assertFalse(bridge.open_method_transfer('download')['value']['rows'][1]['eligible'])
+        self.assertTrue(bridge.open_method_transfer('upload')['value']['rows'][1]['eligible'])
 
     def node(self, body):
         self.assertTrue(SOURCE.is_file(), 'two-dialog transfer implementation missing')

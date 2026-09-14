@@ -506,6 +506,7 @@ def desktop_api(bridge):
 def _bind_gui_smoke_fixture(bridge, fixture_state, fixture_detail):
     from types import MethodType
     attempts = 0
+    completed_transfers = set()
 
     def fixture_state_api(self):
         return {"ok": True, "value": fixture_state}
@@ -550,11 +551,16 @@ def _bind_gui_smoke_fixture(bridge, fixture_state, fixture_detail):
                  'method_name': '已有测试方法', 'eligible': False,
                  'local_status': '本地已有相同内容', 'content_sha256': 'a'*64},
                 {'key': 'new', 'author': 'fixture', 'version_id': 'new',
-                 'method_name': '待传输测试方法', 'eligible': True,
+                 'method_name': '待传输测试方法', 'eligible': direction not in completed_transfers,
                  'local_status': '可选择', 'content_sha256': 'b'*64}]}}
 
     def fixture_transfer_write_api(self, operation_id, keys):
-        return {'ok': False, 'error': 'fixture forbids remote writes'}
+        if operation_id not in {'fixture-download', 'fixture-upload'} or keys != ['new']:
+            return {'ok': False, 'error': 'fixture forbids remote writes'}
+        # Synthetic completion only. No real registry or GitHub client is used.
+        completed_transfers.add(operation_id.removeprefix('fixture-'))
+        return {'ok': True, 'value': [{'key': 'new', 'status': 'complete',
+            'message': 'fixture transfer complete; no remote writes'}]}
 
     bridge.get_lab_state = MethodType(fixture_state_api, bridge)
     bridge.get_shadow_batch = MethodType(fixture_batch_api, bridge)
@@ -738,6 +744,8 @@ def launch_desktop(*, smoke_output: Path | None = None) -> int:
                     time.sleep(.1)
                 else:
                     raise RuntimeError('Native transfer dialog failed to load')
+                if not window.evaluate_js("document.querySelector('#transfer-confirm').disabled"):
+                    raise RuntimeError('Native transfer confirmation must start disabled')
                 window.evaluate_js("document.querySelector('#transfer-select-all').click(); load(false)")
                 deadline = time.monotonic() + 6
                 while time.monotonic() < deadline:
@@ -748,12 +756,28 @@ def launch_desktop(*, smoke_output: Path | None = None) -> int:
                     "fixtureEditorNode.value==='fixture unsaved method edit' && "
                     "document.querySelector('#edit-version').value===fixtureEditorVersion && "
                     "document.querySelector('.transfer-check[data-key=existing]').disabled && "
-                    "document.querySelector('.transfer-check[data-key=new]').checked"):
+                    "document.querySelector('.transfer-check[data-key=new]').checked && "
+                    "!document.querySelector('#transfer-confirm').disabled"):
                     raise RuntimeError('Native transfer lost editor or selection state')
+                window.evaluate_js("document.querySelector('#transfer-confirm').click()")
+                deadline = time.monotonic() + 6
+                while time.monotonic() < deadline:
+                    if window.evaluate_js("document.querySelector('#transfer-confirm').disabled && "
+                        "!document.querySelector('.transfer-check[data-key=new]').checked && "
+                        "document.querySelector('.transfer-check[data-key=new]').disabled && "
+                        "document.querySelector('#method-transfer-detail').textContent.includes('fixture transfer complete')"):
+                        break
+                    time.sleep(.1)
+                else:
+                    raise RuntimeError('Native completed transfer must disable confirmation and selection')
+                if not window.evaluate_js("fixtureEditorNode===document.querySelector('#skill-method') && "
+                    "fixtureEditorNode.value==='fixture unsaved method edit'"):
+                    raise RuntimeError('Native transfer completion lost unsaved editor text')
                 window.evaluate_js("document.querySelector('#method-transfer-close').click()")
                 if direction == 'download':
                     window.evaluate_js("document.querySelector('#upload-methods').click()")
             result['transfer_preserved_dirty_editor'] = True
+            result['transfer_button_states'] = True
             if not all(result[key] for key in (
                 'refresh_completed', 'refresh_detail_marker',
                 'refresh_preserved_modal', 'refresh_preserved_candidate',

@@ -4,6 +4,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
+from .hashing import sha256_payload
 from .skill_versions import SkillVersionError, transfer_content_identity
 
 
@@ -61,6 +62,11 @@ class MethodTransfer:
     def public(row):
         return {k: v for k, v in row.items() if not k.startswith('_')}
 
+    @staticmethod
+    def destination_fingerprint(client):
+        return sha256_payload({field: getattr(client.config, field) for field in (
+            'owner', 'repository', 'catalog_branch', 'skill_package_root', 'api_base_url')})
+
     def open(self, direction, client, *, login, upload_allowed):
         if direction not in {'upload', 'download'}:
             raise SkillVersionError('unknown transfer direction')
@@ -86,7 +92,8 @@ class MethodTransfer:
         # Keep the independently open upload/download selections; bound retained
         # pinned packages to one operation per direction.
         self.operations = {k: v for k, v in self.operations.items() if v['direction'] != direction}
-        self.operations[operation_id] = {'direction': direction, 'rows': {r['key']: r for r in rows}, 'complete': {}}
+        self.operations[operation_id] = {'direction': direction, 'rows': {r['key']: r for r in rows},
+            'destination_fingerprint': self.destination_fingerprint(client), 'complete': {}}
         config = client.config
         return {'operation_id': operation_id, 'rows': [self.public(r) for r in rows],
             'destination': f'{config.owner}/{config.repository} · {config.catalog_branch}/{config.skill_package_root}',
@@ -97,6 +104,8 @@ class MethodTransfer:
         operation = self.operations.get(operation_id)
         if not operation:
             raise SkillVersionError('传输清单已失效，请刷新后重新选择')
+        if operation['direction'] == 'upload' and operation['destination_fingerprint'] != self.destination_fingerprint(client):
+            raise SkillVersionError('上传目标已变化，请刷新清单并重新确认目标后选择版本')
         results = []
         for key in dict.fromkeys(keys):
             try:

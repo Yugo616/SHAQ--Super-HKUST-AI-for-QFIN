@@ -741,7 +741,7 @@ class GitHubSkillClient:
         if deduplicate_content and content_id is None:
             raise SkillVersionError('上传需要完整且已核验基底的方法版本')
         root = PurePosixPath(self.config.skill_package_root) / manifest.author / manifest.version_id
-        if self.content_exists((root / "manifest.json").as_posix(), ref=branch):
+        if not content_id and self.content_exists((root / "manifest.json").as_posix(), ref=branch):
             raise SkillVersionError(
                 "this immutable Shadow version id already exists in the team catalog"
             )
@@ -756,12 +756,6 @@ class GitHubSkillClient:
             },
         }
         entries = []
-        for path, content in sorted(payload_files.items()):
-            blob = self._request(
-                "POST", self._repo_path("/git/blobs"),
-                json={"content": content, "encoding": "utf-8"},
-            )
-            entries.append({"path": path, "mode": "100644", "type": "blob", "sha": blob["sha"]})
         for attempt in range(4):
             head = self.ref_sha(branch)
             if not head:
@@ -780,6 +774,16 @@ class GitHubSkillClient:
                 raise SkillVersionError(
                     "this immutable Shadow version id already exists in the team catalog"
                 )
+            # Delay even blob creation until verified equivalence and collision
+            # checks finish. A retry after an accepted PATCH/lost response is a
+            # read-only already-remote receipt, never another publication.
+            if not entries:
+                for path, content in sorted(payload_files.items()):
+                    blob = self._request(
+                        "POST", self._repo_path("/git/blobs"),
+                        json={"content": content, "encoding": "utf-8"},
+                    )
+                    entries.append({"path": path, "mode": "100644", "type": "blob", "sha": blob["sha"]})
             commit = self._request("GET", self._repo_path(f"/git/commits/{head}"))
             base_tree = str(commit.get("tree", {}).get("sha", ""))
             if not base_tree:
