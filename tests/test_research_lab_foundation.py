@@ -303,6 +303,36 @@ class ResearchLabFoundationTests(unittest.TestCase):
         self.assertTrue(saved["github_refresh_saved"])
         self.assertTrue(saved["setup_complete"])
 
+    def test_failed_profile_persistence_restores_working_secret_and_profile(self) -> None:
+        secrets = {}
+
+        class Keyring:
+            @staticmethod
+            def set_password(service, name, value):
+                secrets[(service, name)] = value
+
+            @staticmethod
+            def get_password(service, name):
+                return secrets.get((service, name))
+
+            @staticmethod
+            def delete_password(service, name):
+                secrets.pop((service, name), None)
+
+        with tempfile.TemporaryDirectory() as name:
+            store = ResearchSettingsStore(self.paths(Path(name)))
+            original = {
+                "profile_id": "api", "protocol": "openai-responses",
+                "base_url": "https://api.openai.com/v1", "model": "gpt-old",
+            }
+            with patch.object(store, "_keyring", return_value=Keyring):
+                store.save_model_profile(original, secret="working-secret")
+                with patch.object(store, "_save", side_effect=OSError("disk full")):
+                    with self.assertRaises(OSError):
+                        store.save_model_profile({**original, "model": "gpt-new"}, secret="new-secret")
+                self.assertEqual(store.get_model_secret("api"), "working-secret")
+                self.assertEqual(store.model_profile("api").model, "gpt-old")
+
     def test_readiness_is_bound_to_current_data_profile_and_old_state_is_invalidated(self) -> None:
         secrets = {}
 

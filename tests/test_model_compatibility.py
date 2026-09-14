@@ -57,6 +57,50 @@ class MalformedJsonResponse(JsonResponse):
 
 
 class ModelCompatibilityTests(unittest.TestCase):
+    def test_http_diagnostics_keep_bounded_provider_details_and_request_id(self) -> None:
+        for status in (400, 401, 403, 429):
+            with self.subTest(status=status):
+                response = httpx.Response(
+                    status,
+                    request=httpx.Request("POST", "https://relay.invalid/v1/chat/completions"),
+                    headers={"x-request-id": f"req-{status}", "authorization": "Bearer header-secret"},
+                    json={"error": {"code": "bad_request", "message": "invalid token body-secret"}},
+                )
+                with patch("httpx.post", return_value=response):
+                    with self.assertRaises(ModelBackendError) as raised:
+                        model_backends._http_post_json(
+                            url="https://relay.invalid/v1/chat/completions",
+                            headers={"Authorization": "Bearer body-secret"}, payload={}, timeout=1,
+                        )
+                diagnostic = raised.exception.diagnostic
+                self.assertEqual(diagnostic["status"], status)
+                self.assertEqual(diagnostic["provider_code"], "bad_request")
+                self.assertEqual(diagnostic["request_id"], f"req-{status}")
+                self.assertNotIn("body-secret", json.dumps(diagnostic))
+                self.assertNotIn("header-secret", json.dumps(diagnostic))
+
+    def test_http_diagnostics_handle_non_json_and_timeout_without_secrets(self) -> None:
+        response = httpx.Response(
+            400, request=httpx.Request("POST", "https://relay.invalid/v1/chat/completions"),
+            headers={"request-id": "req-text"}, text="token=body-secret " + "x" * 1000,
+        )
+        with patch("httpx.post", return_value=response):
+            with self.assertRaises(ModelBackendError) as malformed:
+                model_backends._http_post_json(
+                    url="https://relay.invalid/v1/chat/completions",
+                    headers={"x-api-key": "body-secret"}, payload={}, timeout=1,
+                )
+        self.assertEqual(malformed.exception.diagnostic["provider_message"], "")
+        self.assertEqual(malformed.exception.diagnostic["request_id"], "req-text")
+
+        with patch("httpx.post", side_effect=httpx.ReadTimeout("Bearer body-secret")):
+            with self.assertRaises(ModelBackendError) as timeout:
+                model_backends._http_post_json(
+                    url="https://relay.invalid/v1/chat/completions",
+                    headers={"Authorization": "Bearer body-secret"}, payload={}, timeout=1,
+                )
+        self.assertEqual(timeout.exception.diagnostic["kind"], "timeout")
+        self.assertNotIn("body-secret", str(timeout.exception))
     def test_relay_payload_omits_sampling_controls_and_records_effective_policy(self) -> None:
         """Removing the protocol policy must not silently restore temperature/top_p."""
 

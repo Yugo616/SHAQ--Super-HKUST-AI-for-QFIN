@@ -1,5 +1,31 @@
 /* Connection feedback is presentation only. The backend performs a real schema probe. */
 const SHAQConnections = {
+  diagnosticMessage(diagnostic, fallback) {
+    if(!diagnostic)return fallback || '连接失败，请重新检测。';
+    if(diagnostic.kind==='timeout')return '连接超时。请检查网络与服务地址后重新检测。';
+    const parts=[diagnostic.status?`HTTP ${diagnostic.status}`:'请求失败'];
+    if(diagnostic.provider_code)parts.push(`服务代码：${diagnostic.provider_code}`);
+    if(diagnostic.provider_message)parts.push(`服务信息：${diagnostic.provider_message}`);
+    if(diagnostic.request_id)parts.push(`请求编号：${diagnostic.request_id}`);
+    return parts.join(' · ');
+  },
+  bindProviderDrafts(form, applyPreset) {
+    const names=['model','secret','base_url','relay_base_url','auth_style','output_mode','maximum_context_tokens'];
+    const drafts=new Map();
+    let current=form.elements.protocol.value;
+    const capture=()=>Object.fromEntries(names.map(name=>[name,form.elements[name]?.value??'']));
+    const restore=value=>names.forEach(name=>{if(form.elements[name])form.elements[name].value=value?.[name]??''});
+    drafts.set(current,capture());
+    form.elements.protocol.onchange=()=>{
+      drafts.set(current,capture());
+      current=form.elements.protocol.value;
+      restore(null);
+      applyPreset();
+      if(drafts.has(current))restore(drafts.get(current));
+      else drafts.set(current,capture());
+    };
+    return drafts;
+  },
   controller(invoke, show) {
     let busy = false;
     return {
@@ -13,7 +39,8 @@ const SHAQConnections = {
           show({status:'connected', message:'连接测试通过，已保存。'});
           return true;
         } catch (error) {
-          show({status:'failed', message:error?.message || '连接失败，请重新检测。'});
+          show({status:'failed', diagnostic:error?.diagnostic,
+            message:SHAQConnections.diagnosticMessage(error?.diagnostic,error?.message)});
           return false;
         } finally { busy = false; }
       }
@@ -83,7 +110,7 @@ function bindModelConnections() {
     try {await api('open_model_installation',button.dataset.installModel);}
     catch(error){notice(error.message,true);}
   });
-  form.elements.protocol.onchange=applyProtocolPreset;
+  SHAQConnections.bindProviderDrafts(form,applyProtocolPreset);
   form.onsubmit=async event=>{
     event.preventDefault();
     const profile=Object.fromEntries(new FormData(form).entries()),secret=profile.secret;

@@ -43,6 +43,50 @@ release({});await first;console.log(JSON.stringify({calls,busy:controller.busy})
 })();''')
         self.assertEqual(result, {'calls': 1, 'busy': False})
 
+    def test_api_provider_handler_restores_each_draft_without_forwarding_keys(self):
+        result = self.node('connections.js', '''
+const fields={protocol:{value:'openai-responses'},model:{value:'gpt-a'},secret:{value:'openai-key'},
+ base_url:{value:'https://api.openai.com/v1'},relay_base_url:{value:''},
+ auth_style:{value:'bearer'},output_mode:{value:'strict'},maximum_context_tokens:{value:'128000'}};
+const form={elements:fields};let applied=[];
+const drafts=SHAQConnections.bindProviderDrafts(form,()=>applied.push(fields.protocol.value));
+fields.protocol.value='openai-chat-completions';fields.protocol.onchange();
+const relayEmpty={model:fields.model.value,secret:fields.secret.value};
+fields.model.value='relay-model';fields.secret.value='relay-key';fields.relay_base_url.value='https://relay.test/v1';
+fields.protocol.value='anthropic-messages';fields.protocol.onchange();
+const anthropicEmpty={model:fields.model.value,secret:fields.secret.value};
+fields.model.value='claude-a';fields.secret.value='anthropic-key';
+fields.protocol.value='openai-chat-completions';fields.protocol.onchange();
+const relayRestored={model:fields.model.value,secret:fields.secret.value,url:fields.relay_base_url.value};
+fields.protocol.value='openai-responses';fields.protocol.onchange();
+console.log(JSON.stringify({relayEmpty,anthropicEmpty,relayRestored,
+ openaiRestored:{model:fields.model.value,secret:fields.secret.value},applied,drafts:[...drafts.keys()]}));''')
+        self.assertEqual(result['relayEmpty'], {'model': '', 'secret': ''})
+        self.assertEqual(result['anthropicEmpty'], {'model': '', 'secret': ''})
+        self.assertEqual(result['relayRestored'], {
+            'model': 'relay-model', 'secret': 'relay-key',
+            'url': 'https://relay.test/v1',
+        })
+        self.assertEqual(result['openaiRestored'], {
+            'model': 'gpt-a', 'secret': 'openai-key',
+        })
+        self.assertEqual(result['drafts'], [
+            'openai-responses', 'openai-chat-completions', 'anthropic-messages'
+        ])
+
+    def test_connection_controller_formats_structured_chinese_diagnostic(self):
+        result = self.node('connections.js', '''
+(async()=>{const states=[];const error=new Error('opaque');error.diagnostic={
+ status:429,provider_code:'rate_limit_exceeded',provider_message:'请稍后 retry',request_id:'req_123'};
+const controller=SHAQConnections.controller(async()=>{throw error},x=>states.push(x));
+await controller.test({protocol:'openai-responses'},'secret');
+console.log(JSON.stringify(states.at(-1)));})();''')
+        self.assertEqual(result['status'], 'failed')
+        self.assertIn('HTTP 429', result['message'])
+        self.assertIn('rate_limit_exceeded', result['message'])
+        self.assertIn('req_123', result['message'])
+        self.assertEqual(result['diagnostic']['status'], 429)
+
     def test_comparison_renders_unknowns_and_costs_without_false_zero_or_html(self):
         result = self.node('comparison.js', '''
 const html=SHAQComparison.html({left:{label:'<img src=x>',trade_date:'2026-09-09'},

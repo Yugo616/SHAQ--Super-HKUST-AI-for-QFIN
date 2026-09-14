@@ -230,9 +230,9 @@ class ResearchSettingsStore:
         self, profile_value: dict[str, Any], *, secret: str | None = None
     ) -> dict[str, Any]:
         profile = ModelProfile.from_dict(profile_value)
-        if secret:
-            self.set_model_secret(profile.profile_id, secret)
-        if not uses_local_subscription(profile) and not self.get_model_secret(profile.profile_id):
+        submitted_secret = str(secret or "").strip()
+        previous_secret = self.get_model_secret(profile.profile_id)
+        if not uses_local_subscription(profile) and not (submitted_secret or previous_secret):
             raise SettingsError("请填写该模型配置的API密钥")
         settings = self.load()
         profiles = [
@@ -242,8 +242,22 @@ class ResearchSettingsStore:
         profiles.append(profile.public_dict())
         settings["model_profiles"] = sorted(profiles, key=lambda row: row["profile_id"])
         settings["active_model_profile_id"] = profile.profile_id
+        if submitted_secret:
+            settings.setdefault("credential_state", {}).setdefault(
+                "model_secret_saved", {}
+            )[profile.profile_id] = True
         settings["setup_complete"] = self._is_setup_complete(settings)
-        self._save(settings)
+        if submitted_secret:
+            self._set_secret(MODEL_SECRET_PREFIX + profile.profile_id, submitted_secret)
+        try:
+            self._save(settings)
+        except Exception:
+            if submitted_secret:
+                if previous_secret:
+                    self._set_secret(MODEL_SECRET_PREFIX + profile.profile_id, previous_secret)
+                else:
+                    self._delete_secret(MODEL_SECRET_PREFIX + profile.profile_id)
+            raise
         return profile.public_dict()
 
     def _is_setup_complete(self, settings: dict[str, Any]) -> bool:

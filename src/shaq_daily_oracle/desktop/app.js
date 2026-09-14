@@ -1,7 +1,7 @@
 const state={data:null,page:'run',selectedBatch:null,editorDocument:null,githubDevice:null,runSelections:null,replay:null,replayGeneration:0};
 const q=s=>document.querySelector(s),qa=s=>[...document.querySelectorAll(s)];
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const api=async(name,...args)=>{const fn=window.pywebview?.api?.[name];if(!fn)throw new Error('桌面服务尚未连接');const r=await fn(...args);if(!r?.ok)throw new Error(r?.error||'操作失败');return r.value};
+const api=async(name,...args)=>{const fn=window.pywebview?.api?.[name];if(!fn)throw new Error('桌面服务尚未连接');const r=await fn(...args);if(!r?.ok){const error=new Error(r?.error||'操作失败');if(r?.diagnostic)error.diagnostic=r.diagnostic;throw error}return r.value};
 const dir=v=>({bullish:'看涨',bearish:'看跌',neutral:'中性',unavailable:'无数据',not_applicable:'今日不适用'}[v]||v||'—');
 function notice(text,bad=false){const n=q('#notice');n.textContent=text;n.className='notice '+(bad?'bad':'');setTimeout(()=>n.classList.add('hidden'),6500)}
 function refreshStatusText(value={}){const status=value.status||'idle';if(status==='running'||status==='already_running')return '正在更新价格与成绩…';if(status==='complete')return `更新完成${value.completed_at?' · '+String(value.completed_at).replace('T',' ').slice(0,22):''}`;if(status==='partial_failure')return `更新完成，但有 ${Number(value.failure_count||0)} 项失败`;if(status==='failed')return `更新失败：${value.error||'请稍后重试'}`;return ''}

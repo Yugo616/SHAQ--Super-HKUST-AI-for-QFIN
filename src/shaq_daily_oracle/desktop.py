@@ -51,7 +51,11 @@ class DesktopBridge:
         try:
             return {"ok": True, "value": action(*args, **kwargs)}
         except Exception as exc:
-            return {"ok": False, "error": str(exc), "error_type": type(exc).__name__}
+            result = {"ok": False, "error": str(exc), "error_type": type(exc).__name__}
+            diagnostic = getattr(exc, "diagnostic", None)
+            if isinstance(diagnostic, dict):
+                result["diagnostic"] = diagnostic
+            return result
 
     def get_state(self) -> dict[str, Any]:
         settings = self.store.load()

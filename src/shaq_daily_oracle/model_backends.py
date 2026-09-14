@@ -22,6 +22,10 @@ from .hashing import sha256_payload
 class ModelBackendError(ValueError):
     """A configured model endpoint cannot produce an auditable structured result."""
 
+    def __init__(self, message: str, *, diagnostic: dict[str, Any] | None = None) -> None:
+        super().__init__(message)
+        self.diagnostic = diagnostic
+
 
 SUPPORTED_PROTOCOLS = {
     "openai-responses",
@@ -512,11 +516,45 @@ def _http_post_json(
             403: "access forbidden",
             429: "rate limited",
         }.get(status, "HTTP error")
+        provider_code = ""
+        provider_message = ""
+        try:
+            error_body = exc.response.json()
+        except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
+            error_body = None
+        if isinstance(error_body, dict):
+            provider_error = error_body.get("error", error_body)
+            if isinstance(provider_error, dict):
+                provider_code = safe_model_error_summary(
+                    provider_error.get("code", ""), sensitive_values=sensitive_values,
+                    maximum_length=120,
+                ) if provider_error.get("code") else ""
+                provider_message = safe_model_error_summary(
+                    provider_error.get("message", ""), sensitive_values=sensitive_values,
+                    maximum_length=400,
+                ) if provider_error.get("message") else ""
+        request_id = ""
+        for name in ("x-request-id", "request-id", "anthropic-request-id"):
+            if exc.response.headers.get(name):
+                request_id = safe_model_error_summary(
+                    exc.response.headers[name], sensitive_values=sensitive_values,
+                    maximum_length=160,
+                )
+                break
+        diagnostic = {
+            "kind": "http", "status": status, "provider_code": provider_code,
+            "provider_message": provider_message, "request_id": request_id,
+        }
         raise ModelBackendError(
-            f"model endpoint request failed: HTTP {status} ({category})"
+            f"model endpoint request failed: HTTP {status} ({category})",
+            diagnostic=diagnostic,
         ) from exc
     except httpx.TimeoutException as exc:
-        raise ModelBackendError("model endpoint request failed: timeout") from exc
+        raise ModelBackendError(
+            "model endpoint request failed: timeout",
+            diagnostic={"kind": "timeout", "status": None, "provider_code": "",
+                        "provider_message": "", "request_id": ""},
+        ) from exc
     except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         raise ModelBackendError("model endpoint returned malformed JSON") from exc
     except Exception as exc:
