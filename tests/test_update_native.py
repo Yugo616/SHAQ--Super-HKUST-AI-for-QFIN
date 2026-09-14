@@ -10,6 +10,13 @@ from shaq_daily_oracle import update_native
 
 
 class NativeUpdateTests(unittest.TestCase):
+    def test_native_symlink_sidecar_cannot_escape_payload_root(self):
+        with tempfile.TemporaryDirectory() as directory:
+            file=Path(directory)/'full.nupkg'
+            with zipfile.ZipFile(file,'w') as archive:
+                archive.writestr('lib/app/Contents/Frameworks/link.__symlink','../../../../outside')
+            with self.assertRaises(ValueError):update_native.package_content_sha256(file)
+
     def test_added_directory_metadata_cannot_bypass_content_identity(self):
         with tempfile.TemporaryDirectory() as directory:
             file=Path(directory)/'full.nupkg'

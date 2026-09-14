@@ -26,10 +26,11 @@ def package_content_sha256(file):
                 rows.append([name+'/',entry.external_attr,hashlib.sha256(b'').hexdigest()])
                 continue
             if kind not in (0,stat.S_IFREG,stat.S_IFLNK):raise ValueError('Invalid native package entry type')
-            if kind==stat.S_IFLNK:
+            if kind==stat.S_IFLNK or name.endswith('.__symlink'):
                 target=archive.read(entry).decode('utf-8')
                 resolved=posixpath.normpath(posixpath.join(str(PurePosixPath(name).parent),target))
-                if target.startswith('/') or '\\' in target or '\x00' in target or ':' in target or not resolved.startswith('lib/'):
+                prefix='/'.join(name.split('/')[:2])+'/'
+                if target.startswith('/') or '\\' in target or '\x00' in target or ':' in target or not prefix.startswith('lib/') or not resolved.startswith(prefix):
                     raise ValueError('Native package symlink leaves application payload')
             with archive.open(entry) as stream:digest=hashlib.file_digest(stream,'sha256').hexdigest()
             rows.append([name,entry.external_attr,digest])
