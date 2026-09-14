@@ -641,6 +641,7 @@ def _run_domain(
     execution_policy: ExecutionPolicy | None = None,
     prompt_format_version: int = 1,
     snapshot_root: Path | None = None,
+    recover_rejected_cache: bool = False,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     domain_started = time.monotonic()
     tasks = _tasks_for_domain(evidence, domain, prompt_format_version=prompt_format_version)
@@ -724,6 +725,7 @@ def _run_domain(
                 prompt=prompt, schema=schema, caller=caller, on_model_start=model_start,
                 execution_policy=execution_policy, validate=validate_group,
                 allow_legacy_cache=prompt_format_version == 1,
+                recover_rejected_cache=recover_rejected_cache,
                 snapshot_root=snapshot_root, group_symbols=[task['symbol'] for task in group])
         except Exception as exc:
             safe_observe(observer, stage="failure", batch_id=batch_id,
@@ -908,6 +910,7 @@ def run_variant(
                 observer=observer, batch_id=batch_id, variant_key=variant_key,
                 execution_policy=execution_policy, prompt_format_version=prompt_format_version,
                 snapshot_root=output_root.parent / 'model_calls',
+                recover_rejected_cache=recover_rejected_cache,
             )
         except Exception as exc:
             domain_failures.append(f'{domain}: {type(exc).__name__}: {exc}')

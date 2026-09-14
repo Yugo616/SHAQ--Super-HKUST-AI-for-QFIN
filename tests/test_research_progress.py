@@ -12,6 +12,38 @@ from shaq_daily_oracle.research_progress import ResearchProgressLog, safe_observ
 
 
 class ResearchProgressLogTests(unittest.TestCase):
+    def test_completed_and_failed_resume_jobs_and_events_survive_service_reload(self):
+        from shaq_daily_oracle.lab_service import LabService
+        def service(root):
+            value=LabService.__new__(LabService)
+            value.paths=SimpleNamespace(research_root=root)
+            value.jobs={};value.jobs_lock=threading.Lock()
+            value.dashboard=SimpleNamespace(batch_detail=lambda batch_id:{'batch_id':batch_id},
+                overview=lambda:{'virtual_accounts':{'results':[]}})
+            return value
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);first=service(root);saved={}
+            for suffix,status in [('aaaaaaaaaaaa','complete'),('bbbbbbbbbbbb','failed')]:
+                batch_id='LAB-2026-09-11-'+suffix;job_id='resume-'+batch_id
+                first.jobs[job_id]={'job_id':job_id,'batch_id':batch_id}
+                first._set_job(job_id,status=status,started_at_et='2026-09-15T08:00:00-04:00',
+                    completed_at_et='2026-09-15T08:01:00-04:00')
+                event=ResearchProgressLog(root/'jobs'/f'{job_id}-research.jsonl').append(
+                    stage='decision_complete' if status=='complete' else 'failure',
+                    batch_id=batch_id,variant_key='team/main',status=status)
+                saved[job_id]=(batch_id,status,event,(root/'jobs'/f'{job_id}.json').read_bytes())
+            # Preserve the original job namespace and ignore mismatched resume file identities.
+            (root/'jobs/job-historical.json').write_text(json.dumps({'job_id':'job-historical','status':'complete'}))
+            (root/'jobs/resume-LAB-forged.json').write_text(json.dumps({'job_id':'../../other','batch_id':'LAB-forged','status':'complete'}))
+            (root/'jobs/resume-LAB-mismatch.json').write_text(json.dumps({'job_id':'resume-LAB-mismatch','batch_id':'LAB-other','status':'failed'}))
+            restarted=service(root);rows={row['job_id']:row for row in restarted.job_statuses()}
+            self.assertEqual(set(rows),set(saved)|{'job-historical'})
+            for job_id,(batch_id,status,event,original) in saved.items():
+                self.assertEqual(rows[job_id]['status'],status)
+                self.assertEqual(rows[job_id]['research_progress'],[event])
+                self.assertEqual(restarted.batch_detail(batch_id)['research_progress'],[event])
+                self.assertEqual((root/'jobs'/f'{job_id}.json').read_bytes(),original)
+
     def test_append_is_incremental_and_survives_restart(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "progress.jsonl"

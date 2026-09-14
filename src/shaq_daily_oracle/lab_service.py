@@ -5,6 +5,7 @@ import hashlib
 import math
 import os
 import platform
+import re
 import csv
 import shutil
 import tempfile
@@ -1137,9 +1138,15 @@ class LabService:
         stored = {}
         jobs_root = self.paths.research_root / "jobs"
         if jobs_root.is_dir():
-            for path in jobs_root.glob("job-*.json"):
+            for path in [*jobs_root.glob("job-*.json"), *jobs_root.glob("resume-LAB-*.json")]:
                 try:
                     row = json.loads(path.read_text(encoding="utf-8"))
+                    if path.name.startswith('resume-') and (
+                        not re.fullmatch(r'resume-LAB-[A-Za-z0-9_-]+', path.stem)
+                        or row.get('job_id') != path.stem
+                        or row.get('batch_id') != path.stem.removeprefix('resume-')
+                    ):
+                        continue
                     stored[str(row["job_id"])] = row
                 except Exception:
                     continue

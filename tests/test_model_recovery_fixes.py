@@ -216,6 +216,48 @@ class DeadlineTests(unittest.TestCase):
 
 
 class DownstreamCheckpointTests(unittest.TestCase):
+    def test_explicit_resume_recovers_old_invalid_domain_groups_only(self):
+        helper=fixtures.ResearchBatchTests()
+        for bad_domain in ['market','price_volume']:
+            with self.subTest(domain=bad_domain), tempfile.TemporaryDirectory() as name:
+                root=Path(name);registry=helper.registry(root);evidence=helper.evidence(root)
+                runner=ResearchBatchRunner(batches_root=root/'batches',cache_root=root/'cache',
+                    registry=registry,integration_policy=helper.policy())
+                original_call=runner.cache.call
+                def legacy_call(**kw):
+                    kw.pop('validate',None)
+                    return original_call(**kw)
+                def old_model(**kw):
+                    result,audit=fixtures.FakeModel()(**kw)
+                    if 'FROZEN TASKS:' in kw['prompt']:
+                        for row in result['results']:
+                            if row['report']['domain']==bad_domain:
+                                row['report']['as_of_et']='2026-09-03T08:49:00-04:00'
+                        audit['output_sha256']=sha256_payload(result)
+                    return result,audit
+                with patch.object(runner.cache,'call',side_effect=legacy_call):
+                    first=runner.run(evidence=evidence,variants=[helper.main_variant(registry)],
+                        profile=helper.profile(),secret='',caller=old_model)
+                self.assertFalse(first['status']['all_variants_completed'])
+                batch=Path(first['batch_root'])
+                before={path.name:path.read_bytes() for path in (batch/'model_calls').glob('*.json')}
+                rejected=next(json.loads(content) for content in before.values()
+                    if json.loads(content)['result']['results'][0]['report']['domain']==bad_domain)
+                recalled=[]
+                def valid(**kw):
+                    if 'FROZEN TASKS:' in kw['prompt']:
+                        recalled.extend(task['domain'] for task in json.loads(kw['prompt'].split('FROZEN TASKS:\n')[1]))
+                    return fixtures.FakeModel()(**kw)
+                done=runner.resume(batch_id=first['status']['batch_id'],evidence=evidence,
+                    profile=helper.profile(),secret='',caller=valid)
+                self.assertTrue(done['status']['all_variants_completed'],done['status'])
+                self.assertEqual(recalled,[bad_domain])
+                self.assertTrue(any(json.loads(path.read_text())==rejected
+                    for path in (batch/'rejected_model_calls').glob('*.json')))
+                for filename,content in before.items():
+                    if json.loads(content)['cache_key']!=rejected['cache_key']:
+                        self.assertEqual((batch/'model_calls'/filename).read_bytes(),content)
+
     def test_shared_cache_reconciliation_rejects_valid_conflicts_inputs_and_tampering(self):
         import copy
         from shaq_daily_oracle.research_batch import ContentAddressedModelCache, ResearchBatchError, _validated_adversary
