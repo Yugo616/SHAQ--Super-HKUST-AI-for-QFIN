@@ -4,7 +4,7 @@ SHAQ Daily Oracle Lab is a local comparative-research workbench. Its research mo
 
 ## Install
 
-The 0.7.0 candidate's platform pages below become usable downloads only after they supply the matching package, checksum and acceptance record:
+Download the installer for your computer from the platform page. Use only the packages actually listed there; each architecture has its own acceptance record:
 
 - [Windows 10/11 x64 installer](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.0-windows)
 - [macOS 15+ Apple Silicon and Intel disk images](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.0-macos)
@@ -28,9 +28,11 @@ The model card has three equal choices: **Connect Codex**, **Connect Claude Code
 
 API-only users need neither CLI. Enter the provider's HTTPS base URL, not its chat website; the protocol determines the request path. Match the exact model ID, key group/permissions, protocol and supported context length to the live catalog. Provider switches retain separate form drafts and successful save clears the submitted key.
 
-For example, Packy's [OpenAI-compatible CLI guide](https://docs.packyapi.com/docs/register/6-cli.html) and [Kimi Code guide](https://docs.packyapi.com/docs/cli/7-kimi-code.html) describe different integrations. At documentation review the OpenAI-compatible base was `https://cf.api.fan/v1`; verify its live catalog/guide before use. This is a documentation example, not an app default or a promise that all models support all protocols.
+For example, Packy's [OpenAI-compatible CLI guide](https://docs.packyapi.com/docs/register/6-cli.html) and [Kimi Code guide](https://docs.packyapi.com/docs/cli/7-kimi-code.html) describe different integrations. Obtain the current base URL, model ID and protocol from the guide for your purchased token group. A relay key belongs to that relay, not the official Anthropic/OpenAI endpoint; a model name alone does not determine the protocol.
 
 On Windows, local-subscription discovery accepts the provider's native `.exe` or `.com` CLI. Shell launchers are not accepted because they do not meet the desktop process boundary; an API profile remains available instead. Use the official installation links in the dialog when a native CLI is absent.
+
+The 0.7.1 Windows correction also detects Codex's vendor-managed version directories, without requiring them on PATH. It checks that a candidate is the actual CLI before using it. Claude's native CLI is preferred over a WindowsApps desktop-chat alias. When the CLI is found but unauthenticated, choose **Log in to Codex / Claude Code (`登录 Codex` / `登录 Claude Code`)** to open its own browser sign-in, then complete the model test. SHAQ does not copy credentials from another app. If 0.7.1 is not yet listed on the Windows release page, this correction has not yet been delivered to installed users.
 
 The app performs a small structured-response probe before saving a profile. A malformed response, authentication error, rate limit, timeout, or schema failure is shown with **Retry**, **Edit Connection**, and **Copy Error** actions. It does not silently switch provider, endpoint, or model. Ordinary setup has no temperature field; each protocol sends only parameters supported by that profile.
 

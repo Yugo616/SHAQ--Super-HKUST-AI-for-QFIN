@@ -1,13 +1,13 @@
 # Software updates
 
-Application updates and research-method updates are separate. This source is the **0.7.0 release candidate**: implementation/test results do not mean an installer or native update has been accepted and published.
+Application updates and research-method updates are separate. **0.7.0 is the first published managed-update base.** Later patches use a matching public base when available; a patch is available to users only after its installer, update feed and acceptance record appear on the platform release page.
 
 ## Platform downloads and acceptance
 
 - [0.7.0 Windows 10/11 x64 release page](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.0-windows)
 - [0.7.0 macOS 15+ release page, separate Apple Silicon and Intel packages](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.0-macos)
 
-Use a page only after its packages, checksums and `Acceptance.json` exist. The release tag identifies the exact tested source; checksum/acceptance assets identify installers. A candidate branch, CI fixture run or this document is not proof of publication or successful installation on your machine. Native acceptance must cover Windows x64, macOS ARM64 and macOS x64 separately at the release's exact source revision. Live personal model connections remain a separate check.
+Use a page only after its packages, checksums and acceptance record exist. Check each architecture's acceptance record for its exact build source; separately accepted additions may name an explicitly recorded follow-up commit. A candidate branch, CI fixture run or this document is not proof of successful installation on your machine. Native acceptance covers Windows x64, macOS ARM64 and macOS x64 separately. Live personal model connections remain a separate check.
 
 ## First upgrade from legacy 0.6.1 / 0.6.2
 
