@@ -100,7 +100,11 @@ def main():
                 window.destroy()
         return original_start(inspect, **kwargs)
 
-    with tempfile.TemporaryDirectory(prefix='shaq-layout-') as directory, patch.object(webview, 'start', start):
+    # Layout fixtures do not test the updater's persistent background worker.
+    # Do not let it recreate admission files while temporary data is removed.
+    with tempfile.TemporaryDirectory(prefix='shaq-layout-') as directory, \
+            patch.object(webview, 'start', start), \
+            patch('shaq_daily_oracle.software_updates.UpdateRuntime.start_automatic_checks'):
         launch_desktop(smoke_output=Path(directory) / 'unused.json')
     print(json.dumps(report, ensure_ascii=False))
     return 0 if report.get('status') == 'passed' else 1
