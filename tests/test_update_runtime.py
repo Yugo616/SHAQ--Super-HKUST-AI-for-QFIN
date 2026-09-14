@@ -216,6 +216,35 @@ class UpdateRuntimeTests(unittest.TestCase):
             self.assertEqual(runtime.status()['status'],'ready')
             self.assertFalse((Path(directory)/'update-admission/installing.json').exists())
 
+    def test_unreadable_real_gui_ack_never_enters_updater(self):
+        from test_update_gui import Window
+        from shaq_daily_oracle.update_gui import GuiSession
+        from shaq_daily_oracle.update_admission import AdmissionGate
+        with tempfile.TemporaryDirectory() as directory:
+            runtime, manager, selected, feed = self.runtime(directory)
+            manager.download_updates = lambda info, progress: None
+            applied = []
+            manager.apply_updates_and_restart = lambda info: applied.append(info)
+            self.check(runtime, selected, feed)
+            runtime.download()
+            runtime._download_thread.join(3)
+            first, second = Window(), Window()
+            root = AdmissionGate(Path(directory)).root
+            original = Path.read_text
+            def read(path, *args, **kwargs):
+                if path.parent.name == 'gui-sessions' and path.name != 'request.json':
+                    raise PermissionError(13, 'synthetic permanent acknowledgement denial')
+                return original(path, *args, **kwargs)
+            with GuiSession(root, first, timeout=1, poll=.01) as owner, \
+                    GuiSession(root, second, timeout=1, poll=.01):
+                runtime.gui_session = owner
+                with patch.object(Path, 'read_text', read):
+                    with self.assertRaises(PermissionError): runtime.apply()
+                self.assertEqual(applied, [])
+                self.assertFalse(first.closed or second.closed)
+                self.assertEqual(runtime.status()['status'], 'ready')
+                self.assertFalse((root / 'installing.json').exists())
+
     def test_automatic_dirty_window_is_visible_deferred_state_not_install_failure(self):
         from shaq_daily_oracle.update_gui import UnsavedEdits
         with tempfile.TemporaryDirectory() as directory:

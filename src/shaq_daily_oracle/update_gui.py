@@ -4,6 +4,7 @@ Only non-secret booleans cross the filesystem. Each live window freezes input
 before acknowledging readiness; a dirty/unresponsive window prevents apply.
 """
 import json
+import logging
 import threading
 import time
 import uuid
@@ -27,6 +28,7 @@ class GuiSession:
         self.token = uuid.uuid4().hex
         self.stop = threading.Event()
         self.request = self.root / 'request.json'
+        self.error = None
 
     def __enter__(self):
         # Registration is work: either it is visible before install admission,
@@ -46,12 +48,47 @@ class GuiSession:
         self.lease.release()
 
     def _read(self, path):
-        try:
-            return json.loads(path.read_text(encoding='utf-8'))
-        except FileNotFoundError:
-            return {}
+        def read():
+            try:
+                return json.loads(path.read_text(encoding='utf-8'))
+            except FileNotFoundError:
+                return {}
+        return self._state_io(read)
+
+    def _write(self, path, value):
+        return self._state_io(lambda: _atomic_json(path, value))
+
+    def _state_io(self, operation):
+        # Windows atomic replacement can conflict with an open reader. All
+        # protocol readers AND writers share this lock until handles close.
+        # Not *.lock: those files identify live GUI participants, not I/O.
+        deadline = time.monotonic() + self.timeout
+        while True:
+            try:
+                with FileLock(str(self.root / 'state-io.lck'),
+                              timeout=max(0, deadline - time.monotonic()),
+                              poll_interval=self.poll):
+                    return operation()
+            except OSError as exc:
+                # Only identified Windows sharing/byte-lock conflicts recover.
+                # Access denial (including winerror 5), invalid JSON, and other
+                # failures remain explicit; never fabricate an acknowledgement.
+                remaining = deadline - time.monotonic()
+                if getattr(exc, 'winerror', None) not in (32, 33) or remaining <= 0:
+                    raise
+                if self.stop.wait(min(self.poll, remaining)):
+                    raise
 
     def _watch(self):
+        try:
+            self._watch_requests()
+        except Exception as exc:
+            # Permanent I/O failure must be visible, not an unhandled daemon
+            # crash. The owner refuses apply; peers cannot acknowledge ready.
+            self.error = exc
+            logging.getLogger(__name__).exception('GUI update state protocol failed')
+
+    def _watch_requests(self):
         seen = None
         while not self.stop.wait(self.poll):
             request = self._read(self.request)
@@ -60,21 +97,24 @@ class GuiSession:
             state = (request.get('id'), request.get('phase'))
             if state == seen:
                 continue
-            seen = state
+            acknowledgement = None
             try:
                 if state[1] == 'prepare':
                     ready = self.window.evaluate_js('window.SHAQUpdateExit.prepare()') is True
-                    _atomic_json(self.root / (self.token + '.json'), {'id': state[0], 'ready': ready})
+                    acknowledgement = {'id': state[0], 'ready': ready}
                 elif state[1] == 'close' and request['owner'] != self.token:
                     self.window.destroy()
-                    _atomic_json(self.root / (self.token + '.json'), {'id': state[0], 'closed': True})
+                    acknowledgement = {'id': state[0], 'closed': True}
                 elif state[1] == 'cancel':
                     self.window.evaluate_js('window.SHAQUpdateExit.cancel()')
-                    _atomic_json(self.root / (self.token + '.json'), {'id': state[0], 'cancelled': True})
+                    acknowledgement = {'id': state[0], 'cancelled': True}
             except Exception:
                 # A window not yet loaded or no longer responsive cannot admit
                 # an update; never assume that it has no unsaved work.
-                _atomic_json(self.root / (self.token + '.json'), {'id': state[0], 'ready': False})
+                acknowledgement = {'id': state[0], 'ready': False}
+            if acknowledgement is not None:
+                self._write(self.root / (self.token + '.json'), acknowledgement)
+            seen = state
 
     def _live(self):
         live = []
@@ -89,6 +129,8 @@ class GuiSession:
     def _wait(self, tokens, request_id, key):
         deadline = time.monotonic() + self.timeout
         while time.monotonic() < deadline:
+            if self.error is not None:
+                raise self.error
             rows = [self._read(self.root / (token + '.json')) for token in tokens]
             if all(row.get('id') == request_id and row.get(key) is True for row in rows):
                 return
@@ -100,17 +142,19 @@ class GuiSession:
     def cancel(self):
         request = self._read(self.request)
         if request.get('owner') == self.token:
-            _atomic_json(self.request, {**request, 'phase': 'cancel'})
+            self._write(self.request, {**request, 'phase': 'cancel'})
             self._wait(self._live(), request['id'], 'cancelled')
 
     def quiesce(self):
+        if self.error is not None:
+            raise self.error
         tokens = self._live()
         request = {'id': uuid.uuid4().hex, 'owner': self.token, 'phase': 'prepare', 'participants': tokens}
-        _atomic_json(self.request, request)
+        self._write(self.request, request)
         try:
             self._wait(tokens, request['id'], 'ready')
         except Exception:
             self.cancel()
             raise
-        _atomic_json(self.request, {**request, 'phase': 'close'})
+        self._write(self.request, {**request, 'phase': 'close'})
         self._wait([token for token in tokens if token != self.token], request['id'], 'closed')

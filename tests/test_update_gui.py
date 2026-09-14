@@ -2,6 +2,9 @@ import tempfile
 import subprocess
 import json
 import time
+import threading
+import os
+import sys
 import unittest
 from unittest.mock import patch
 from types import SimpleNamespace
@@ -26,6 +29,213 @@ class Window:
 
 
 class UpdateGuiTests(unittest.TestCase):
+    @staticmethod
+    def sharing_error(code=32):
+        error = PermissionError(13, 'synthetic Windows file sharing conflict')
+        error.winerror = code
+        return error
+
+    def test_transient_request_and_ack_reads_preserve_two_window_protocol(self):
+        for dirty in (False, True):
+            with self.subTest(dirty=dirty), tempfile.TemporaryDirectory() as directory:
+                root = AdmissionGate(Path(directory)).root
+                first, second = Window(), Window(dirty)
+                original = Path.read_text
+                failed = set()
+                def read(path, *args, **kwargs):
+                    if path.parent.name == 'gui-sessions' and path.exists():
+                        key = (threading.current_thread().ident, path.name)
+                        if key not in failed:
+                            failed.add(key)
+                            raise self.sharing_error()
+                    return original(path, *args, **kwargs)
+                with patch.object(Path, 'read_text', read):
+                    with update_gui.GuiSession(root, first, timeout=2, poll=.01) as owner, \
+                            update_gui.GuiSession(root, second, timeout=2, poll=.01) as peer:
+                        if dirty:
+                            with self.assertRaises(update_gui.UnsavedEdits):
+                                owner.quiesce()
+                            self.assertFalse(first.frozen or second.frozen)
+                            self.assertFalse(first.closed or second.closed)
+                        else:
+                            owner.quiesce()
+                            self.assertTrue(second.closed)
+                            self.assertTrue(first.frozen)
+                            self.assertFalse(first.closed)
+                        self.assertTrue(owner.thread.is_alive() and peer.thread.is_alive())
+
+    def test_transient_replacement_preserves_ack_and_watcher(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = AdmissionGate(Path(directory)).root
+            first, second = Window(), Window()
+            original = os.replace
+            failed = set()
+            def replace(source, target):
+                if target.parent.name == 'gui-sessions' and target not in failed:
+                    failed.add(target)
+                    raise self.sharing_error(33)
+                return original(source, target)
+            with patch.object(os, 'replace', replace):
+                with update_gui.GuiSession(root, first, timeout=2, poll=.01) as owner, \
+                        update_gui.GuiSession(root, second, timeout=2, poll=.01) as peer:
+                    owner.quiesce()
+                    self.assertTrue(second.closed)
+                    self.assertFalse(first.closed)
+                    self.assertTrue(owner.thread.is_alive() and peer.thread.is_alive())
+
+    def test_permanent_request_read_failure_is_reported_by_watcher_and_blocks_update(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = AdmissionGate(Path(directory)).root
+            window = Window()
+            denied = PermissionError(13, 'synthetic permanent access denial')
+            attempted = threading.Event()
+            original = Path.read_text
+            def read(path, *args, **kwargs):
+                if path.name == 'request.json':
+                    attempted.set()
+                    raise denied
+                return original(path, *args, **kwargs)
+            with patch.object(Path, 'read_text', read), self.assertLogs(update_gui.__name__, 'ERROR'):
+                with update_gui.GuiSession(root, window, timeout=.2, poll=.01) as owner:
+                    self.assertTrue(attempted.wait(1))
+                    owner.thread.join(1)
+                    self.assertIs(getattr(owner, 'error', None), denied)
+                    with self.assertRaises(PermissionError):
+                        owner.quiesce()
+                    self.assertFalse(window.closed)
+
+    def test_permanent_and_malformed_reads_are_not_missing_or_ready(self):
+        with tempfile.TemporaryDirectory() as directory:
+            session = update_gui.GuiSession(AdmissionGate(Path(directory)).root, Window())
+            session.root.mkdir()
+            for failure in (PermissionError(13, 'denied'), self.sharing_error(5),
+                            json.JSONDecodeError('malformed', '{', 1)):
+                with self.subTest(failure=failure), patch.object(Path, 'read_text', side_effect=failure):
+                    with self.assertRaises(type(failure)):
+                        session._read(session.request)
+
+    def test_permanent_ack_write_failure_is_reported_and_never_closes_window(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = AdmissionGate(Path(directory)).root
+            window = Window()
+            original = os.replace
+            denied = PermissionError(13, 'synthetic permanent acknowledgement write denial')
+            def replace(source, target):
+                if target.name == owner.token + '.json':
+                    raise denied
+                return original(source, target)
+            with update_gui.GuiSession(root, window, timeout=.2, poll=.01) as owner:
+                with patch.object(os, 'replace', replace), self.assertLogs(update_gui.__name__, 'ERROR'):
+                    with self.assertRaises(PermissionError): owner.quiesce()
+                    owner.thread.join(1)
+                    self.assertIs(owner.error, denied)
+                    self.assertFalse(window.closed)
+
+    def test_persistent_sharing_failure_has_bounded_recovery(self):
+        with tempfile.TemporaryDirectory() as directory:
+            session = update_gui.GuiSession(AdmissionGate(Path(directory)).root, Window(), timeout=.03, poll=.005)
+            session.root.mkdir()
+            failure = self.sharing_error()
+            attempted = []
+            def read(*args, **kwargs):
+                attempted.append(True)
+                raise failure
+            with patch.object(Path, 'read_text', read):
+                with self.assertRaises(PermissionError):
+                    session._read(session.request)
+            self.assertGreater(len(attempted), 1)
+            self.assertLess(len(attempted), 100)
+
+    def test_reader_handle_excludes_concurrent_replacement(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = AdmissionGate(Path(directory)).root
+            reader = update_gui.GuiSession(root, Window(), timeout=2, poll=.01)
+            writer = update_gui.GuiSession(root, Window(), timeout=2, poll=.01)
+            reader.root.mkdir()
+            update_gui._atomic_json(reader.request, {'phase': 'prepare'})
+            opened, release, replacing, writing = (threading.Event() for _ in range(4))
+            original_read, original_replace = Path.read_text, os.replace
+            failures, values = [], []
+            def read(path, *args, **kwargs):
+                if path == reader.request:
+                    with path.open(encoding='utf-8') as handle:
+                        opened.set()
+                        if not release.wait(2):
+                            raise TimeoutError('reader release missing')
+                        return handle.read()
+                return original_read(path, *args, **kwargs)
+            def replace(source, target):
+                replacing.set()
+                return original_replace(source, target)
+            def run_read():
+                try: values.append(reader._read(reader.request))
+                except Exception as exc: failures.append(exc)
+            def run_write():
+                writing.set()
+                try: writer._write(writer.request, {'phase': 'close'})
+                except Exception as exc: failures.append(exc)
+            with patch.object(Path, 'read_text', read), patch.object(os, 'replace', replace):
+                r, w = threading.Thread(target=run_read), threading.Thread(target=run_write)
+                r.start()
+                try:
+                    self.assertTrue(opened.wait(1))
+                    w.start()
+                    self.assertTrue(writing.wait(1))
+                    self.assertFalse(replacing.wait(.1), 'replacement overlapped the open reader')
+                finally:
+                    release.set()
+                    r.join(2)
+                    if w.ident is not None: w.join(2)
+            self.assertEqual(failures, [])
+            self.assertEqual(values, [{'phase': 'prepare'}])
+            self.assertEqual(reader._read(reader.request), {'phase': 'close'})
+
+    @unittest.skipUnless(sys.platform == 'win32', 'requires real Windows sharing handles')
+    def test_real_windows_exclusive_handle_recovers_for_read_and_replace(self):
+        import ctypes
+        from ctypes import wintypes
+        kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+        kernel.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                                      ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD,
+                                      wintypes.HANDLE]
+        kernel.CreateFileW.restype = wintypes.HANDLE
+        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel.CloseHandle.restype = wintypes.BOOL
+        with tempfile.TemporaryDirectory() as directory:
+            session = update_gui.GuiSession(AdmissionGate(Path(directory)).root, Window(), timeout=2, poll=.01)
+            session.root.mkdir()
+            for operation in ('read', 'replace'):
+                with self.subTest(operation=operation):
+                    session._write(session.request, {'phase': 'prepare'})
+                    # GENERIC_READ, no sharing, OPEN_EXISTING: another normal
+                    # reader or rename must observe a real sharing violation.
+                    handle = kernel.CreateFileW(str(session.request), 0x80000000, 0, None, 3, 0, None)
+                    self.assertNotEqual(handle, wintypes.HANDLE(-1).value)
+                    observed = []
+                    original = Path.read_text if operation == 'read' else os.replace
+                    def attempt(*args, **kwargs):
+                        nonlocal handle
+                        try:
+                            return original(*args, **kwargs)
+                        except PermissionError as exc:
+                            observed.append(exc.winerror)
+                            self.assertTrue(kernel.CloseHandle(handle))
+                            handle = None
+                            raise
+                    try:
+                        target, name = (Path, 'read_text') if operation == 'read' else (os, 'replace')
+                        with patch.object(target, name, attempt):
+                            if operation == 'read':
+                                self.assertEqual(session._read(session.request), {'phase': 'prepare'})
+                            else:
+                                session._write(session.request, {'phase': 'close'})
+                        self.assertEqual(observed, [32])
+                        expected = 'prepare' if operation == 'read' else 'close'
+                        self.assertEqual(session._read(session.request), {'phase': expected})
+                        self.assertEqual(list(session.root.glob('*.tmp')), [])
+                    finally:
+                        if handle is not None: kernel.CloseHandle(handle)
+
     def test_paused_old_bridge_cannot_register_after_target_confirms(self):
         with tempfile.TemporaryDirectory() as directory:
             paths=SimpleNamespace(data_root=Path(directory),package_root=Path(__file__).parents[1])
