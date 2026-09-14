@@ -8,12 +8,12 @@ The results view separates **method changes, model identity, frozen data, candid
 
 ## 0.7.0 platform release pages
 
-This source is the **0.7.0 release candidate**. The platform pages below must supply the matching packages, source tag, checksums and `Acceptance.json` before they are usable downloads; this document does not claim completed acceptance or publication.
+**0.7.0 is published for Windows x64 and macOS Apple Silicon.** Both installers passed native installation, update and replay acceptance and are built from source commit `56d64679bb8a9291e229e29743c9be29a7a16517`. Intel macOS update acceptance has not passed; no Intel 0.7.0 installer is published yet.
 
 - [0.7.0 Windows 10/11 x64](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.0-windows)
-- [0.7.0 macOS 15+ — Apple Silicon or Intel](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.0-macos)
+- [0.7.0 macOS 15+ — Apple Silicon (M series)](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.0-macos)
 
-Choose exactly one Mac disk image for the computer's architecture. Each release page includes checksums and an acceptance record and is visibly marked as a prerelease. These research builds are not commercially signed or notarized, so the operating system may require a first-launch confirmation.
+Intel Mac users must not install the Apple Silicon disk image. Each release page includes checksums and an acceptance record and is visibly marked as a prerelease. These research builds are not commercially signed or notarized, so the operating system may require a first-launch confirmation.
 
 Existing **0.6.1/0.6.2** installations require a first full install of the managed application; they cannot acquire the native updater through a small update. Close the old app, install the matching full package, then open the new app. If a legacy copy occupies a different location, remove only that old program through the operating system's Apps interface, not SHAQ user data. Local records, balances, settings and method drafts remain separate. See [Software updates](docs/software-updates.md) for GUI-only steps. Platform fixture checks do not verify each user's live model connection.
 

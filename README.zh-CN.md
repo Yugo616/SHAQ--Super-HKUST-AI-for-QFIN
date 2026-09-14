@@ -8,12 +8,12 @@ SHAQ Daily Oracle Lab 是一套本地金融研究对照工作台：它让受治�
 
 ## 0.7.0 平台发布页
 
-此源码是 **0.7.0 发布候选版**。下列平台页实际提供对应安装包、源码标签、校验值和 `Acceptance.json` 后才可用于下载；本文不替代验收，也不声称已发布：
+**0.7.0 已发布 Windows x64 和 Mac Apple Silicon 版。** 两个安装包均通过实际安装、更新及回放验收，绑定源码提交 `56d64679bb8a9291e229e29743c9be29a7a16517`。Intel Mac 的升级验收尚未通过，暂不提供 Intel 0.7.0 安装包。
 
 - [0.7.0 Windows 10/11 x64](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.0-windows)
-- [0.7.0 macOS 15+：Apple Silicon 或 Intel](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.0-macos)
+- [0.7.0 macOS 15+：Apple Silicon（M 系列）](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.0-macos)
 
-Mac 请按电脑架构只选择一个 DMG。每个发布页均附校验值和验收记录，并明确标为预发布。这些研究构建没有商业签名，首次打开时操作系统可能要求确认。
+Intel Mac 请勿安装 Apple Silicon 包。每个发布页均附校验值和验收记录，并明确标为预发布。这些研究构建没有商业签名，首次打开时操作系统可能要求确认。
 
 现有 **0.6.1／0.6.2** 需要先完整安装一次受管理的新应用，不能靠差分更新获得新更新器。先关闭旧程序、安装适合本机的完整包，再打开新版；若旧安装位置不同，只通过系统「应用」界面移除旧程序，不删除 SHAQ 用户数据。本地记录、余额、设置和方法草稿独立存放。详见[软件更新](docs/software-updates.md)中的图形界面步骤。平台样例测试不等于已验证每位组员的真实模型连接。
 
