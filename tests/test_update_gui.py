@@ -5,6 +5,7 @@ import time
 import threading
 import os
 import sys
+import stat
 import unittest
 from unittest.mock import patch
 from types import SimpleNamespace
@@ -111,15 +112,59 @@ class UpdateGuiTests(unittest.TestCase):
             def replace(source, target):
                 if target.parent.name == 'gui-sessions' and target not in failed:
                     failed.add(target)
-                    raise self.sharing_error(33)
+                    raise self.sharing_error(5)
                 return original(source, target)
-            with patch.object(os, 'replace', replace):
+            with patch.object(os, 'replace', replace), patch.object(sys, 'platform', 'win32'), \
+                    patch.object(update_gui, '_probe_windows_delete', side_effect=self.sharing_error(), create=True):
                 with update_gui.GuiSession(root, first, timeout=2, poll=.01) as owner, \
                         update_gui.GuiSession(root, second, timeout=2, poll=.01) as peer:
                     owner.quiesce()
                     self.assertTrue(second.closed)
                     self.assertFalse(first.closed)
                     self.assertTrue(owner.thread.is_alive() and peer.thread.is_alive())
+
+    def test_windows_replace_denial_without_proven_occupancy_preserves_original_error(self):
+        for probe_error in (None, self.sharing_error(5), FileNotFoundError(2, 'missing'),
+                            PermissionError(13, 'unclassified denial')):
+            with self.subTest(probe_error=probe_error), tempfile.TemporaryDirectory() as directory:
+                session = update_gui.GuiSession(AdmissionGate(Path(directory)).root, Window(), timeout=.1, poll=.01)
+                session.root.mkdir()
+                session._write(session.request, {'phase': 'prepare'})
+                original_error = self.sharing_error(5)
+                replacements, probes = [], []
+                def replace(*args):
+                    replacements.append(args)
+                    raise original_error
+                def probe(path):
+                    probes.append(path)
+                    if probe_error is not None: raise probe_error
+                with patch.object(sys, 'platform', 'win32'), patch.object(os, 'replace', replace), \
+                        patch.object(update_gui, '_probe_windows_delete', probe, create=True):
+                    with self.assertRaises(PermissionError) as raised:
+                        session._write(session.request, {'phase': 'close'})
+                self.assertIs(raised.exception, original_error)
+                self.assertEqual(len(replacements), 1)
+                self.assertEqual(probes, [session.request])
+                self.assertEqual(session._read(session.request), {'phase': 'prepare'})
+                self.assertEqual(list(session.root.glob('*.tmp')), [])
+
+    def test_persistent_windows_replace_occupancy_is_bounded_and_keeps_old_state(self):
+        with tempfile.TemporaryDirectory() as directory:
+            session = update_gui.GuiSession(AdmissionGate(Path(directory)).root, Window(), timeout=.03, poll=.005)
+            session.root.mkdir()
+            session._write(session.request, {'phase': 'prepare'})
+            attempts = []
+            def replace(*args):
+                attempts.append(args)
+                raise self.sharing_error(5)
+            with patch.object(sys, 'platform', 'win32'), patch.object(os, 'replace', replace), \
+                    patch.object(update_gui, '_probe_windows_delete', side_effect=self.sharing_error(), create=True):
+                with self.assertRaises(PermissionError):
+                    session._write(session.request, {'phase': 'close'})
+            self.assertGreater(len(attempts), 1)
+            self.assertLess(len(attempts), 100)
+            self.assertEqual(session._read(session.request), {'phase': 'prepare'})
+            self.assertEqual(list(session.root.glob('*.tmp')), [])
 
     def test_permanent_request_read_failure_is_reported_by_watcher_and_blocks_update(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -248,12 +293,31 @@ class UpdateGuiTests(unittest.TestCase):
             for operation in ('read', 'replace'):
                 with self.subTest(operation=operation):
                     session._write(session.request, {'phase': 'prepare'})
+                    before = session.request.read_bytes()
+                    source = session.root / 'source.json'
+                    update_gui._atomic_json(source, {'source': 'untouched'})
+                    source_before = source.read_bytes()
+                    update_gui._probe_windows_delete(session.request)
+                    self.assertEqual(session.request.read_bytes(), before)
+                    self.assertEqual(source.read_bytes(), source_before)
                     # GENERIC_READ, no sharing, OPEN_EXISTING: another normal
-                    # reader or rename must observe a real sharing violation.
+                    # reader or delete-access probe must observe a real sharing
+                    # violation. Successful exclusive open also proves the
+                    # previous successful probe closed its native handle.
                     handle = kernel.CreateFileW(str(session.request), 0x80000000, 0, None, 3, 0, None)
                     self.assertNotEqual(handle, wintypes.HANDLE(-1).value)
                     observed = []
-                    original = update_gui._read_windows_text if operation == 'read' else os.replace
+                    original = update_gui._read_windows_text if operation == 'read' else update_gui._probe_windows_delete
+                    replace_errors = []
+                    original_replace = os.replace
+                    def replace(source, target):
+                        try:
+                            return original_replace(source, target)
+                        except PermissionError as exc:
+                            replace_errors.append(exc.winerror)
+                            # Keep the handle held until the independent delete
+                            # probe confirms the sharing conflict.
+                            raise
                     def attempt(*args, **kwargs):
                         nonlocal handle
                         try:
@@ -272,18 +336,29 @@ class UpdateGuiTests(unittest.TestCase):
                                 session.request.read_text(encoding='utf-8')
                             self.assertEqual(crt_failure.exception.errno, 13)
                             self.assertIsNone(getattr(crt_failure.exception, 'winerror', None))
-                        target, name = (update_gui, '_read_windows_text') if operation == 'read' else (os, 'replace')
-                        with patch.object(target, name, attempt):
+                        name = '_read_windows_text' if operation == 'read' else '_probe_windows_delete'
+                        with patch.object(update_gui, name, attempt), patch.object(os, 'replace', replace):
                             if operation == 'read':
                                 self.assertEqual(session._read(session.request), {'phase': 'prepare'})
                             else:
                                 session._write(session.request, {'phase': 'close'})
                         self.assertEqual(observed, [32])
+                        if operation == 'replace': self.assertEqual(replace_errors, [5])
                         expected = 'prepare' if operation == 'read' else 'close'
                         self.assertEqual(session._read(session.request), {'phase': expected})
                         self.assertEqual(list(session.root.glob('*.tmp')), [])
                     finally:
                         if handle is not None: kernel.CloseHandle(handle)
+            before = session.request.read_bytes()
+            os.chmod(session.request, stat.S_IREAD)
+            try:
+                with self.assertRaises(PermissionError) as denied:
+                    session._write(session.request, {'phase': 'must-not-be-written'})
+                self.assertEqual(denied.exception.winerror, 5)
+                self.assertEqual(session.request.read_bytes(), before)
+                self.assertEqual(list(session.root.glob('*.tmp')), [])
+            finally:
+                os.chmod(session.request, stat.S_IWRITE)
 
     def test_paused_old_bridge_cannot_register_after_target_confirms(self):
         with tempfile.TemporaryDirectory() as directory:

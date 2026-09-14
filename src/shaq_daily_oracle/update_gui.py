@@ -17,11 +17,9 @@ from .settings import _atomic_json
 from .update_admission import AdmissionGate
 
 
-def _read_windows_text(path):
-    """Reopen with a native error boundary; CRT open loses the Windows status."""
+def _open_windows_shared(path, access):
+    """Open an existing protocol file with a reliable native error boundary."""
     import ctypes
-    import msvcrt
-    import os
     from ctypes import wintypes
 
     kernel = ctypes.WinDLL('kernel32', use_last_error=True)
@@ -31,14 +29,22 @@ def _read_windows_text(path):
     kernel.CreateFileW.restype = wintypes.HANDLE
     kernel.CloseHandle.argtypes = [wintypes.HANDLE]
     kernel.CloseHandle.restype = wintypes.BOOL
+    # FILE_SHARE_READ | WRITE | DELETE, OPEN_EXISTING; no mutation flags.
+    handle = kernel.CreateFileW(str(path), access, 0x7, None, 3, 0, None)
+    if handle == wintypes.HANDLE(-1).value:
+        raise ctypes.WinError(ctypes.get_last_error())
+    return kernel, handle
+
+
+def _read_windows_text(path):
+    """Reopen with a native error boundary; CRT open loses the Windows status."""
+    import msvcrt
+    import os
 
     def opener(filename, flags):
-        # GENERIC_READ, FILE_SHARE_READ | WRITE | DELETE, OPEN_EXISTING.
         # Read the actual file if it is accessible now; do not infer that an
         # earlier errno 13 was transient from a probe or stale GetLastError.
-        handle = kernel.CreateFileW(filename, 0x80000000, 0x7, None, 3, 0, None)
-        if handle == wintypes.HANDLE(-1).value:
-            raise ctypes.WinError(ctypes.get_last_error())
+        kernel, handle = _open_windows_shared(filename, 0x80000000)  # GENERIC_READ
         try:
             # Ownership transfers to FileIO through the opener descriptor;
             # its context manager closes it even if decoding/read fails.
@@ -49,6 +55,14 @@ def _read_windows_text(path):
 
     with open(path, 'r', encoding='utf-8', opener=opener) as stream:
         return stream.read()
+
+
+def _probe_windows_delete(path):
+    """Check current delete-sharing compatibility without deleting anything."""
+    import ctypes
+    kernel, handle = _open_windows_shared(path, 0x00010000)  # DELETE access
+    if not kernel.CloseHandle(handle):
+        raise ctypes.WinError(ctypes.get_last_error())
 
 
 class UnsavedEdits(RuntimeError):
@@ -99,7 +113,22 @@ class GuiSession:
         return self._state_io(read)
 
     def _write(self, path, value):
-        return self._state_io(lambda: _atomic_json(path, value))
+        def write():
+            try:
+                _atomic_json(path, value)
+            except PermissionError as exc:
+                if sys.platform == 'win32' and getattr(exc, 'winerror', None) == 5:
+                    # MoveFileExW can report ACCESS_DENIED for an occupied
+                    # destination. Retry only when an independent DELETE-access
+                    # open proves a current sharing conflict; never infer it
+                    # from error 5 alone or from a successful permission probe.
+                    try:
+                        _probe_windows_delete(path)
+                    except OSError as probe_error:
+                        if getattr(probe_error, 'winerror', None) in (32, 33):
+                            raise probe_error from exc
+                raise
+        return self._state_io(write)
 
     def _state_io(self, operation):
         # Windows atomic replacement can conflict with an open reader. All
