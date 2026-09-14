@@ -4,7 +4,9 @@ Only non-secret booleans cross the filesystem. Each live window freezes input
 before acknowledging readiness; a dirty/unresponsive window prevents apply.
 """
 import json
+import errno
 import logging
+import sys
 import threading
 import time
 import uuid
@@ -13,6 +15,40 @@ from filelock import FileLock, Timeout
 
 from .settings import _atomic_json
 from .update_admission import AdmissionGate
+
+
+def _read_windows_text(path):
+    """Reopen with a native error boundary; CRT open loses the Windows status."""
+    import ctypes
+    import msvcrt
+    import os
+    from ctypes import wintypes
+
+    kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+    kernel.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                                  ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD,
+                                  wintypes.HANDLE]
+    kernel.CreateFileW.restype = wintypes.HANDLE
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel.CloseHandle.restype = wintypes.BOOL
+
+    def opener(filename, flags):
+        # GENERIC_READ, FILE_SHARE_READ | WRITE | DELETE, OPEN_EXISTING.
+        # Read the actual file if it is accessible now; do not infer that an
+        # earlier errno 13 was transient from a probe or stale GetLastError.
+        handle = kernel.CreateFileW(filename, 0x80000000, 0x7, None, 3, 0, None)
+        if handle == wintypes.HANDLE(-1).value:
+            raise ctypes.WinError(ctypes.get_last_error())
+        try:
+            # Ownership transfers to FileIO through the opener descriptor;
+            # its context manager closes it even if decoding/read fails.
+            return msvcrt.open_osfhandle(handle, os.O_RDONLY)
+        except BaseException:
+            kernel.CloseHandle(handle)
+            raise
+
+    with open(path, 'r', encoding='utf-8', opener=opener) as stream:
+        return stream.read()
 
 
 class UnsavedEdits(RuntimeError):
@@ -50,7 +86,14 @@ class GuiSession:
     def _read(self, path):
         def read():
             try:
-                return json.loads(path.read_text(encoding='utf-8'))
+                try:
+                    text = path.read_text(encoding='utf-8')
+                except PermissionError as exc:
+                    if (sys.platform != 'win32' or exc.errno != errno.EACCES
+                            or getattr(exc, 'winerror', None) is not None):
+                        raise
+                    text = _read_windows_text(path)
+                return json.loads(text)
             except FileNotFoundError:
                 return {}
         return self._state_io(read)

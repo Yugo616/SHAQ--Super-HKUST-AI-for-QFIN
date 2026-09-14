@@ -35,6 +35,44 @@ class UpdateGuiTests(unittest.TestCase):
         error.winerror = code
         return error
 
+    def test_errno_only_windows_read_uses_native_result_not_guessed_access_denial(self):
+        with tempfile.TemporaryDirectory() as directory:
+            session = update_gui.GuiSession(AdmissionGate(Path(directory)).root, Window(), timeout=.2, poll=.01)
+            session.root.mkdir()
+            session._write(session.request, {'ready': True, 'label': '已確認'})
+            original = Path.read_text
+            attempts = []
+            def native_read(path):
+                attempts.append(path)
+                if len(attempts) == 1:
+                    raise self.sharing_error()
+                return original(path, encoding='utf-8')
+            errno_only = PermissionError(13, 'CRT errno only')
+            self.assertIsNone(getattr(errno_only, 'winerror', None))
+            with patch.object(sys, 'platform', 'win32'), \
+                    patch.object(Path, 'read_text', side_effect=errno_only), \
+                    patch.object(update_gui, '_read_windows_text', native_read, create=True):
+                self.assertEqual(session._read(session.request), {'ready': True, 'label': '已確認'})
+            self.assertEqual(attempts, [session.request, session.request])
+
+    def test_errno_only_windows_read_does_not_retry_native_denial(self):
+        with tempfile.TemporaryDirectory() as directory:
+            session = update_gui.GuiSession(AdmissionGate(Path(directory)).root, Window(), timeout=.2, poll=.01)
+            session.root.mkdir()
+            for native_error in (self.sharing_error(5), PermissionError(13, 'unclassified native read denial')):
+                with self.subTest(native_error=native_error):
+                    attempts = []
+                    def native_read(path):
+                        attempts.append(path)
+                        raise native_error
+                    with patch.object(sys, 'platform', 'win32'), \
+                            patch.object(Path, 'read_text', side_effect=PermissionError(13, 'CRT errno only')), \
+                            patch.object(update_gui, '_read_windows_text', native_read, create=True):
+                        with self.assertRaises(PermissionError) as raised:
+                            session._read(session.request)
+                    self.assertIs(raised.exception, native_error)
+                    self.assertEqual(attempts, [session.request])
+
     def test_transient_request_and_ack_reads_preserve_two_window_protocol(self):
         for dirty in (False, True):
             with self.subTest(dirty=dirty), tempfile.TemporaryDirectory() as directory:
@@ -95,7 +133,9 @@ class UpdateGuiTests(unittest.TestCase):
                     attempted.set()
                     raise denied
                 return original(path, *args, **kwargs)
-            with patch.object(Path, 'read_text', read), self.assertLogs(update_gui.__name__, 'ERROR'):
+            with patch.object(Path, 'read_text', read), \
+                    patch.object(update_gui, '_read_windows_text', side_effect=denied), \
+                    self.assertLogs(update_gui.__name__, 'ERROR'):
                 with update_gui.GuiSession(root, window, timeout=.2, poll=.01) as owner:
                     self.assertTrue(attempted.wait(1))
                     owner.thread.join(1)
@@ -110,7 +150,8 @@ class UpdateGuiTests(unittest.TestCase):
             session.root.mkdir()
             for failure in (PermissionError(13, 'denied'), self.sharing_error(5),
                             json.JSONDecodeError('malformed', '{', 1)):
-                with self.subTest(failure=failure), patch.object(Path, 'read_text', side_effect=failure):
+                with self.subTest(failure=failure), patch.object(Path, 'read_text', side_effect=failure), \
+                        patch.object(update_gui, '_read_windows_text', side_effect=failure):
                     with self.assertRaises(type(failure)):
                         session._read(session.request)
 
@@ -212,7 +253,7 @@ class UpdateGuiTests(unittest.TestCase):
                     handle = kernel.CreateFileW(str(session.request), 0x80000000, 0, None, 3, 0, None)
                     self.assertNotEqual(handle, wintypes.HANDLE(-1).value)
                     observed = []
-                    original = Path.read_text if operation == 'read' else os.replace
+                    original = update_gui._read_windows_text if operation == 'read' else os.replace
                     def attempt(*args, **kwargs):
                         nonlocal handle
                         try:
@@ -223,7 +264,15 @@ class UpdateGuiTests(unittest.TestCase):
                             handle = None
                             raise
                     try:
-                        target, name = (Path, 'read_text') if operation == 'read' else (os, 'replace')
+                        if operation == 'read':
+                            # CPython's CRT-backed read reports errno only. Keep
+                            # the exclusive handle until the native fallback has
+                            # independently observed its own sharing violation.
+                            with self.assertRaises(PermissionError) as crt_failure:
+                                session.request.read_text(encoding='utf-8')
+                            self.assertEqual(crt_failure.exception.errno, 13)
+                            self.assertIsNone(getattr(crt_failure.exception, 'winerror', None))
+                        target, name = (update_gui, '_read_windows_text') if operation == 'read' else (os, 'replace')
                         with patch.object(target, name, attempt):
                             if operation == 'read':
                                 self.assertEqual(session._read(session.request), {'phase': 'prepare'})

@@ -238,7 +238,9 @@ class UpdateRuntimeTests(unittest.TestCase):
             with GuiSession(root, first, timeout=1, poll=.01) as owner, \
                     GuiSession(root, second, timeout=1, poll=.01):
                 runtime.gui_session = owner
-                with patch.object(Path, 'read_text', read):
+                with patch.object(Path, 'read_text', read), \
+                        patch('shaq_daily_oracle.update_gui._read_windows_text',
+                              side_effect=PermissionError(13, 'synthetic permanent native acknowledgement denial')):
                     with self.assertRaises(PermissionError): runtime.apply()
                 self.assertEqual(applied, [])
                 self.assertFalse(first.closed or second.closed)
