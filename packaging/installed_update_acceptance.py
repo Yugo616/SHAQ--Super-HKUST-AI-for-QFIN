@@ -31,6 +31,31 @@ class FaultHandler(http.server.SimpleHTTPRequestHandler):
         super().do_GET()
 
 
+def transition_feed(feed, version):
+    assets=[asset for asset in feed['Assets'] if asset['Version']==version]
+    if not any(asset['Type']=='Full' for asset in assets):
+        raise ValueError('Missing transition full package: '+version)
+    return {**feed,'Assets':assets}
+
+
+def verify_cache(cache, current):
+    files=sorted(path.name for path in cache.glob('*.nupkg'))
+    if files!=[current]:raise RuntimeError('Native cache retained obsolete packages: '+str(files))
+    return files
+
+
+def verify_program_copies(installed, system):
+    if system=='darwin':
+        copies=sorted(path.name for path in installed.parent.glob('*.app'))
+        expected=[installed.name]
+    else:
+        copies=sorted(path.name for path in installed.iterdir()
+                      if path.is_dir() and (path.name=='current' or path.name.startswith('app-')))
+        expected=['current']
+    if copies!=expected:raise RuntimeError('Native install retained obsolete program copies: '+str(copies))
+    return copies
+
+
 def native_download_faults(root,feed,installed,configuration):
     """Real SDK/download/native patch, outside the full-app GUI acceptance."""
     import velopack
@@ -71,6 +96,7 @@ def native_download_faults(root,feed,installed,configuration):
 def main():
     parser=argparse.ArgumentParser()
     parser.add_argument('--bridge-version')
+    parser.add_argument('--prior-version')
     parser.add_argument('--target-version')
     parser.add_argument('--reuse-payloads',action='store_true')
     args=parser.parse_args()
@@ -90,6 +116,7 @@ def main():
         if result.returncode:raise RuntimeError(label+' failed; see retained log')
     tools=json.loads((project/'packaging/updater-toolchain.json').read_text())
     args.bridge_version=args.bridge_version or tools['acceptance_bridge_version']
+    args.prior_version=args.prior_version or tools['acceptance_prior_version']
     args.target_version=args.target_version or tools['candidate_version']
     updates=json.loads((project/'config/software-updates.json').read_text())
     key=platform.system()+'/'+platform.machine().lower()
@@ -97,14 +124,14 @@ def main():
     feed=root/'feed'
     app_name='SHAQ Daily Oracle Lab'
     try:
-        for stage,version in (('bridge',args.bridge_version),('candidate',args.target_version)):
+        for stage,version in (('prior',args.prior_version),('bridge',args.bridge_version),('candidate',args.target_version)):
             payload=project/'dist'/stage
             if not args.reuse_payloads:
                 run(stage+'-build',[sys.executable,project/'packaging/build_desktop.py','--output',payload,'--version',version])
             app=payload/(app_name+('.app' if sys.platform=='darwin' else ''))
             run(stage+'-audit',[sys.executable,project/'packaging/audit_payload.py',app,'--output',output/(stage+'-audit.json')])
             run(stage+'-pack',[sys.executable,project/'packaging/build_desktop.py','--manage-existing',app,'--output',feed,'--version',version])
-            if stage=='bridge':
+            if stage=='prior':
                 native=feed/(updates['package_id']+'-'+channel+'-Portable.zip') if sys.platform=='darwin' else feed/'SHAQ-Daily-Oracle-Lab-Windows-x64-Setup.exe'
                 bridge_package=root/native.name
                 shutil.copy2(native,bridge_package)
@@ -123,21 +150,49 @@ def main():
             run('bridge-install',[bridge_package,'--silent','--installto',installed])
             executable=installed/'current'/(app_name+'.exe')
         cache=root/'packages';cache.mkdir()
-        full=next(feed.glob('*-'+args.bridge_version+'-*-full.nupkg'))
+        full=next(feed.glob('*-'+args.prior_version+'-*-full.nupkg'))
         shutil.copy2(full,cache/full.name)
         handler=functools.partial(FaultHandler,directory=str(feed))
         server=http.server.ThreadingHTTPServer(('127.0.0.1',0),handler)
         threading.Thread(target=server.serve_forever,daemon=True).start()
-        config={'bridge_version':args.bridge_version,'target_version':args.target_version,'package_id':updates['package_id'],
-                'channel':channel,'feed_url':f'http://127.0.0.1:{server.server_port}/'}
-        configuration=root/'acceptance.json';configuration.write_text(json.dumps(config))
-        run('installed-bridge',[executable,'--update-smoke',configuration],timeout=180)
-        deadline=time.monotonic()+180
-        while time.monotonic()<deadline and not (root/'target-result.json').exists():time.sleep(.2)
-        target=json.loads((root/'target-result.json').read_text())
-        if target['status']!='passed':raise RuntimeError('Installed target GUI failed: '+str(target))
+        from shaq_daily_oracle.update_smoke import wait_event,process_running
+        from shaq_daily_oracle.settings import _atomic_json
+        manifest=feed/('releases.'+channel+'.json')
+        complete_feed=json.loads(manifest.read_text())
+        transitions=[]
+        for number,(old,new) in enumerate(((args.prior_version,args.bridge_version),(args.bridge_version,args.target_version)),1):
+            selected=transition_feed(complete_feed,new)
+            _atomic_json(manifest,selected)
+            current=next(asset['FileName'] for asset in selected['Assets'] if asset['Type']=='Full')
+            # Seed only recognized updater-owned package names; the actual SDK
+            # owns cleanup. Never delete cache files from the acceptance driver.
+            obsolete=[]
+            for version in ((args.prior_version,) if number>1 else ()):
+                stale=next(feed.glob('*-'+version+'-*-full.nupkg'))
+                shutil.copy2(stale,cache/stale.name);obsolete.append(stale.name)
+            config={'bridge_version':old,'target_version':new,'package_id':updates['package_id'],
+                    'channel':channel,'feed_url':f'http://127.0.0.1:{server.server_port}/',
+                    'events_directory':'events-'+str(number)}
+            configuration=root/('acceptance-'+str(number)+'.json');_atomic_json(configuration,config)
+            events=root/config['events_directory']
+            run('installed-bridge-'+str(number),[executable,'--update-smoke',configuration],timeout=300)
+            health=wait_event(events/'target-health.json',timeout=180)
+            time.sleep(2)
+            if not process_running(health['pid']):raise RuntimeError('Target GUI exited after health')
+            _atomic_json(events/'close-target.json',{'status':'passed'})
+            target=wait_event(events/'target-result.json',timeout=60)
+            if target['status']!='passed':raise RuntimeError('Installed target GUI failed: '+str(target))
+            deadline=time.monotonic()+30
+            while process_running(health['pid']) and time.monotonic()<deadline:time.sleep(.1)
+            if process_running(health['pid']):raise RuntimeError('Target acceptance GUI did not close')
+            cached=verify_cache(cache,current)
+            copies=verify_program_copies(installed,sys.platform)
+            peer=wait_event(events/'peer-result.json')
+            if not peer.get('cooperatively_closed'):raise RuntimeError('Missing cooperative second GUI close')
+            transitions.append({'from':old,'to':new,'target':target,'peer':peer,
+                                'seeded_obsolete':obsolete,'cache_files':cached,'program_copies':copies,'events':str(events)})
         run('installed-replay',[executable,'--update-smoke',configuration,'--update-stage','replay'],timeout=120)
-        replay=json.loads((root/'replay-result.json').read_text())
+        replay=wait_event(events/'replay-result.json')
         if replay['status']!='passed':raise RuntimeError('Installed restart/replay failed')
         run('installed-audit',[sys.executable,project/'packaging/audit_payload.py',installed,'--output',output/'installed-audit.json'])
         faults=native_download_faults(root,feed,installed,configuration)
@@ -153,12 +208,14 @@ def main():
             assets.append({'name':file.name,'bytes':file.stat().st_size,'sha256':digest})
             shutil.copy2(file,output/file.name)
         shutil.copy2(feed/('releases.'+channel+'.json'),output/('releases.'+channel+'.json'))
-        result={'status':'passed','platform':key,'root':str(root),'stages':reports,'assets':assets,'target':target,'replay':replay,
+        result={'status':'passed','platform':key,'root':str(root),'stages':reports,'assets':assets,'target':target,'replay':replay,'transitions':transitions,
                 'uninstalled':True,'native_sdk_download_faults':faults,'cache_files':sorted(p.name for p in cache.glob('*.nupkg')),
-                'limitations':['explicit isolated App.run bypass','deterministic model substitute','one native upgrade, not ten successive upgrades']}
+                'limitations':['explicit isolated App.run bypass','deterministic model substitute','two native transitions plus seeded stale cache; not a ten-version soak test']}
     except Exception as exc:
         result={'status':'failed','platform':key,'root':str(root),'stages':reports,'error':str(exc)}
     for file in root.glob('*-result.json'):shutil.copy2(file,output/file.name)
+    for directory in root.glob('events-*'):
+        shutil.copytree(directory,output/directory.name,dirs_exist_ok=True)
     (output/'acceptance.json').write_text(json.dumps(result,indent=2))
     print(json.dumps(result),flush=True)
     return 0 if result['status']=='passed' else 2

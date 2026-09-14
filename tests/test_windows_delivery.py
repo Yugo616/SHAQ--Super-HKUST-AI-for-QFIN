@@ -50,6 +50,9 @@ class WindowsDeliveryTests(unittest.TestCase):
                 if stage == 'uninstall':
                     self.assertEqual(Path(args[0]).name,'Update.exe')
                     self.assertIn('uninstall',args)
+                if stage in ('installed-smoke','installed-gui'):
+                    self.assertEqual(Path(args[0]).parent.name, 'current',
+                                     'Wait for the real GUI executable, not the detached root launcher')
                 workspace = root / 'fresh stage'
                 if stage == 'build-app':
                     target = workspace / 'payload/SHAQ Daily Oracle Lab/SHAQ Daily Oracle Lab.exe'
@@ -61,6 +64,8 @@ class WindowsDeliveryTests(unittest.TestCase):
                     target.write_bytes(b'installer')
                 if stage == 'install':
                     (workspace / 'installed').mkdir()
+                    (workspace / 'installed/current').mkdir()
+                    (workspace / 'installed/current/SHAQ Daily Oracle Lab.exe').write_bytes(b'app')
                     (workspace / 'installed/SHAQ Daily Oracle Lab.exe').write_bytes(b'app')
                     (workspace / 'installed/Update.exe').write_bytes(b'uninstaller')
                 if '--smoke-output' in args:
@@ -72,8 +77,9 @@ class WindowsDeliveryTests(unittest.TestCase):
                 if '--output' in args and stage not in ('build-app','compile-installer'):
                     Path(args[args.index('--output') + 1]).write_text(json.dumps({'status':'passed'}), encoding='utf-8')
                 if stage == 'uninstall':
-                    for path in (workspace / 'installed').iterdir():
+                    for path in (workspace / 'installed').rglob('*.exe'):
                         path.unlink()
+                    (workspace / 'installed/current').rmdir()
                     (workspace / 'installed').rmdir()
                 class Process:
                     returncode = 2 if stage in failed_stages else 0

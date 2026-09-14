@@ -59,7 +59,7 @@ class ResultRefreshTests(unittest.TestCase):
                 self.assertEqual(started["operation_id"], competing["operation_id"])
                 release.set()
                 completed = self.wait_status(first, {"complete", "partial_failure", "failed"})
-            self.assertEqual(completed["status"], "complete")
+            self.assertEqual(completed["status"], "complete", completed)
 
     def test_auto_honors_fifteen_minute_cadence_but_manual_can_retry(self):
         with tempfile.TemporaryDirectory() as name:

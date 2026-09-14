@@ -138,7 +138,9 @@ def validate_delivery(root, workspace, diagnostic, compiler, upstream_failed=Fal
     executable = payload / (APP + '.exe')
     installer = workspace / 'installer' / INSTALLER
     installed = workspace / 'installed'
-    installed_exe = installed / (APP + '.exe')
+    # The Velopack root launcher detaches. Waiting for it can observe exit 0
+    # before smoke evidence exists; wait for the actual installed process.
+    installed_exe = installed / 'current' / (APP + '.exe')
     stages = [{'name': 'source-and-native-checks', 'status': 'failed' if upstream_failed else 'passed'}]
     try:
         stages.append({'name': 'prerequisites', **windows_prerequisites(compiler)})

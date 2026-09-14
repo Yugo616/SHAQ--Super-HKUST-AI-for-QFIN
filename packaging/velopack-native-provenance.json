@@ -1,0 +1,20 @@
+{
+  "version": "1.2.0",
+  "source": "https://api.nuget.org/v3-flatcontainer/vpk/1.2.0/vpk.1.2.0.nupkg",
+  "archive_sha256": "c3a2d80cef556dcd0dbd27b3c0363c642d79842be6b6955de116d30bfe2f399f",
+  "repository_commit": "f2edcbcafb81da5b3c884aaea330e225ad91d8b6",
+  "exact_sha256": ["6849325f8fb57ff5d13497c984b9de82e6b5d46ddfbc857145012d104886287f"],
+  "launcher": {
+    "upstream_file": "vendor/stub.exe",
+    "upstream_sha256": "6737c74c3df7ab50e089112edd5fa8b67e37c31a55c54b469e6215840b343e31",
+    "machine": 332,
+    "entrypoint": 229617,
+    "sections": {
+      ".text": "a28afb163d359d681a5be82aa4db936c7c29cc7e63eb4d7d0f5c9dc079a1bd99",
+      ".rdata": "b0f7d2e86e9714a83d9c6f64347b891f337821b359d2429ae66f67f4de8e152f",
+      ".data": "0d1119266ab2f166eca9a6c169b5b49a684bc99f1bc9e2984caae3dfc60da2f3",
+      ".fptable": "076a27c79e5ace2a3d47f9dd2e83e4ff6ea8872b3c2218f66c92b89b55f36560",
+      ".reloc": "ff831aabbb26ef8145e98392fa02ac2005b63b83f0aa2761a65545376fdb68c9"
+    }
+  }
+}

@@ -57,7 +57,54 @@ def verify_methods(root):
     return failures
 
 
-def contains_private_path(data, home, checkout, hosted_runner=False, verified_upstream=False):
+def native_vendor_pins():
+    directory=Path(__file__).resolve().parent
+    pins=json.loads((directory/'velopack-native-provenance.json').read_text(encoding='utf-8'))
+    toolchain=json.loads((directory/'updater-toolchain.json').read_text(encoding='utf-8'))
+    if pins['version']!=toolchain['velopack_version']:
+        raise ValueError('Native vendor provenance does not match pinned toolchain')
+    return pins
+
+
+def native_vendor_identity(data, pins):
+    """Prove upstream bytes, allowing only the launcher's public PE resources.
+
+    This is source-path provenance, not a code signature or authenticity claim.
+    Every byte, including resources/headers, still goes through the privacy scan.
+    """
+    if hashlib.sha256(data).hexdigest() in pins.get('exact_sha256',[]):return True
+    launcher=pins.get('launcher')
+    if not launcher or not data.startswith(b'MZ'):return False
+    import struct
+    try:
+        pe=struct.unpack_from('<I',data,0x3c)[0]
+        if data[pe:pe+4]!=b'PE\0\0':return False
+        machine,count=struct.unpack_from('<HH',data,pe+4)
+        size=struct.unpack_from('<H',data,pe+20)[0]
+        optional=pe+24
+        if (machine!=launcher['machine'] or count not in (len(launcher['sections']),len(launcher['sections'])+1)
+                or size<20 or struct.unpack_from('<H',data,optional)[0] not in (0x10b,0x20b)
+                or struct.unpack_from('<I',data,optional+16)[0]!=launcher['entrypoint']):return False
+        table=optional+size
+        if table+count*40>len(data):return False
+        sections={};ranges=[];seen=set()
+        for index in range(count):
+            section=table+index*40
+            name=data[section:section+8].rstrip(b'\0').decode('ascii')
+            length,offset=struct.unpack_from('<II',data,section+16)
+            flags=struct.unpack_from('<I',data,section+36)[0]
+            if (name in seen or offset<table+count*40 or offset+length>len(data)
+                    or any(offset<end and offset+length>start for start,end in ranges)):return False
+            seen.add(name);ranges.append((offset,offset+length))
+            if name=='.rsrc':
+                if flags & 0x20000000:return False  # Resources cannot add executable code.
+            else:sections[name]=hashlib.sha256(data[offset:offset+length]).hexdigest()
+        return sections==launcher['sections']
+    except (ValueError,KeyError,struct.error,UnicodeDecodeError):
+        return False
+
+
+def contains_private_path(data, home, checkout, hosted_runner=False, verified_upstream=False, verified_native=False):
     # CMake and native compilers use both Windows slash spellings.
     data = data.replace(b'\\', b'/')
     home, checkout = home.replace('\\', '/'), checkout.replace('\\', '/')
@@ -87,7 +134,11 @@ def contains_private_path(data, home, checkout, hosted_runner=False, verified_up
                         re.match(rb'/appdata/local/temp/tmp[a-z0-9_]+/mod\r?\n', suffix))
             proven_build_source = (verified_upstream and suffix.startswith(b'/appdata/local/temp/') and
                                    b'/../' not in suffix.split(b'\x00', 1)[0])
-            upstream = source or settings or proven_build_source or (cargo and b'/../' not in suffix.split(b'\x00', 1)[0])
+            proven_rust_source = (verified_native and re.match(
+                rb'/\.rustup/toolchains/nightly-x86_64-pc-windows-msvc/lib/rustlib/src/rust/library/'
+                rb'(?:(?:[a-z0-9_-]+/)*[a-z0-9_-]+|std/src/\.\./\.\./backtrace/src/(?:dbghelp|symbolize/mod))'
+                rb'\.rs(?=[\x00\r\n]|$)',suffix))
+            upstream = source or settings or proven_build_source or proven_rust_source or (cargo and b'/../' not in suffix.split(b'\x00', 1)[0])
         if not upstream:
             return True
     return False
@@ -98,6 +149,7 @@ def audit(root):
     native = []
     upstream_paths = []
     proven_files = {}
+    native_pins=native_vendor_pins()
     for manifest in root.rglob('third-party/upstream-path-provenance.json'):
         for proof in json.loads(manifest.read_text(encoding='utf-8')):
             for name, digest in proof['files'].items():
@@ -111,10 +163,11 @@ def audit(root):
             magic = stream.read(4)
         data = path.read_bytes()
         verified_upstream = hashlib.sha256(data).hexdigest() in proven_files.get(path.name, set())
-        if contains_private_path(data, home, checkout, hosted_runner, verified_upstream):
+        verified_native=magic[:2]==b'MZ' and native_vendor_identity(data,native_pins)
+        if contains_private_path(data, home, checkout, hosted_runner, verified_upstream, verified_native):
             # User names in debug/source paths are private, even if linking is relocatable.
             failures.append(f'private build/user path: {path.relative_to(root).as_posix()}')
-        elif verified_upstream or b'/Users/' in data or b'C:\\Users\\runneradmin' in data:
+        elif verified_upstream or verified_native or b'/Users/' in data or b'C:\\Users\\runneradmin' in data:
             upstream_paths.append(path.relative_to(root).as_posix())
         if sys.platform == 'darwin' and magic in (b'\xcf\xfa\xed\xfe', b'\xca\xfe\xba\xbe', b'\xfe\xed\xfa\xcf'):
             output = subprocess.check_output(['otool', '-L', str(path)], text=True)
