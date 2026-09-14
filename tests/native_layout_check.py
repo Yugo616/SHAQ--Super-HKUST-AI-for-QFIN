@@ -5,6 +5,7 @@ leaking onto checkboxes, off-screen controls and narrow-window overflow.
 """
 import argparse
 import json
+import os
 import tempfile
 import time
 import subprocess
@@ -14,6 +15,7 @@ from unittest.mock import patch
 
 import webview
 from shaq_daily_oracle.desktop import launch_desktop
+from native_geometry import capture_geometry, resize_css_width
 
 
 def main():
@@ -23,7 +25,9 @@ def main():
     parser.add_argument('--screenshots', type=Path)
     args = parser.parse_args()
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    report = {'checks': [], 'failures': []}
+    report = {'checks': [], 'failures': [], 'geometry': []}
+    report['application_sha'] = os.environ.get('SHAQ_LAYOUT_APPLICATION_SHA')
+    report['validation_sha'] = os.environ.get('SHAQ_LAYOUT_VALIDATION_SHA')
     original_start = webview.start
 
     def start(_existing_inspector, **kwargs):
@@ -62,10 +66,9 @@ def main():
         def inspect():
             try:
                 wait("Boolean(document.querySelector('#run .version-check'))")
+                report['initial_geometry'] = capture_geometry(window)
                 for width in (1320, 980):
-                    window.resize(width, 760)
-                    # Windows counts its native frame in the requested width.
-                    wait(f'innerWidth <= {width} && innerWidth >= {width - 40}')
+                    resize_css_width(window, width, report['geometry'])
                     for page in ('run', 'editor', 'history'):
                         window.evaluate_js(f"document.querySelector('.nav[data-page={page}]').click()")
                         wait(f"Boolean(document.querySelector('#{page}.active').textContent.trim())")

@@ -5,8 +5,17 @@ on:
       target:
         description: Complete acceptance for Windows, macOS, or all platforms at this commit
         type: choice
-        options: [windows, windows-check, macos, macos-arm64, macos-intel, all]
+        options: [windows, windows-check, windows-layout, macos, macos-arm64, macos-intel, all]
         default: windows
+      application_ref:
+        description: Exact application commit for dependency-only Windows layout diagnostics
+        type: string
+      native_run_id:
+        description: Official native workflow run providing diagnostic dependency wheels
+        type: string
+      native_artifact_id:
+        description: Official Windows artifact ID from that run
+        type: string
   push:
     tags-ignore:
       - "**"
@@ -50,8 +59,72 @@ jobs:
         with:
           name: SHAQ-Windows-fast-check
           path: dist/diagnostic/**
+  windows-layout-diagnostic:
+    if: inputs.target == 'windows-layout'
+    runs-on: windows-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    env:
+      PYTHONUTF8: '1'
+      GH_TOKEN: ${{ github.token }}
+      APPLICATION_REF: ${{ inputs.application_ref }}
+      NATIVE_RUN_ID: ${{ inputs.native_run_id }}
+      NATIVE_ARTIFACT_ID: ${{ inputs.native_artifact_id }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Require explicit diagnostic source identities
+        shell: pwsh
+        run: |
+          if ($env:APPLICATION_REF -notmatch '^[a-fA-F0-9]{40}$' -or $env:NATIVE_RUN_ID -notmatch '^\d+$' -or $env:NATIVE_ARTIFACT_ID -notmatch '^\d+$') { throw 'Explicit full application SHA and official run/artifact IDs are required' }
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.application_ref }}
+          path: application
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Read official artifact and workflow provenance
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist/diagnostic | Out-Null
+          gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:NATIVE_RUN_ID" > dist/diagnostic/native-run.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          gh api "repos/$env:GITHUB_REPOSITORY/actions/artifacts/$env:NATIVE_ARTIFACT_ID" > dist/diagnostic/native-artifact.json
+          exit $LASTEXITCODE
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ inputs.native_artifact_id }}
+          run-id: ${{ inputs.native_run_id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/native-layout-dependencies
+          merge-multiple: true
+      - name: Verify dependency-only reuse and install locked binary wheels
+        shell: pwsh
+        run: |
+          python packaging/windows_layout_dependencies.py --application "$PWD/application" --artifact-root "$env:RUNNER_TEMP/native-layout-dependencies" --run-metadata dist/diagnostic/native-run.json --artifact-metadata dist/diagnostic/native-artifact.json --run-id $env:NATIVE_RUN_ID --artifact-id $env:NATIVE_ARTIFACT_ID --output dist/diagnostic/dependency-reuse.json 2>&1 | Tee-Object -FilePath dist/diagnostic/dependency-reuse.log
+          exit $LASTEXITCODE
+      - name: Run external geometry harness against unchanged application source
+        shell: pwsh
+        run: |
+          $validationRoot = "$PWD"
+          $env:PYTHONPATH = "$PWD/application/src"
+          $env:SHAQ_LAYOUT_APPLICATION_SHA = (git -C application rev-parse HEAD)
+          $env:SHAQ_LAYOUT_VALIDATION_SHA = $env:GITHUB_SHA
+          Set-Location application
+          python "$validationRoot/tests/native_layout_check.py" --output "$validationRoot/dist/diagnostic/desktop-layout.json" 2>&1 | Tee-Object -FilePath "$validationRoot/dist/diagnostic/desktop-layout.log"
+          $layoutExit = $LASTEXITCODE
+          if (git status --porcelain) { throw 'Diagnostic modified the frozen application checkout' }
+          exit $layoutExit
+      - name: Retain geometry and dependency provenance even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: SHAQ-Windows-layout-diagnostic
+          path: dist/diagnostic/**
   native:
-    if: inputs.target != 'windows-check'
+    if: inputs.target != 'windows-check' && inputs.target != 'windows-layout'
     env:
       PYTHONUTF8: '1'
     strategy:
@@ -180,4 +253,6 @@ jobs:
             build/license-sources/*.tar.gz
             build/native-dependencies/sources/*.tar.gz
             build/native-dependencies/wheel-sha256.json
+            build/native-dependencies/mingw-toolchain.json
+            build/native-dependencies/hdf5-diagnostic-map.json
             build/native-dependencies/wheels/*.whl

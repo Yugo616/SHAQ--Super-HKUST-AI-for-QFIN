@@ -20,6 +20,18 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class NativePackagingTests(unittest.TestCase):
+    def test_layout_diagnostic_never_schedules_native_compilation_job(self):
+        import re
+        conditions = dict(re.findall(r'^  ([\w-]+):\n    if: ([^\n]+)',
+            (ROOT / '.github/workflows/build-desktop.yml').read_text(), re.M))
+        for target, expected in [('windows-layout', ['windows-layout-diagnostic']),
+                                 ('windows-check', ['windows-research-check']), ('windows', ['native'])]:
+            with self.subTest(target=target):
+                script = 'const inputs={target:process.argv[2]};console.log(JSON.stringify([' + ','.join(
+                    '('+condition+') ? '+json.dumps(name)+' : null' for name, condition in conditions.items()) + '].filter(Boolean)));'
+                result = subprocess.run(['node','-',target],input=script,text=True,capture_output=True,check=True)
+                self.assertEqual(json.loads(result.stdout),expected)
+
     def test_release_tags_never_trigger_the_three_platform_push_matrix(self):
         lines = (ROOT / '.github/workflows/build-desktop.yml').read_text().splitlines()
         push = lines.index('  push:')
