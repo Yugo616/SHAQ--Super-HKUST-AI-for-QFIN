@@ -6,8 +6,10 @@ SHAQ Daily Oracle Lab is a local comparative-research workbench. Its research mo
 
 Download the installer for your computer from the platform page. Use only the packages actually listed there; each architecture has its own acceptance record:
 
-- [Windows 10/11 x64 installer](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.1-windows)
-- [macOS 15+ Apple Silicon and Intel disk images](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.0-macos)
+- [Windows 10/11 x64 0.7.2 installer](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.2-windows)
+- [macOS 15+ Apple Silicon and Intel 0.7.2 disk images](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.2-macos)
+
+0.7.2 is available for a platform only when its matching installer, checksum and acceptance record are present. If absent, use the [legacy fallback downloads](software-updates.md#platform-downloads-and-acceptance); a source page alone is not a release announcement.
 
 On Mac, choose the disk image matching the computer's processor. On Windows, WebView2 Evergreen Runtime is required; the installer identifies a missing runtime before installation. Python and Git are not end-user prerequisites. The GitHub pages mark these builds as prereleases, and they are not commercially signed or notarized, so review the release page, checksum, and operating-system warning before first launch.
 

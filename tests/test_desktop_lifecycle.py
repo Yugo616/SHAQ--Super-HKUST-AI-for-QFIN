@@ -7,6 +7,31 @@ from shaq_daily_oracle.desktop import desktop_api
 
 
 class DesktopLifecycleTests(unittest.TestCase):
+    def test_shared_smoke_fixture_publishes_real_restart_confirmation(self):
+        import json
+        from test_research_lab_foundation import ResearchLabFoundationTests
+        from shaq_daily_oracle.desktop import DesktopBridge, _bind_gui_smoke_fixture
+        from shaq_daily_oracle.app_paths import application_version
+        from shaq_daily_oracle.update_admission import AdmissionGate
+        with tempfile.TemporaryDirectory() as name:
+            paths = ResearchLabFoundationTests().paths(Path(name))
+            version = application_version(paths.package_root)
+            gate = AdmissionGate(paths.data_root)
+            with gate.install():
+                gate.mark_installing(version)
+            intent = json.loads((gate.root / 'installing.json').read_text())
+            with gate.target_startup(version):
+                bridge = DesktopBridge(paths)
+                # As in installed-update acceptance, disable only external checks.
+                bridge._software_updater().start_automatic_checks = lambda: None
+                _bind_gui_smoke_fixture(bridge, {}, {})
+                self.assertTrue(desktop_api(bridge).confirm_desktop_ready()['ok'])
+                self.assertFalse((gate.root / 'installing.json').exists(),
+                                 'shared fixture swallowed real GUI ready confirmation')
+            receipt = json.loads((paths.data_root / 'software-update-history.json').read_text())
+            self.assertEqual(receipt['version'], version)
+            self.assertEqual(receipt['installation_id'], intent['installation_id'])
+
     def test_api_retains_bound_method_discovery_and_rpc_parameter_names(self):
         import inspect
         from shaq_daily_oracle.desktop import GuiRequestLifetime

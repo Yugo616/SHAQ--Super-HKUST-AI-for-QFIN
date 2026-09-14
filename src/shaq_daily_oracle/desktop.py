@@ -571,10 +571,6 @@ def _bind_gui_smoke_fixture(bridge, fixture_state, fixture_detail):
     def fixture_state_api(self):
         return {"ok": True, "value": fixture_state}
 
-    def fixture_ready_api(self):
-        # Disposable fixtures must never launch persistent updater workers.
-        return {'ok': True, 'value': {'ready': True}}
-
     def fixture_resume_api(self, batch_id):
         if batch_id != 'fixture-original-batch':
             return {'ok': False, 'error': 'fixture requires original frozen batch'}
@@ -633,7 +629,6 @@ def _bind_gui_smoke_fixture(bridge, fixture_state, fixture_detail):
             'message': 'fixture transfer complete; no remote writes'}]}
 
     bridge.get_lab_state = MethodType(fixture_state_api, bridge)
-    bridge.confirm_desktop_ready = MethodType(fixture_ready_api, bridge)
     bridge.resume_shadow_batch = MethodType(fixture_resume_api, bridge)
     bridge.get_shadow_batch = MethodType(fixture_batch_api, bridge)
     bridge.refresh_prices_and_results = MethodType(fixture_refresh_api, bridge)
@@ -652,6 +647,9 @@ def launch_desktop(*, smoke_output: Path | None = None) -> int:
     temporary = tempfile.TemporaryDirectory(prefix='shaq-native-gui-') if smoke_output else None
     bridge = DesktopBridge(isolated_smoke_paths(Path(temporary.name)) if temporary else None)
     if temporary:
+        # Keep real GUI-ready confirmation for shared installed-update fixtures;
+        # only disposable windows suppress persistent automatic check workers.
+        bridge._software_updater().start_automatic_checks = lambda: None
         from .lab_smoke import run_lab_smoke
         fixture = run_lab_smoke(
             package_root=bridge.paths.package_root,

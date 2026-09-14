@@ -181,15 +181,33 @@ class DeadlineTests(unittest.TestCase):
         from shaq_daily_oracle.background_process import background_process_options
         with tempfile.TemporaryDirectory() as name:
             target=Path(name)/'escaped'
-            child='import sys,time; time.sleep(2); open(sys.argv[1],"w").write("orphaned")'
+            child=('import sys,time; print("held-stdout",flush=True); '
+                   'print("held-stderr",file=sys.stderr,flush=True); '
+                   'open(sys.argv[1]+".started","w").write("child started"); '
+                   'time.sleep(2); open(sys.argv[1],"w").write("orphaned")')
             parent=('import subprocess,sys; subprocess.Popen([sys.executable,"-c",sys.argv[1],sys.argv[2]],'
+                    'stdout=sys.stdout,stderr=sys.stderr,'
                     'creationflags=0x08000000 if sys.platform=="win32" else 0)')
+            # Prove this exact fixture leaves captured pipes open after its
+            # parent exits. Windows close_fds does not inherit those handles
+            # without the explicit standard-stream redirection above.
+            control=subprocess.Popen([sys.executable,'-c',parent,child,str(Path(name)/'control')],
+                stdout=subprocess.PIPE,stderr=subprocess.PIPE,**background_process_options())
+            try:
+                self.assertEqual(control.wait(timeout=1),0,'fixture parent did not exit early')
+                with self.assertRaises(subprocess.TimeoutExpired):
+                    control.communicate(timeout=.1)
+            finally:
+                output,errors=control.communicate(timeout=4)
+            self.assertEqual(output.strip(),b'held-stdout')
+            self.assertEqual(errors.strip(),b'held-stderr')
             unrelated=subprocess.Popen([sys.executable,'-c','import time; time.sleep(10)'],**background_process_options())
             try:
                 started=time.monotonic()
                 with self.assertRaises(subprocess.TimeoutExpired):
                     run_model_process([sys.executable,'-c',parent,child,str(target)],timeout=.4,capture_output=True)
                 self.assertLess(time.monotonic()-started,1.5)
+                self.assertTrue(Path(str(target)+'.started').is_file(), 'owned descendant did not start')
                 self.assertIsNone(unrelated.poll())
                 time.sleep(2)
                 self.assertFalse(target.exists(),'orphaned descendant survived the original process deadline')

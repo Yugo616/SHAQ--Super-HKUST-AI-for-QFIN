@@ -4,7 +4,7 @@ Application updates and research-method updates are separate. **0.7.0 is the fir
 
 ## Platform downloads and acceptance
 
-0.7.2 is a candidate, not yet an accepted release. Planned pages: [Windows 0.7.2](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.2-windows), [Apple Silicon / Intel Mac 0.7.2](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.2-macos). Publication requires separate native acceptance for each architecture from the same frozen source, including the actual public Windows 0.7.1 and Mac 0.7.0 upgrade paths. Until then, the published downloads are:
+Primary 0.7.2 downloads: [Windows](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.2-windows), [Apple Silicon / Intel Mac](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.2-macos). Each is available only once its matching packages, checksums and acceptance records appear. Publication requires separate native acceptance for each architecture from the same frozen source, including the actual public Windows 0.7.1 and Mac 0.7.0 upgrade paths. Legacy fallback downloads, not 0.7.2:
 
 - [0.7.1 Windows 10/11 x64 release page](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.1-windows)
 - [0.7.0 macOS 15+ release page, separate Apple Silicon and Intel packages](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.0-macos)
@@ -35,7 +35,7 @@ Manual route: **Check → Download → Update and Restart**. Downloading alone d
 
 The dialog shows current/target version, last check and last successful update when recorded. An update is successful only after the target version has launched and passed native GUI health confirmation. Download completion, a launched installer or a background process alone is not success. If replacement or target startup fails, reopen or reinstall the target full package without deleting user data. Do not assume the old executable remains usable.
 
-## Reliability controls in the 0.7.2 candidate
+## Reliability controls in 0.7.2
 
 In **Connection Settings → Advanced call settings** (`连接设置 → 高级调用设置`), the default total deadline is 600 seconds per model call and transient retry count is 1. Authentication and schema failures are not automatically retried. These are execution controls, not a new model identity or method. The provider collection worker has its own bounded lifetime and closes its owned resources; it does not substitute sources or alter official prices.
 
