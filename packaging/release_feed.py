@@ -17,6 +17,7 @@ from shaq_daily_oracle.update_native import verify_cached
 RECEIPT_NAME = 'delta-base.{channel}.json'
 RELEASES_PER_PAGE = 100
 HTTP_TIMEOUT_SECONDS = 60
+WINDOWS_INSTALLER = 'SHAQ-Daily-Oracle-Lab-Windows-x64-Setup.exe'
 
 
 def prepare_public_base(root, output, version, system, machine, *, client=None):
@@ -74,7 +75,18 @@ def prepare_public_base(root, output, version, system, machine, *, client=None):
                 if (len(feeds) != 1 or feeds[0].get('browser_download_url') != base + feed_name or
                         row.get('html_url') != f'https://github.com/{repository}/releases/tag/{row["tag_name"]}'):
                     raise ValueError('Advertised channel feed does not belong to the official release')
-                candidates.append((Version(match[1]), row, base))
+                installer = None
+                if system == 'Windows':
+                    installers = [asset for asset in row.get('assets', []) if asset.get('name') == WINDOWS_INSTALLER]
+                    if len(installers) != 1:
+                        raise ValueError('Public Windows release has no unambiguous native installer')
+                    installer = installers[0]
+                    digest = str(installer.get('digest', ''))
+                    if (installer.get('browser_download_url') != base + WINDOWS_INSTALLER or
+                            type(installer.get('size')) is not int or installer['size'] <= 0 or
+                            not re.fullmatch(r'sha256:[A-Fa-f0-9]{64}', digest)):
+                        raise ValueError('Public Windows installer identity is invalid')
+                candidates.append((Version(match[1]), row, base, installer))
             if len(rows) < RELEASES_PER_PAGE:
                 break
             page += 1
@@ -82,7 +94,7 @@ def prepare_public_base(root, output, version, system, machine, *, client=None):
         with tempfile.TemporaryDirectory(prefix='shaq-public-base-', dir=output.parent) as directory:
             staged = Path(directory)
             if candidates:
-                prior, row, base = max(candidates, key=lambda item: item[0])
+                prior, row, base, installer = max(candidates, key=lambda item: item[0])
                 response = request.get(base + feed_name, follow_redirects=True)
                 response.raise_for_status()
                 feed = response.json()
@@ -117,6 +129,10 @@ def prepare_public_base(root, output, version, system, machine, *, client=None):
                 receipt.update(status='public-base', base_version=str(prior),
                                source_url=base + asset['FileName'], filename=asset['FileName'],
                                sha256=asset['SHA256'], size=asset['Size'])
+                if installer is not None:
+                    receipt.update(installer_source_url=installer['browser_download_url'],
+                                   installer_sha256=installer['digest'].split(':', 1)[1].lower(),
+                                   installer_size=installer['size'])
             (staged / RECEIPT_NAME.format(channel=channel)).write_text(json.dumps(receipt, indent=2), encoding='utf-8')
             output.mkdir(exist_ok=True)
             for path in staged.iterdir():

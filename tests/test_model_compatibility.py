@@ -319,7 +319,8 @@ class ModelCompatibilityTests(unittest.TestCase):
             profile_id="claude", protocol="claude-code", base_url="",
             model="subscription-default",
         )
-        alias = str(PureWindowsPath("C:/Users/李 小明/AppData/Local/Microsoft/WindowsApps/Claude.exe"))
+        alias = str(PureWindowsPath("C:/", "Users", "李 小明", "AppData", "Local",
+                                    "Microsoft", "WindowsApps", "Claude.exe"))
         with patch.object(sys, "platform", "win32"), patch.dict(
             os.environ, {}, clear=True
         ), patch.object(model_backends.shutil, "which", return_value=alias), patch.object(
@@ -514,6 +515,32 @@ class ModelCompatibilityTests(unittest.TestCase):
                 if isinstance(raised.exception.diagnostic, dict):
                     self.assertEqual(raised.exception.diagnostic["kind"], kind)
                 structured.assert_not_called()
+
+    def test_abnormal_auth_status_never_returns_cli_tokens_or_oauth_urls(self) -> None:
+        leaks = [
+            json.dumps({"access_token": "quoted-json-token", "url": "https://oauth.example/device"}),
+            'Open "https://oauth.example/device?code=oauth-secret-code" to continue',
+        ]
+        for protocol, output in (("claude-code", leaks[0]), ("codex-cli", leaks[1])):
+            profile = ModelProfile(profile_id="local", protocol=protocol, base_url="",
+                                   model="subscription-default")
+            completed = subprocess.CompletedProcess([], 7, output, output)
+            with self.subTest(protocol=protocol), patch.object(
+                model_backends, "_local_cli", return_value="local.exe"
+            ), patch.object(model_backends.subprocess, "run", return_value=completed), patch.object(
+                model_backends, "call_structured"
+            ) as structured:
+                with self.assertRaisesRegex(ModelBackendError, "登录状态异常") as raised:
+                    probe_model_profile(profile=profile, secret="")
+            message = str(raised.exception)
+            self.assertNotIn("quoted-json-token", message)
+            self.assertNotIn("oauth.example", message)
+            self.assertNotIn("oauth-secret-code", message)
+            self.assertEqual(raised.exception.diagnostic, {
+                "kind": "status_invalid", "protocol": protocol,
+                "stage": "authentication-status",
+            })
+            structured.assert_not_called()
 
     def test_codex_unsigned_status_offers_codex_login_without_model_call(self) -> None:
         profile = ModelProfile(

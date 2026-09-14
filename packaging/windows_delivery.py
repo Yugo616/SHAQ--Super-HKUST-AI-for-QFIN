@@ -166,6 +166,11 @@ def validate_delivery(root, workspace, diagnostic, compiler, upstream_failed=Fal
     stage('compile-installer', [python, root / 'packaging/build_desktop.py', '--manage-existing', payload,
           '--version', version, '--output', installer.parent, '--prepare-public-base'],
           600, requires=executable)
+    public_receipt = installer.parent / 'delta-base.win-x64-stable.json'
+    stage('public-base-update', [python, root / 'packaging/public_base_update_acceptance.py',
+          '--feed', installer.parent, '--target-version', version,
+          '--output', reports / 'public-base-update.json'],
+          600, reports / 'public-base-update.json', public_receipt)
     try:
         stage('install', [installer, '--silent', '--installto', installed,
               '--log', reports / 'install-velopack.log'], 180, requires=installer)

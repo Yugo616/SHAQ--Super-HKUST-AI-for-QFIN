@@ -240,7 +240,8 @@ const nodes={
  '#login-model':{dataset:{protocol:'claude-code'},textContent:'',classList:{toggle(){}}}
 };
 globalThis.q=selector=>nodes[selector]||={classList:{toggle(){}}};globalThis.qa=()=>[];
-const calls=[];globalThis.api=async(name,...args)=>{calls.push([name,...args]);throw new Error('用户已取消')};
+const calls=[];globalThis.api=async(name,...args)=>{calls.push([name,...args]);
+ const error=new Error('RAW OAuth output');error.diagnostic={kind:'login_failed',login_protocol:'claude-code'};throw error};
 await loginLocalModel();
 console.log(JSON.stringify({calls,status:nodes['#model-status'].dataset.status,
  message:nodes['#model-status'].textContent}));
@@ -249,6 +250,31 @@ console.log(JSON.stringify({calls,status:nodes['#model-status'].dataset.status,
         self.assertEqual(result['calls'][0][1], 'claude-code')
         self.assertEqual(result['status'], 'failed')
         self.assertIn('取消', result['message'])
+
+    def test_local_cli_failures_render_bounded_messages_without_changing_http_details(self):
+        result = self.node('connections.js', '''
+const cases={
+ missing:{kind:'executable_missing',protocol:'codex-cli'},
+ unusable:{kind:'executable_unusable',protocol:'claude-code'},
+ unsigned:{kind:'authentication',login_protocol:'codex-cli'},
+ invalid:{kind:'status_invalid',protocol:'claude-code'},
+ cancelled:{kind:'login_failed',login_protocol:'claude-code'},
+ unknownLocal:{login_protocol:'codex-cli'},
+ http:{status:401,provider_code:'invalid_api_key',provider_message:'denied',request_id:'req-safe'}
+};
+console.log(JSON.stringify(Object.fromEntries(Object.entries(cases).map(
+ ([name,value])=>[name,SHAQConnections.diagnosticMessage(value,'RAW CLI OUTPUT https://oauth.example?code=secret')]))));''')
+        self.assertIn('未找到', result['missing'])
+        self.assertIn('无法使用', result['unusable'])
+        self.assertIn('尚未登录', result['unsigned'])
+        self.assertIn('无法确认', result['invalid'])
+        self.assertIn('取消', result['cancelled'])
+        self.assertIn('本机模型连接失败', result['unknownLocal'])
+        for name in ('missing','unusable','unsigned','invalid','cancelled','unknownLocal'):
+            self.assertNotIn('oauth.example', result[name])
+            self.assertNotIn('secret', result[name])
+        self.assertEqual(result['http'],
+                         'HTTP 401 · 服务代码：invalid_api_key · 服务信息：denied · 请求编号：req-safe')
 
     def test_bridge_login_action_rejects_api_protocol_without_subprocess(self):
         from shaq_daily_oracle.desktop import DesktopBridge

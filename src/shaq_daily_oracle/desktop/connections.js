@@ -4,6 +4,19 @@ const providerDraftControllers=new WeakMap();
 const SHAQConnections = {
   diagnosticMessage(diagnostic, fallback) {
     if(!diagnostic)return fallback || '连接失败，请重新检测。';
+    const local=diagnostic.protocol||diagnostic.login_protocol;
+    if(local==='codex-cli'||local==='claude-code') {
+      const messages={
+        executable_missing:'未找到本机模型程序。请先安装后重新检测。',
+        executable_unusable:'本机模型程序无法使用。请重新安装或检查系统设置后重试。',
+        authentication:'本机模型尚未登录。请点击登录后重新检测。',
+        status_invalid:'无法确认本机模型登录状态。请重试或重新登录。',
+        timeout:'本机模型登录状态检查超时。请重试。',
+        login_timeout:'登录操作超时或已取消；原有连接保持不变。',
+        login_failed:'登录未完成或已取消；原有连接保持不变。'
+      };
+      return messages[diagnostic.kind]||'本机模型连接失败。请重新检测。';
+    }
     if(diagnostic.kind==='timeout')return '连接超时。请检查网络与服务地址后重新检测。';
     const parts=[diagnostic.status?`HTTP ${diagnostic.status}`:'请求失败'];
     if(diagnostic.provider_code)parts.push(`服务代码：${diagnostic.provider_code}`);
@@ -129,7 +142,7 @@ async function loginLocalModel() {
   } catch(error) {
     const diagnostic={...(error?.diagnostic||{}),login_protocol:protocol};
     showConnectionState({status:'failed',diagnostic,
-      message:SHAQConnections.diagnosticMessage(error?.diagnostic,error?.message)});
+      message:SHAQConnections.diagnosticMessage(diagnostic,error?.message)});
   }
 }
 

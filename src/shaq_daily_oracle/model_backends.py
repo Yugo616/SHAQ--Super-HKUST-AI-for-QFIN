@@ -926,9 +926,8 @@ def probe_model_profile(*, profile: ModelProfile, secret: str) -> dict[str, Any]
                             "login_protocol": profile.protocol},
             )
         if completed.returncode != 0:
-            detail = safe_model_error_summary(completed.stderr or completed.stdout)
             raise ModelBackendError(
-                f"本地模型登录状态检查失败：{detail}",
+                "本地模型登录状态异常；请重试或重新登录",
                 diagnostic={"kind": "status_invalid", "protocol": profile.protocol,
                             "stage": "authentication-status"},
             )

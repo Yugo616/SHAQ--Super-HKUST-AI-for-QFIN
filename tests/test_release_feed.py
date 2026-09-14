@@ -39,6 +39,10 @@ def release(version, channel=CHANNEL):
                draft=False, prerelease=True, assets=[
                    dict(name=feed_name, browser_download_url=base+feed_name),
                    dict(name=filename, browser_download_url=base+filename, size=11)])
+    if suffix == 'windows':
+        setup = 'SHAQ-Daily-Oracle-Lab-Windows-x64-Setup.exe'
+        row['assets'].append(dict(name=setup, browser_download_url=base+setup, size=12,
+                                  digest='sha256:'+hashlib.sha256(b'public setup').hexdigest()))
     return row, {base+feed_name: {'Assets': [asset]}, base+filename: b'public full'}
 
 
@@ -168,6 +172,9 @@ class ReleaseFeedTests(unittest.TestCase):
         )
         self.assertEqual(receipt['status'], 'public-base')
         self.assertEqual(receipt['base_version'], '0.7.0')
+        self.assertEqual(receipt['installer_sha256'], hashlib.sha256(b'public setup').hexdigest())
+        self.assertEqual(receipt['installer_size'], 12)
+        self.assertTrue(receipt['installer_source_url'].endswith('/SHAQ-Daily-Oracle-Lab-Windows-x64-Setup.exe'))
         self.assertIn('SHAQDailyOracleLab-0.7.0-win-x64-stable-full.nupkg', files)
         self.assertFalse(any(version in name for version in ('0.6.98', '0.6.99') for name in files))
 

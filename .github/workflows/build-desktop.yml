@@ -8,6 +8,8 @@ on:
         options: [windows, macos, macos-intel, all]
         default: windows
   push:
+    tags-ignore:
+      - "**"
     paths:
       - ".github/workflows/build-desktop.yml"
       - "packaging/**"

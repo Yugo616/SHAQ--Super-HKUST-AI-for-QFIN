@@ -20,6 +20,12 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class NativePackagingTests(unittest.TestCase):
+    def test_release_tags_never_trigger_the_three_platform_push_matrix(self):
+        lines = (ROOT / '.github/workflows/build-desktop.yml').read_text().splitlines()
+        push = lines.index('  push:')
+        paths = lines.index('    paths:', push)
+        self.assertEqual(lines[push + 1:paths], ['    tags-ignore:', '      - "**"'])
+
     def test_dispatch_can_build_only_intel_without_changing_other_target_matrices(self):
         lines = (ROOT / '.github/workflows/build-desktop.yml').read_text().splitlines()
         expression = next(line.strip().removeprefix('include: ') for line in lines if line.strip().startswith('include: ${{'))
