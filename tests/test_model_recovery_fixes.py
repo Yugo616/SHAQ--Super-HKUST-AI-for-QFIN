@@ -129,30 +129,51 @@ class DeadlineTests(unittest.TestCase):
     def test_http_continuous_body_has_actual_total_deadline(self):
         from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
         from shaq_daily_oracle.model_backends import _http_post_json, ModelBackendError
+        from shaq_daily_oracle import model_http_worker
+        # The total deadline includes a cold interpreter/import path. Leave enough
+        # test-only startup allowance, while a continuously arriving body lasts >60s.
+        deadline=10.0
+        byte_interval=.05
+        body=json.dumps({'ok':True,'padding':'x'*1280}).encode()
+        self.assertGreater(len(body)*byte_interval,6*deadline)
+        sent_bytes=[]
+        launch=model_http_worker.run_model_process
+        def cold_start(command,**options):
+            self.assertEqual(command[1:],['-m','shaq_daily_oracle.model_http_worker'])
+            bootstrap=('import runpy,time; time.sleep(1.25); '
+                       'runpy.run_module("shaq_daily_oracle.model_http_worker",run_name="__main__")')
+            return launch([command[0],'-c',bootstrap],**options)
         entered=threading.Event();closed=threading.Event()
         class Handler(BaseHTTPRequestHandler):
             def log_message(self,*args):pass
             def do_POST(self):
                 self.rfile.read(int(self.headers['Content-Length']))
-                body=b'{"ok":true,"padding":"abcdefghijklmnopqrstuvwxyz"}'
                 self.send_response(200);self.send_header('Content-Length',str(len(body)));self.end_headers()
                 entered.set()
                 try:
                     for value in body:
-                        self.wfile.write(bytes([value]));self.wfile.flush();time.sleep(.08)
+                        self.wfile.write(bytes([value]));self.wfile.flush()
+                        sent_bytes.append(value)
+                        time.sleep(byte_interval)
                 except (BrokenPipeError,ConnectionResetError):
                     closed.set()
         server=ThreadingHTTPServer(('127.0.0.1',0),Handler)
         thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
         try:
             started=time.monotonic()
-            with patch.dict(os.environ,{'NO_PROXY':'127.0.0.1','no_proxy':'127.0.0.1'}), self.assertRaises(ModelBackendError) as caught:
+            with patch.dict(os.environ,{'NO_PROXY':'127.0.0.1','no_proxy':'127.0.0.1'}), \
+                 patch.object(model_http_worker,'run_model_process',side_effect=cold_start), \
+                 self.assertRaises(ModelBackendError) as caught:
                 _http_post_json(url=f'http://127.0.0.1:{server.server_port}/call',headers={'Authorization':'Bearer fixture-secret'},
-                    payload={'test':True},timeout=.7)
-            self.assertLess(time.monotonic()-started,1.8)
+                    payload={'test':True},timeout=deadline)
+            elapsed=time.monotonic()-started
+            self.assertGreaterEqual(elapsed,deadline*.9)
+            self.assertLess(elapsed,deadline+3)
             self.assertTrue(entered.is_set(),'worker did not reach the fixture HTTP server')
+            self.assertGreater(len(sent_bytes),1,'fixture did not demonstrate a continuously arriving body')
+            self.assertLess(len(sent_bytes),len(body),'fixture body completed instead of being cancelled')
             self.assertEqual(caught.exception.diagnostic['kind'],'timeout')
-            self.assertTrue(closed.wait(1),'HTTP child kept the socket alive after deadline')
+            self.assertTrue(closed.wait(3),'HTTP child kept the socket alive after deadline')
             self.assertNotIn('fixture-secret',str(caught.exception))
         finally:
             server.shutdown();server.server_close();thread.join(timeout=1)
