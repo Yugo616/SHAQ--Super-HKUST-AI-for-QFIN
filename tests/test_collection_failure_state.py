@@ -61,8 +61,10 @@ class CollectionFailureStateTests(unittest.TestCase):
         from shaq_daily_oracle.model_execution import run_model_process
         emfile = r'''
 import os, resource
+import yfinance as yf
+from unittest.mock import patch
 from shaq_daily_oracle import collection_worker
-def exhaust(operation, payload):
+def exhaust(ticker, **kwargs):
     _, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
     resource.setrlimit(resource.RLIMIT_NOFILE, (min(64,hard),hard))
     handles=[]
@@ -70,8 +72,8 @@ def exhaust(operation, payload):
         while True: handles.append(open(os.devnull))
     finally:
         for handle in handles: handle.close()
-collection_worker.execute_operation=exhaust
-raise SystemExit(collection_worker.main())
+with patch.object(yf.Ticker, 'history', exhaust):
+    raise SystemExit(collection_worker.main())
 '''
         for script, kind, timeout in [(emfile,'resource_exhausted',5),
                                       ('import os;os._exit(9)','worker_crash',5),

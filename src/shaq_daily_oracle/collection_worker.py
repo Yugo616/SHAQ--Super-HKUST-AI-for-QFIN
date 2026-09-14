@@ -91,6 +91,11 @@ def execute_operation(operation, payload):
     with tempfile.TemporaryDirectory(prefix='shaq-yahoo-', dir=payload.get('cache_parent')) as cache_root:
         yf.set_tz_cache_location(cache_root)
         with contextlib.ExitStack() as cleanup:
+            # Public Yahoo configuration, confined to this owned single-thread
+            # process; never replace dependency functions or swallow HTTP errors.
+            hidden_errors = yf.config.debug.hide_exceptions
+            yf.config.debug.hide_exceptions = False
+            cleanup.callback(setattr, yf.config.debug, 'hide_exceptions', hidden_errors)
             for getter in (yf.cache.get_tz_cache, yf.cache.get_cookie_cache, yf.cache.get_isin_cache):
                 cache = getter()
                 def close_cache(cache=cache):

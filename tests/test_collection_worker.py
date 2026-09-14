@@ -117,11 +117,108 @@ class CollectionWorkerTests(unittest.TestCase):
         self.assertIn('resource', str(caught.exception))
         self.assertEqual(caught.exception.diagnostic['errno'], 24)
 
+    def test_real_ticker_boundary_preserves_emfile_and_genuine_missing_data(self):
+        # Keep execute_operation and real installed Yahoo acquisition code intact.
+        # Fault at Ticker.history catches the bulk-download exception swallowing.
+        script = r'''
+import json
+from unittest.mock import patch
+import yfinance as yf
+from yfinance.exceptions import YFPricesMissingError
+from shaq_daily_oracle.collection_worker import main
+def history(ticker, **kwargs):
+    if ticker.ticker == 'MISSING': raise YFPricesMissingError(ticker.ticker, '')
+    raise OSError(24, 'fixture private text')
+with patch.object(yf.Ticker, 'history', history): raise SystemExit(main())
+'''
+        for symbol in ['FIX', 'MISSING']:
+            request = {'operation':'history','payload':{'profile':{'profile_id':'test','universe_file':'unused'},
+                'symbols':[symbol],'start':'2026-09-01','end':'2026-09-02'}}
+            completed = subprocess.run([sys.executable,'-c',script], input=json.dumps(request),
+                text=True,capture_output=True,timeout=10)
+            self.assertEqual(completed.returncode,0,completed.stderr)
+            result=json.loads(completed.stdout)
+            if symbol == 'FIX':
+                self.assertIn('error',result, 'bulk download silently replaced the real resource failure with missing data')
+                self.assertEqual(result['diagnostic']['kind'],'resource_exhausted')
+                self.assertEqual(result['diagnostic']['errno'],24)
+                self.assertNotIn('fixture private text',completed.stdout)
+            else:
+                self.assertEqual(result,{'result':{'MISSING':[]}})
+
+    def test_real_history_http_failure_is_not_swallowed_by_yahoo_defaults(self):
+        # Exercise installed Ticker.history AND PriceHistory.history. Only the
+        # HTTP boundary is replaced, with cached timezone seeded in owned scratch.
+        script = r'''
+import json, sys
+from types import SimpleNamespace
+from unittest.mock import patch
+import yfinance as yf
+from shaq_daily_oracle.collection_worker import main
+original=yf.Ticker.history
+def history(ticker, **kwargs):
+    yf.cache.get_tz_cache().store(ticker.ticker, 'America/New_York')
+    return original(ticker, **kwargs)
+def http(**kwargs):
+    if sys.argv[1]=='failure': raise OSError(24,'private')
+    return SimpleNamespace(text='',json=lambda:{'chart':{'result':None,'error':None}})
+with patch.object(yf.Ticker,'history',history), patch.object(yf.data.YfData,'cache_get',side_effect=http):
+    raise SystemExit(main())
+'''
+        request={'operation':'history','payload':{'profile':{'profile_id':'test','universe_file':'unused'},
+            'symbols':['FIX'],'start':'2026-09-01','end':'2026-09-02'}}
+        for mode in ['failure','missing']:
+            completed=subprocess.run([sys.executable,'-c',script,mode],input=json.dumps(request),
+                text=True,capture_output=True,timeout=10)
+            self.assertEqual(completed.returncode,0,completed.stderr)
+            envelope=json.loads(completed.stdout)
+            if mode=='failure':
+                self.assertIn('error',envelope)
+                self.assertEqual(envelope['diagnostic']['kind'],'resource_exhausted')
+            else:
+                self.assertEqual(envelope,{'result':{'FIX':[]}})
+
+    def test_direct_history_matches_bulk_rows_daily_and_mixed_timezone_intraday(self):
+        script = r'''
+import sys
+import pandas as pd
+import yfinance as yf
+from curl_cffi.requests import Session
+from unittest.mock import patch
+from shaq_daily_oracle.data_providers import _frame_rows
+from shaq_daily_oracle.collection_worker import execute_operation
+interval=sys.argv[1]
+symbols=['AAA','BBB','CCC','MISSING']
+def history(ticker, **kwargs):
+    if ticker.ticker == 'MISSING': return pd.DataFrame()
+    zone='America/Chicago' if ticker.ticker == 'BBB' else 'America/New_York'
+    stamp='2026-09-01T00:00:00' if interval == '1d' else ('2026-09-01T08:00:00' if zone=='America/Chicago' else '2026-09-01T09:00:00')
+    return pd.DataFrame({'Open':[101.5,float('nan')],'Close':[None,float('nan')],
+        'Adj Close':[100.25,float('nan')],'Volume':[1000,float('nan')]},
+        index=pd.DatetimeIndex([pd.Timestamp(stamp,tz=zone),pd.Timestamp(stamp,tz=zone)+pd.Timedelta(days=1)]))
+with patch.object(yf.Ticker,'history',history):
+    with Session(impersonate='chrome') as session:
+        bulk=yf.download(tickers=symbols,start='2026-09-01',end='2026-09-03',
+            interval=interval,prepost=True,auto_adjust=False,actions=False,
+            group_by='ticker',threads=False,progress=False,session=session)
+        expected=_frame_rows(bulk,symbols)
+    actual=execute_operation('history',{'profile':{'profile_id':'test','universe_file':'unused'},
+        'symbols':symbols,'start':'2026-09-01','end':'2026-09-03','interval':interval,'prepost':True})
+assert actual == expected, (actual,expected)
+assert actual['MISSING']==[]
+assert actual['AAA'][0]['close'] is None
+assert actual['AAA'][0]['adj_close']==100.25
+assert actual['AAA'][0]['timestamp']==('2026-09-01T00:00:00' if interval=='1d' else '2026-09-01T09:00:00-04:00')
+'''
+        for interval in ['1d','5m']:
+            completed=subprocess.run([sys.executable,'-c',script,interval],capture_output=True,text=True,timeout=10)
+            self.assertEqual(completed.returncode,0,completed.stderr)
+
     @unittest.skipIf(sys.platform == 'win32', 'POSIX low descriptor limit regression')
     def test_repeated_full_universe_uses_one_thread_real_cache_and_closes_resources(self):
         self.assertTrue(hasattr(YFinanceProvider, '_history_inline'))
-        # Only HTTP is replaced. The installed Yahoo/Peewee cache and curl session
-        # are real, with a fresh subprocess and no access to the user's cache.
+        # The network-facing ticker method is replaced. Yahoo/Peewee cache and
+        # curl session are real, in a child with no access to the user's cache.
         script = r'''
 import resource, fcntl, json, threading
 from unittest.mock import patch
@@ -137,34 +234,30 @@ def descriptors():
         except OSError: pass
     return count
 baseline=descriptors(); samples=[]; threads=set(); sessions=[]; caches=[]
-real_download=yf.download
 def history(ticker, *args, **kwargs):
+    assert yf.config.debug.hide_exceptions is False
+    threads.add(threading.get_ident()); sessions.append(ticker.session)
     cache=yf.cache.get_tz_cache()
     cache.store(ticker.ticker, 'UTC')
     caches.append(cache)
-    return pd.DataFrame()
-def download(**kwargs):
-    assert kwargs['threads'] is False
-    threads.add(threading.get_ident()); sessions.append(kwargs['session'])
-    result=real_download(**kwargs)
     samples.append(descriptors())
-    return result
-with patch.object(yf, 'download', side_effect=download), patch.object(yf.Ticker, 'history', history):
+    return pd.DataFrame()
+with patch.object(yf.Ticker, 'history', history):
     result=execute_operation('history', {
         'profile':{'profile_id':'test','universe_file':'unused','batch_size':80},
         'symbols':['FIX'+str(i) for i in range(560)],
         'start':'2026-09-01','end':'2026-09-02','interval':'1d','prepost':False})
 assert len(result)==560 and all(rows==[] for rows in result.values())
-assert len(samples)==7 and len(threads)==1
+assert len(samples)==560 and len(threads)==1
 assert max(samples)-baseline < 15, (baseline, samples)
 assert all(cache.db.is_closed() for cache in caches)
 assert all(session._closed for session in sessions)
 assert descriptors() <= baseline+2, (baseline, descriptors())
-print(json.dumps({'batches':len(samples),'baseline':baseline,'peak':max(samples),'final':descriptors()}))
+print(json.dumps({'tickers':len(samples),'baseline':baseline,'peak':max(samples),'final':descriptors()}))
 '''
         completed = subprocess.run([sys.executable, '-c', script], capture_output=True, text=True, timeout=40)
         self.assertEqual(completed.returncode, 0, completed.stderr)
-        self.assertEqual(json.loads(completed.stdout)['batches'], 7)
+        self.assertEqual(json.loads(completed.stdout)['tickers'], 560)
 
     def test_frozen_entry_dispatches_worker_before_gui_or_updater(self):
         self.assertTrue(hasattr(YFinanceProvider, '_history_inline'))
@@ -210,15 +303,13 @@ from unittest.mock import patch
 from shaq_daily_oracle.collection_worker import main
 soft,hard=resource.getrlimit(resource.RLIMIT_NOFILE)
 resource.setrlimit(resource.RLIMIT_NOFILE,(min(128,hard),hard))
-def download(**kw):
-    assert kw['threads'] is False
-    assert kw['session'] is not None
+def history(ticker, **kw):
+    assert ticker.session is not None
     assert kw['start']=='2026-09-01' and kw['end']=='2026-09-02'
-    for ticker in kw['tickers']: yf.cache.get_tz_cache().store(ticker, 'UTC')
-    return pd.concat({ticker:pd.DataFrame({'Open':[101.5], 'Close':[float('nan')],
+    yf.cache.get_tz_cache().store(ticker.ticker, 'UTC')
+    return pd.DataFrame({'Open':[101.5], 'Close':[float('nan')],
         'Volume':[os.getpid()]}, index=[pd.Timestamp('2026-09-01T16:00:00-04:00')])
-        for ticker in kw['tickers']},axis=1)
-with patch.object(yf,'download',side_effect=download): raise SystemExit(main())
+with patch.object(yf.Ticker,'history',history): raise SystemExit(main())
 '''
         def fds():
             result = 0
@@ -235,7 +326,7 @@ with patch.object(yf,'download',side_effect=download): raise SystemExit(main())
                 rows = method(['FIX'+str(i) for i in range(560)], start=date(2026,9,1),end=date(2026,9,2))
                 self.assertEqual(len(rows), 560)
                 row = rows['FIX0'][0]
-                self.assertEqual(row['timestamp'], '2026-09-01T16:00:00-04:00')
+                self.assertEqual(row['timestamp'], '2026-09-01T16:00:00')
                 self.assertEqual(row['open'], 101.5)
                 self.assertIsNone(row['close'])
                 pids.add(row['volume'])

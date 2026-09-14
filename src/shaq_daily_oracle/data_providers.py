@@ -267,27 +267,40 @@ class YFinanceProvider:
         self, symbols: list[str], *, start: date, end: date,
         interval: str = '1d', prepost: bool = False, session,
     ) -> dict[str, list[dict[str, Any]]]:
+        from collections import Counter
+        import pandas as pd
+        from yfinance.exceptions import YFPricesMissingError, YFTzMissingError
+
         yf = self._module()
         normalized = {_yahoo_symbol(symbol): symbol for symbol in symbols}
         output = {symbol: [] for symbol in symbols}
         for group in _chunks(list(normalized), self.profile.batch_size):
             try:
-                frame = yf.download(
-                    tickers=group,
-                    start=start.isoformat(),
-                    end=end.isoformat(),
-                    interval=interval,
-                    prepost=prepost,
-                    auto_adjust=False,
-                    actions=False,
-                    group_by="ticker",
-                    # Ephemeral ticker threads leak thread-local cache connections.
-                    # One owned thread shares the explicit worker session/cache.
-                    threads=False,
-                    session=session,
-                    progress=False,
-                    timeout=self.profile.request_timeout_seconds,
-                )
+                frames = {}
+                for symbol in group:
+                    try:
+                        # Bulk download catches all ticker errors and turns even
+                        # EMFILE into empty data. Direct history preserves errors
+                        # under the worker's explicit exception configuration.
+                        frames[symbol] = yf.Ticker(symbol, session=session).history(
+                            start=start.isoformat(), end=end.isoformat(),
+                            interval=interval, prepost=prepost, auto_adjust=False,
+                            actions=False, timeout=self.profile.request_timeout_seconds,
+                        )
+                    except (YFPricesMissingError, YFTzMissingError):
+                        frames[symbol] = pd.DataFrame()
+                nonempty = [frame for frame in frames.values() if frame is not None and not frame.empty]
+                # Preserve download's day+ tz-naive / intraday majority-timezone
+                # contract before using the existing multi-column row normalizer.
+                if interval.endswith(('m', 'h')):
+                    zones = Counter(str(frame.index.tz) for frame in nonempty)
+                    zone = min(zones, key=lambda item: (-zones[item], item)) if zones else None
+                    for frame in nonempty:
+                        frame.index = frame.index.tz_convert(zone)
+                else:
+                    for frame in nonempty:
+                        frame.index = frame.index.tz_localize(None)
+                frame = pd.concat(frames, axis=1, sort=True)
             except Exception as exc:
                 raise DataProviderError(
                     f"yfinance history request failed: {type(exc).__name__}: {exc}"
