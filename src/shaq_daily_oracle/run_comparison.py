@@ -23,6 +23,28 @@ def _resolved_response_model(audit):
     return response_model
 
 
+def model_identity(variant):
+    """Known homogeneous effective model identity; profile alone is insufficient."""
+    profile = _value(variant.get('model_profile_sha256'))
+    audits = variant.get('model_call_audits', [])
+    policies = []
+    response_models = []
+    for audit in audits:
+        policy = _value(audit.get('request_policy_sha256'))
+        if not policy and isinstance(audit.get('request_policy'), dict):
+            policy = sha256_payload(audit['request_policy'])
+        policies.append(policy)
+        response_models.append(_resolved_response_model(audit))
+    return {
+        'profile': profile,
+        'request_policies': sorted(set(policies)),
+        'response_models': sorted(set(response_models)),
+    # Historical audits do not map response-model identity to stable domain roles.
+    # A mixed set cannot prove that the same model handled the same tasks.
+    } if (profile and policies and all(policies) and all(response_models)
+          and len(set(response_models)) == 1 and len(set(policies)) == 1) else None
+
+
 def _side(batch, key):
     variant = batch.get('variants', {}).get(key)
     if not isinstance(variant, dict):
@@ -37,30 +59,12 @@ def _side(batch, key):
     # Current projection rules are not necessarily the historical execution rules.
     execution = {'policy_hash': rules, 'engine': account.get('engine'),
                  'engine_version': account.get('engine_version')} if rules else None
-    profile = _value(variant.get('model_profile_sha256'))
-    audits = variant.get('model_call_audits', [])
-    policies = []
-    response_models = []
-    for audit in audits:
-        policy = _value(audit.get('request_policy_sha256'))
-        if not policy and isinstance(audit.get('request_policy'), dict):
-            policy = sha256_payload(audit['request_policy'])
-        policies.append(policy)
-        response_models.append(_resolved_response_model(audit))
-    model = {
-        'profile': profile,
-        'request_policies': sorted(set(policies)),
-        'response_models': sorted(set(response_models)),
-    # Historical audits do not map response-model identity to stable domain roles.
-    # A mixed set cannot prove that the same model handled the same tasks.
-    } if (profile and policies and all(policies) and all(response_models)
-          and len(set(response_models)) == 1 and len(set(policies)) == 1) else None
     return {
         'batch_id': batch.get('batch_id'), 'variant_key': key,
         'label': variant.get('variant', {}).get('label') or key,
         'variant': variant, 'documents': documents,
         'method': sha256_payload(documents) if isinstance(documents, dict) and documents else None,
-        'model': model,
+        'model': model_identity(variant),
         'data': _value(evidence.get('evidence_hash')),
         'candidates': sha256_payload(candidates) if isinstance(candidates, list) else None,
         'trade_date': str(evidence['as_of_et'])[:10] if evidence.get('as_of_et') else None,

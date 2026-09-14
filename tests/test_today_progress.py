@@ -5,6 +5,37 @@ from pathlib import Path
 
 
 class TodayProgressTests(unittest.TestCase):
+    def test_workbench_render_applies_backend_guard_and_shows_reason(self):
+        root = Path(__file__).resolve().parents[1] / 'src/shaq_daily_oracle/desktop'
+        source = (root/'today_progress.js').read_text() + '\n' + '''
+const window={showCandidate(){}};
+let renderEditor=()=>{},renderHistory=()=>{},renderBatch=()=>{},loadSkill=()=>{},renderRun=()=>{},
+    showPage=()=>{},saveDraft=()=>{},estimate=()=>{};
+const startBatch=()=>{},setInterval=()=>{},esc=String,qa=()=>[],versionKey=v=>v.author+'/'+v.version_id,selectedVersions=()=>[];
+const nodes={};const q=s=>nodes[s]||=( {parentElement:{prepend(){}},classList:{toggle(){}},disabled:false,textContent:'',innerHTML:''} );
+const state={runSelections:null,data:{settings:{model_profiles:[{model:'fixture',profile_id:'p'}]},
+ versions:[],jobs:[],clock:{today_available:false,is_trading_day:false,next_trade_date:'2026-09-14',today_message:'今日休市；不启动今日研究。'}}};
+''' + (root/'workbench.js').read_text() + '''
+renderAutomatic=()=>{};renderRun();
+console.log(JSON.stringify({disabled:q('#start-batch').disabled,reason:q('.run-toolbar > span').textContent}));
+'''
+        value = json.loads(subprocess.check_output(['node','-'], input=source, text=True))
+        self.assertTrue(value['disabled'])
+        self.assertIn('今日休市', value['reason'])
+        self.assertIn('2026-09-14', value['reason'])
+
+    def test_today_button_fails_closed_without_backend_calendar_permission(self):
+        self.run_js(r"""
+const assert=require('node:assert/strict');
+for(const clock of [{}, {today_available:false,today_message:'今日休市'},
+                   {today_available:false,today_message:'尚未到美东 04:00'}]){
+ const button={disabled:false,title:''}; ui.applyTodayAvailability(button,clock,true);
+ assert.equal(button.disabled,true);
+}
+const button={};ui.applyTodayAvailability(button,{today_available:true,today_message:'采集时核验'},true);
+assert.equal(button.disabled,false);
+ui.applyTodayAvailability(button,{today_available:true},false);assert.equal(button.disabled,true);
+""")
     def run_js(self, body):
         module = Path(__file__).resolve().parents[1] / 'src/shaq_daily_oracle/desktop/today_progress.js'
         self.assertTrue(module.exists(), 'The current-day progress view is not implemented')

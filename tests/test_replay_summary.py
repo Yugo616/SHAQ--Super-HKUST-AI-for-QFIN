@@ -4,6 +4,34 @@ from shaq_daily_oracle.replay_summary import candidate_summary, compare_versions
 
 
 class ReplaySummaryTests(unittest.TestCase):
+    def test_complete_provisional_and_revised_prices_score_without_finality_claim(self):
+        variant = {'predictions': [{'symbol': 'X', 'direction': 'bearish'}]}
+        for corrections in [[], [{'reason': 'provider revision'}]]:
+            result = candidate_summary(variant, 'X', {'status': 'provisional', 'corrections': corrections,
+                'official_unadjusted_open': 100, 'official_unadjusted_close': 90})
+            self.assertTrue(result['correct'])
+            self.assertEqual(result['return_pct'], -10)
+            self.assertEqual(result['price_status'], 'revised' if corrections else 'provisional')
+            self.assertNotIn('等待最终', result['explanation'])
+
+    def test_missing_invalid_and_unknown_prices_remain_unscored(self):
+        variant = {'predictions': [{'symbol': 'X', 'direction': 'bullish'}]}
+        for status, opening, close in [('provisional', None, 90), ('final', 0, 90),
+                ('final', 'NaN', 90), ('unknown', 100, 110)]:
+            result = candidate_summary(variant, 'X', {'status': status,
+                'official_unadjusted_open': opening, 'official_unadjusted_close': close})
+            self.assertIsNone(result['correct'])
+            self.assertIsNone(result['return_pct'])
+            self.assertEqual(result['price_status'], 'unavailable')
+
+    def test_missing_or_mixed_model_audits_do_not_establish_same_model(self):
+        known = {'model_profile_sha256': 'profile', 'model_call_audits': [
+            {'request_policy_sha256': 'policy', 'response_model': 'model-a'}]}
+        for other in [{}, {'model_profile_sha256': 'profile'}, {**known, 'model_call_audits': [
+                *known['model_call_audits'], {'request_policy_sha256': 'policy', 'response_model': 'model-b'}]}]:
+            self.assertFalse(compare_versions(other, other, {}, {})['same_model'])
+        self.assertTrue(compare_versions(known, known, {}, {})['same_model'])
+
     def test_final_result_does_not_invent_a_cause_or_mutate_prediction(self):
         variant = {'predictions': [{'symbol': 'X', 'direction': 'bullish'}],
                    'reports_by_symbol': {'X': [{'domain': 'price_volume', 'verdict': 'bullish',

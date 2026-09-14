@@ -97,15 +97,21 @@ const SHAQAccounts = (() => {
   }
 
   function tradeRows(trades, day) {
-    return (trades || []).map(trade => `<tr>
+    const names = {unavailable_entry:'开仓分钟缺失 · 未模拟成交',closed:'已平仓',
+      open_incomplete:'退出分钟缺失 · 模拟持仓未平',unfilled_budget:'预算不足 · 未模拟成交',
+      unfilled_volume:'目标分钟成交量不足 · 未模拟成交'};
+    return (trades || []).map(trade => {const missing = trade.status === 'unavailable_entry';return `<tr>
       <td>${e(trade.symbol)}</td>
-      <td>${trade.direction === 'bearish' ? '卖空 → 买回' : '买入 → 卖出'}<br><small>${e(trade.quantity)} 股整数数量 · ${e(trade.status || '')}</small></td>
+      <td>${trade.direction === 'bearish' ? '卖空 → 买回' : '买入 → 卖出'}<br><small>${missing ? '' : `${e(trade.quantity)} 股整数数量 · `}${e(names[trade.status] || trade.status || '')}</small></td>
       <td>进入参考价 ${usd(trade.entry_reference_open)}<br><small>${localTime(trade.entry_reference_at_et || day.entry_reference_at_et)}</small><br>退出参考价 ${usd(trade.exit_reference_open)}<br><small>${localTime(trade.exit_reference_at_et || day.exit_reference_at_et)}</small></td>
       <td>进入模拟成交价 ${usd(trade.entry_price)}<br>退出模拟成交价 ${usd(trade.exit_price)}</td>
       <td>${e(officialOutcome(trade))}</td>
-      <td>手续费 ${usd(trade.fees)}<br>滑点影响 ${usd(trade.slippage_cost)}<br>净盈亏 ${usd(trade.net_pnl)}</td>
-    </tr>`).join('');
+      <td>手续费 ${usd(missing ? null : trade.fees)}<br>滑点影响 ${usd(missing ? null : trade.slippage_cost)}<br>净盈亏 ${usd(missing ? null : trade.net_pnl)}</td>
+    </tr>`}).join('');
   }
+
+  const noEntryData = row => row?.status === 'unavailable' && !(row.trades || []).some(trade => trade.quantity > 0);
+  const amount = (row, key) => usd(noEntryData(row) ? null : row?.[key]);
 
   function dayHtml(row) {
     if (!row) return '<p>尚无账户回放。</p>';
@@ -129,7 +135,7 @@ const SHAQAccounts = (() => {
     const incomplete = row.status === 'incomplete'
       ? `<p class="incomplete-note">未完成：退出分钟缺失，仍有模拟持仓 ${e(JSON.stringify(row.closing_positions || {}))}；不伪造退出成交或最终盈亏。</p>` : '';
     const summary = row.status === 'empty' ? '<p>本日空榜，没有模拟交易或成本。</p>' :
-      `<p>零成本盈亏 ${usd(row.gross_pnl)} − 手续费 ${usd(row.fees)} − 滑点影响 ${usd(row.slippage_cost)} = 净盈亏 <b>${usd(row.net_pnl)}</b>${['provisional','final'].includes(row.status) ? ` · 期初 ${usd(row.opening_cash)} · 期末 ${usd(row.closing_cash)}` : ''}</p>`;
+      `<p>${row.status === 'unavailable' && !noEntryData(row) ? '已有模拟成交部分（非整日最终结算）：' : ''}零成本盈亏 ${amount(row,'gross_pnl')} − 手续费 ${amount(row,'fees')} − 滑点影响 ${amount(row,'slippage_cost')} = 净盈亏 <b>${amount(row,'net_pnl')}</b>${['provisional','final'].includes(row.status) ? ` · 期初 ${usd(row.opening_cash)} · 期末 ${usd(row.closing_cash)}` : ''}</p>`;
     const rows = tradeRows(row.trades, row);
     return intro + unavailable + refresh + provisional + incomplete + summary + (rows ? `
       <div class="account-scroll"><table class="table trade-detail"><thead><tr><th>股票</th><th>方向 / 数量</th><th>分钟参考</th><th>Zipline 模拟成交</th><th>官方 O→C 方向成绩</th><th>成本 / 净盈亏</th></tr></thead><tbody>${rows}</tbody></table></div>` : '') + `
@@ -147,15 +153,15 @@ const SHAQAccounts = (() => {
     if (hi===lo) {hi+=1;lo-=1;}
     const x=point=>85+dates.indexOf(point.date)/Math.max(1,dates.length-1)*755;
     const y=point=>150-(point.equity-lo)/(hi-lo)*125;
-    return `<h3>收盘净值</h3><svg class="pnl-chart" viewBox="0 0 900 190" role="img" aria-label="各账户收盘净值"><text x="0" y="25">${usd(hi)}</text><text x="0" y="150">${usd(lo)}</text>${accounts.map((account,index)=>`<polyline fill="none" stroke="${colors[index%colors.length]}" stroke-width="2" points="${(account.curve||[]).map(point=>`${x(point)},${y(point)}`).join(' ')}"/>${(account.curve||[]).map(point=>`<circle cx="${x(point)}" cy="${y(point)}" r="3" fill="${colors[index%colors.length]}"><title>${e(account.method_name || account.label)} ${e(point.date)} ${usd(point.equity)}</title></circle>`).join('')}`).join('')}<text x="85" y="185">${e(dates[0])}</text><text x="750" y="185">${e(dates.at(-1))}</text></svg>`;
+    return `<h3>收盘净值</h3><svg class="pnl-chart" viewBox="0 0 900 220" role="img" aria-label="各账户收盘净值；纵轴余额（USD），横轴日期（交易日）"><text x="0" y="12" font-size="12">余额（USD）</text><text x="0" y="30">${usd(hi)}</text><text x="0" y="150">${usd(lo)}</text>${accounts.map((account,index)=>`<polyline fill="none" stroke="${colors[index%colors.length]}" stroke-width="2" points="${(account.curve||[]).map(point=>`${x(point)},${y(point)}`).join(' ')}"/>${(account.curve||[]).map(point=>`<circle cx="${x(point)}" cy="${y(point)}" r="3" fill="${colors[index%colors.length]}"><title>${e(account.method_name || account.label)} ${e(point.date)} ${usd(point.equity)}</title></circle>`).join('')}`).join('')}<text x="85" y="185">${e(dates[0])}</text><text x="750" y="185">${e(dates.at(-1))}</text><text x="450" y="211" text-anchor="middle" font-size="12">日期（交易日）</text></svg>`;
   }
 
   function resultRows(rows, versions) {
     return (rows || []).map(row => {const trades=row.trades||[],score=row.status==='empty'?'0 / 0':trades.length&&trades.every(trade=>typeof trade.direction_correct==='boolean')?`${trades.filter(trade=>trade.direction_correct).length} / ${trades.filter(trade=>!trade.direction_correct).length}`:'—';return `<tr class="${row.batch_id ? 'clickable' : ''}" ${row.batch_id ? `data-account-batch="${e(row.batch_id)}" data-account-key="${e(row.variant_key)}"` : ''}>
       <td>${e(row.trade_date)}<br>${method(row, versions)}</td><td>${e(row.source_scope === 'simulation_cumulative' ? '模拟累计 · 来源历史已标记' : scopeName(row.scope))}</td>
       <td>${e(statusName(row.status))}</td><td>${score}</td>
-      <td>${usd(row.net_pnl)}</td><td>${usd(row.account_cumulative_net_pnl)}</td><td>${usd(row.account_balance)}</td>
-      <td>${usd(row.gross_pnl)}</td><td>${usd(row.fees)}</td><td>${usd(row.slippage_cost)}</td></tr>`}).join('');
+      <td>${amount(row,'net_pnl')}</td><td>${usd(row.account_cumulative_net_pnl)}</td><td>${usd(row.account_balance)}</td>
+      <td>${amount(row,'gross_pnl')}</td><td>${amount(row,'fees')}</td><td>${amount(row,'slippage_cost')}</td></tr>`}).join('');
   }
 
   function overviewHtml(data, versions, filters={}) {

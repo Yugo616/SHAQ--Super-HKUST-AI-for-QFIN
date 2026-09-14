@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 
 from .data_providers import (
     DataProfile,
+    DataProviderError,
     FinanceDatabaseProvider,
     OpenBBProviderAdapter,
     SecEdgarProvider,
@@ -19,7 +20,7 @@ from .data_providers import (
     provider_manifest,
 )
 from .hashing import sha256_payload
-from .market_calendar import market_session, previous_market_session
+from .market_calendar import market_session, previous_market_session, next_market_session
 from .research_batch import FrozenEvidence, freeze_evidence_bundle
 
 
@@ -28,6 +29,42 @@ class ResearchCollectionError(ValueError):
 
 
 ET = ZoneInfo("America/New_York")
+
+
+def today_collection_status(now: datetime) -> dict[str, Any]:
+    """Use the scheduler's NYSE calendar and ET date, never a local weekday guess."""
+    now = now.astimezone(ET)
+    session = market_session(now.date())
+    next_date = (session or next_market_session(now.date())).session_date.isoformat()
+    if session is None:
+        status, message = 'closed', f'今日美东休市；下次交易日 {next_date}，不启动今日研究。'
+    elif now.time().replace(tzinfo=None) < time(4, 0):
+        status, message = 'not_yet_premarket', f'尚未到美东 04:00 盘前时段；下次可采集交易日 {next_date}。'
+    else:
+        status, message = 'ready', '运行时核验当天盘前数据；缺失时不调用模型。'
+    return {'et': now.isoformat(), 'trade_date': now.date().isoformat(),
+            'is_trading_day': session is not None, 'next_trade_date': next_date,
+            'today_available': status == 'ready', 'today_status': status, 'today_message': message}
+
+
+def validate_today_evidence(evidence: FrozenEvidence, now: datetime) -> None:
+    """Reject stale/legacy locators without altering their immutable evidence."""
+    now = now.astimezone(ET)
+    cutoff = _timestamp(evidence.manifest.get('scheduled_cutoff_et'))
+    observed = _timestamp(evidence.manifest.get('as_of_et'))
+    expected = datetime.combine(now.date(), time(8, 50), ET)
+    if cutoff != expected or observed is None or observed.date() != now.date() or observed > now:
+        raise ResearchCollectionError('cached_evidence_invalid：缓存不是当天有效截止时间的证据；未启动今日研究。')
+    observations = evidence.manifest.get('provider_manifest', {}).get('premarket_observations', {})
+    valid = False
+    for row in observations.values():
+        first, last = _timestamp(row.get('first_observation_et')), _timestamp(row.get('last_observation_et'))
+        if row.get('status') == 'collected' and first and last and (
+            datetime.combine(now.date(), time(4, 0), ET) <= first <= last <= min(now, cutoff)
+        ):
+            valid = True
+    if not valid:
+        raise ResearchCollectionError('no_data：未取得当天盘前数据；缓存不能用于今日研究。')
 
 
 class _VisibleText(HTMLParser):
@@ -114,7 +151,7 @@ def _premarket_state(
         if (
             observed is not None and observed.date() == session_date
             and time(4, 0) <= observed.time().replace(tzinfo=None) <= time(8, 50)
-            and observed <= cutoff and close is not None
+            and observed <= cutoff and close is not None and close > 0
         ):
             eligible.append((observed, row, close))
     last_price = eligible[-1][2] if eligible else None
@@ -261,14 +298,24 @@ def collect_research_evidence(
         market = DailyBarCache(market, history_cache_root / profile.identity(), overlap_days=public_config["history_overlap_days"])
     lookback_start = session.session_date - timedelta(days=400)
     stock_symbols = [member.symbol for member in members]
-    stock_daily = market.history(
-        stock_symbols, start=lookback_start, end=session.session_date, interval="1d"
-    )
-    benchmark_daily = market.history(
-        benchmark_symbols, start=lookback_start, end=session.session_date, interval="1d"
-    )
-    stock_intraday = market.recent_intraday(stock_symbols, cutoff=data_cutoff)
-    benchmark_intraday = market.recent_intraday(benchmark_symbols, cutoff=data_cutoff)
+    try:
+        stock_daily = market.history(
+            stock_symbols, start=lookback_start, end=session.session_date, interval="1d"
+        )
+        benchmark_daily = market.history(
+            benchmark_symbols, start=lookback_start, end=session.session_date, interval="1d"
+        )
+        stock_intraday = market.recent_intraday(stock_symbols, cutoff=data_cutoff)
+        benchmark_intraday = market.recent_intraday(benchmark_symbols, cutoff=data_cutoff)
+    except DataProviderError as exc:
+        raise ResearchCollectionError('provider_error：行情提供方明确返回错误，未启动模型分析。') from exc
+    premarket_observations = {symbol: {
+        key: state[key] for key in ('status', 'first_observation_et', 'last_observation_et')
+    } for symbol in stock_symbols for state in [_premarket_state(
+        stock_intraday.get(symbol, []), session_date=session.session_date,
+        cutoff=data_cutoff, previous_close=None)]}
+    if not allow_replay and not any(row['status'] == 'collected' for row in premarket_observations.values()):
+        raise ResearchCollectionError('no_data：未取得当天盘前数据；不使用上一交易日分钟数据启动今日研究。')
     candidates, stock_states, benchmark_states = _candidate_rows(
         members=members, stock_daily=stock_daily, stock_intraday=stock_intraday,
         benchmark_daily=benchmark_daily, benchmark_intraday=benchmark_intraday,
@@ -480,6 +527,7 @@ def collect_research_evidence(
     manifest["collection_completed_at_et"] = completed.isoformat()
     manifest["metadata_status"] = metadata_status
     manifest["collection_statuses"] = collection_statuses
+    manifest["premarket_observations"] = premarket_observations
     manifest["public_source_statuses"] = public_statuses
     return freeze_evidence_bundle(
         root=root, as_of_et=completed.isoformat(),

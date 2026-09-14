@@ -1,55 +1,42 @@
 # Software updates
 
-Software updates and research-method updates are separate operations in SHAQ Daily Oracle Lab.
+Application updates and research-method updates are separate. This source is the **0.7.0 release candidate**: implementation/test results do not mean an installer or native update has been accepted and published.
 
-## Published application version
+## Platform downloads and acceptance
 
-The current published internal-test installers are **0.6.1**. Their GitHub pages are visibly marked as prereleases:
+- [0.7.0 Windows 10/11 x64 release page](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.0-windows)
+- [0.7.0 macOS 15+ release page, separate Apple Silicon and Intel packages](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.0-macos)
 
-- [Windows 10/11 x64 release](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.6.1-windows)
-- [macOS 15+ release with separate Apple Silicon and Intel disk images](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.6.1-macos)
+Use a page only after its packages, checksums and `Acceptance.json` exist. The release tag identifies the exact tested source; checksum/acceptance assets identify installers. A candidate branch, CI fixture run or this document is not proof of publication or successful installation on your machine. Native acceptance must cover Windows x64, macOS ARM64 and macOS x64 separately at the release's exact source revision. Live personal model connections remain a separate check.
 
-Both pages identify the accepted source revision and provide installer checksums plus `Acceptance.json`. Platform claims stop at the evidence recorded on those pages: Windows acceptance ran on the stated GitHub Windows environment, and the two Mac architectures have separate artifacts. These results do not establish live model connectivity on every user's account.
+## First upgrade from legacy 0.6.1 / 0.6.2
 
-The [current `main` branch](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/tree/main) contains newer source than 0.6.1. Revision `8ede112` passed [three-platform native acceptance](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/actions/runs/34678254740): Windows x64, macOS Apple Silicon and macOS Intel, including installation, deterministic two-method replay, native-window interaction, reopen, payload audit and uninstall. This is not a live Claude/API test. The 0.6.2 installers remain CI artifacts, not a published Release or an installed 0.6.1 update.
+Legacy unmanaged applications cannot install the new updater through an in-place or delta update. Use the full package once:
 
-## What the app does now
+1. Save unfinished method edits and close all old SHAQ windows. Allow active analysis/settlement to finish first.
+2. Download the full installer matching the computer from the platform page and check its checksum.
+3. Install the managed application. On macOS, follow the disk image's application installation instructions. On Windows, open the full installer and follow its prompts.
+4. If the legacy copy uses a different installation location, remove **only the old SHAQ program** through Windows **Settings → Apps → Installed apps** or macOS **Finder → Applications → Move to Trash** before starting the new copy. Do not remove SHAQ's separate user-data/configuration folders or use a cleanup utility to erase associated data.
+5. Open the newly installed SHAQ, check the version in **Software Update (`软件更新`)**, and confirm that local records, balances, saved methods/drafts and settings are visible.
 
-Choose **Software Update (`软件更新`)** in the app header to check the official GitHub release for the current operating system and architecture and read the release notes. When a newer matching version exists, **Download the installer for this computer** opens that full installer asset from the official release. The dialog labels an internal-test release as such; the user still reviews and installs the package.
+Old program files may be replaced/removed before the target application starts. There is no promise of a retained rollback copy. Research records, balances, method drafts and settings live outside the installation and must remain; normal backups remain prudent. The [Velopack preservation guidance](https://docs.velopack.io/integrating/preserved-files) explains why mutable user data must not depend on replaceable program files.
 
-This is `installer_only` behavior, not automatic installation. This revision does not ship an active in-place or delta updater. It does not download Python files from `main`, overwrite a running application, replace an active research job, or advertise an **Install and Restart** action. If the installed development version is newer than the latest public installer, the dialog reports that state and offers no downgrade button. Installing a newer application must preserve the separate per-user data/configuration directories, but normal backups remain the user's responsibility.
+中文首次升级步骤：保存草稿并等待任务结束 → 关闭旧版 → 从平台页下载完整包并安装 → 如旧版在另一位置，通过系统「应用」界面只移除旧程序 → 打开新版并检查版本、记录、余额、方法与设置。不要删除用户资料目录；不承诺保留旧程序回滚副本。
 
-Automatic research scheduling is also separate. Installing or checking for software does not enable a daily run.
+## Subsequent managed native updates
+
+Open **Software Update** in the app header. A managed, supported installation can check the official release for its operating system and architecture, download a verified update, and offer **Update and Restart**. Matching deltas are preferred when available; a verified full package is the fallback. Missing/corrupt packages or the wrong architecture/feed must fail safely rather than install unverified content. Source and unmanaged installs retain installer-only guidance.
+
+Downloads do not end active work. Apply waits for analysis, settlement and background writes to finish; unsaved GUI edits must be resolved before restart. Cross-process runtime admission prevents an old window or scheduled worker from resuming writes after installation. A queued manual update can be cancelled before installation begins. Automatic software updates are a separate saved preference and remain off until explicitly enabled; turning them on does not enable automatic research.
+
+The dialog shows current/target version, last check and last successful update when recorded. An update is successful only after the target version has launched and passed native GUI health confirmation. Download completion, a launched installer or a background process alone is not success. If replacement or target startup fails, reopen or reinstall the target full package without deleting user data. Do not assume the old executable remains usable.
 
 ## Method updates are different
 
-Use **Edit Versions → Team Sync** to check, download, or upload a research-method package. Team Sync works with immutable packages on the `versions` branch; it does not update the application executable or `main` source. Installing an application update likewise does not silently select, enable, or rewrite a research method.
+Use **Edit Versions → Team Sync → Upload Version / Download Team Version** for immutable method packages on the `versions` branch. This does not change the application executable or `main` source. A software update does not silently select, enable, resize, replay or rewrite a method or historical trade.
 
-This separation lets an old application report that a method package is incompatible instead of executing arbitrary remote application code.
+## Release engineering boundary
 
-## Why there is no small-update button yet
+Human-facing Windows and combined-Mac release pages are separate from machine feeds. Feeds are isolated as `win-x64-stable`, `osx-arm64-stable`, and `osx-x64-stable`; the Mac human page is not a shared delta feed. Final release acceptance must test actual installed bridge-to-target download/apply/restart and target GUI health, source/version identity, local data preservation, corrupt/wrong-feed recovery, active-work exclusion and all three architectures. The internal bridge is an acceptance fixture, not an end-user upgrade prerequisite.
 
-Velopack was evaluated only in an isolated feasibility exercise. The evidence supports further work, not production activation:
-
-- Velopack 1.2.0 is MIT-licensed, supports Python integration, and its macOS ARM64 wheel imported under Python 3.13 on the validation host.
-- A tiny ARM64 V1-to-V2 fixture produced a 3,234-byte delta against a 2,916,530-byte full package. Manual reconstruction produced the same extracted V2 file contents and per-file hashes; the ZIP container hash differed because archive metadata/order differed.
-- A real 214 MB SHAQ ARM64 `onedir` payload was packaged into an 87 MB full package. Only one SHAQ version was packaged, so this was not a measured SHAQ delta.
-- Local tests covered full-package fallback, missing base, a stale partial file, checksum rejection, corrupt delta fallback, corrupt full rejection, and architecture-channel separation.
-
-The exercise did **not** verify Windows x64 or macOS Intel execution, installed-copy apply/restart, replacement of a running app, signing/notarization, a live GitHub/HTTP feed, or a real network interruption. It therefore does not justify exposing in-place update controls.
-
-Primary implementation references: [Velopack Python integration](https://docs.velopack.io/getting-started/python), [channel rules](https://docs.velopack.io/packaging/channels), [delta rules](https://docs.velopack.io/packaging/deltas), and [MIT license](https://github.com/velopack/velopack/blob/develop/LICENSE).
-
-## Safe future path
-
-The first updater-capable bridge release must still be installed as a full package from the existing official 0.6.1-style release pages. Only a later installed version may offer a small update after the complete production gates pass.
-
-Keep the two human-facing release pages per version: one Windows page and one Mac page containing both Mac architectures. Machine update content must be separate for all three runtime identifiers:
-
-- `win-x64-stable`
-- `osx-arm64-stable`
-- `osx-x64-stable`
-
-Each machine feed must contain only its own full and delta packages. The combined Mac human page cannot act as one shared delta feed for both architectures.
-
-Before an in-place updater can be enabled, one identical public source revision must pass version/architecture identity checks, dependency-notice checks, signed installed V1-to-V2 application tests on all three platforms, corrupt/wrong-feed recovery, active-research and active-settlement exclusion, graceful exit, restart, and per-feed architecture isolation. Until then, the honest action is **check release → read notes → open the official installer**.
+Primary references: [Python integration](https://docs.velopack.io/getting-started/python), [channels](https://docs.velopack.io/packaging/channels), [deltas](https://docs.velopack.io/packaging/deltas), and [MIT license](https://github.com/velopack/velopack/blob/develop/LICENSE). These describe the framework, not SHAQ's completed release acceptance.

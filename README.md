@@ -6,16 +6,16 @@ SHAQ Daily Oracle Lab is a local workbench for comparative financial research: i
 
 The results view separates **method changes, model identity, frozen data, candidate selection, and trading rules** before comparing predictions. A mismatch or missing record remains visible; it is not presented as a controlled experiment.
 
-## Published installers
+## 0.7.0 platform release pages
 
-The current published internal-test installers are **0.6.1**:
+This source is the **0.7.0 release candidate**. The platform pages below must supply the matching packages, source tag, checksums and `Acceptance.json` before they are usable downloads; this document does not claim completed acceptance or publication.
 
-- [Windows 10/11 x64](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.6.1-windows)
-- [macOS 15+ — Apple Silicon or Intel](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.6.1-macos)
+- [0.7.0 Windows 10/11 x64](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.0-windows)
+- [0.7.0 macOS 15+ — Apple Silicon or Intel](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.0-macos)
 
 Choose exactly one Mac disk image for the computer's architecture. Each release page includes checksums and an acceptance record and is visibly marked as a prerelease. These research builds are not commercially signed or notarized, so the operating system may require a first-launch confirmation.
 
-The [current `main` source](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/tree/main) is newer than 0.6.1. Revision `8ede112` passed [Windows x64 and both Mac architecture build/install/replay checks](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/actions/runs/34678254740), but its 0.6.2 installers are not yet a published upgrade. These fixture-based platform checks do not verify each user's live Claude/API connection. See [Software updates](docs/software-updates.md).
+Existing **0.6.1/0.6.2** installations require a first full install of the managed application; they cannot acquire the native updater through a small update. Close the old app, install the matching full package, then open the new app. If a legacy copy occupies a different location, remove only that old program through the operating system's Apps interface, not SHAQ user data. Local records, balances, settings and method drafts remain separate. See [Software updates](docs/software-updates.md) for GUI-only steps. Platform fixture checks do not verify each user's live model connection.
 
 ## First comparison in three steps
 
@@ -24,6 +24,18 @@ The [current `main` source](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-
 3. On **View Results**, select two records and choose **Compare Selected Runs**. Treat a difference as method evidence only when the model, frozen data, candidates, trading rules, and trade date are all marked the same.
 
 ## Three-page workbench
+
+### Three connection entries
+
+- **Connect Codex** detects a usable, signed-in Codex CLI and tests a structured response. Merely installing the chat app is not sufficient. [Official CLI setup](https://learn.chatgpt.com/docs/codex/cli).
+- **Connect Claude Code** uses the Claude Code CLI and its login, not the Claude chat website/app login.
+- **Configure API** accepts an official OpenAI/Anthropic protocol or compatible relay: enter its HTTPS base URL, API key, exact model ID and supported context limit. API-only users need neither CLI.
+
+Relay model ID, key group/permissions and protocol must match the provider's live catalog. The connection test shows observed HTTP status, bounded service code/message and request ID when available. HTTP 400 alone does not establish a cause: check URL, protocol, model and key permissions. SHAQ never silently switches provider or model. See [connection details](docs/user-guide.md#1-connect-an-analysis-model).
+
+Today uses New York time and the NYSE calendar: closed dates and times before 04:00 ET are blocked, including Hong Kong Monday mornings still Sunday in New York. A regular NYSE Monday can run with current-day premarket stock observations. If all stocks lack them, collection stops before model analysis; empty data is not proof of no trading or API failure. Partial coverage remains explicit. Late weekday research is not formal premarket performance, and saved historical replay remains separate.
+
+### Main pages
 
 - **Start Runs** — choose a model and method versions, start or resume a batch, and inspect real progress.
 - **Edit Versions** — copy a method into a local draft, change its modules, validate it, and explicitly share or download a team version.

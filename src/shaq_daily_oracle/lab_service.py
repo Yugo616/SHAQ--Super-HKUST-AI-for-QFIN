@@ -27,7 +27,7 @@ from .research_batch import (
     VariantSelection,
     load_frozen_evidence,
 )
-from .research_collection import collect_research_evidence
+from .research_collection import collect_research_evidence, today_collection_status, validate_today_evidence
 from .research_dashboard import ResearchDashboardIndex
 from .research_labels import refresh_research_labels
 from .research_progress import ResearchProgressLog
@@ -278,17 +278,13 @@ class LabService:
 
     def state(self) -> dict[str, Any]:
         self.start_result_refresh(manual=False)
-        from .market_calendar import market_session, next_market_session
         now = datetime.now(ET)
-        session = market_session(now.date())
         settings = self.settings.public_settings()
         storage = shutil.disk_usage(self.paths.research_root)
         drafts = self.registry.list_drafts(author=str(settings.get("github_login") or "local"))
         return {
             "product_name": "SHAQ Daily Oracle Lab",
-            "clock": {"et": now.isoformat(), "trade_date": now.date().isoformat(),
-                      "is_trading_day": session is not None,
-                      "next_trade_date": (session or next_market_session(now.date())).session_date.isoformat()},
+            "clock": today_collection_status(now),
             "platform": platform.system(),
             "research_mode": {
                 "available": True, "orders_allowed": False,
@@ -854,6 +850,7 @@ class LabService:
     def start_batch(
         self, *, selections: list[dict[str, str]], model_profile_id: str = ""
     ) -> dict[str, Any]:
+        self._require_today_available()
         variants = self._resolve_variants(selections)
         profile = self.settings.model_profile(model_profile_id or None)
         secret = "" if uses_local_subscription(profile) else (self.settings.get_model_secret(profile.profile_id) or "")
@@ -960,21 +957,24 @@ class LabService:
     def _today_evidence(
         self, *, profile: DataProfile, sec_identity: str, openbb_api_key: str = "", variants=None,
     ):
+        now = self._require_today_available()
         from .module_rules import default_rule
         screening_rules = {}
         for variant in variants or []:
             docs = self.registry.effective_skills(variant.version_id, variant.author)
             script = docs.get("modules/screening/compute.js", default_rule("screening"))
             screening_rules[sha256_payload(script)] = script
-        date_text = datetime.now(ET).date().isoformat()
+        date_text = now.date().isoformat()
         locator_root = self.paths.research_root / "evidence_sessions"
         locator_root.mkdir(parents=True, exist_ok=True)
         locator = locator_root / f"{date_text}-{profile.identity()[:12]}-{sha256_payload(screening_rules)[:12]}.json"
         if locator.is_file():
             value = json.loads(locator.read_text(encoding="utf-8"))
-            return load_frozen_evidence(
+            evidence = load_frozen_evidence(
                 self.paths.research_root / "evidence" / value["evidence_hash"]
             )
+            validate_today_evidence(evidence, now)
+            return evidence
         staging_root = self.paths.research_root / "evidence_staging"
         staging_root.mkdir(parents=True, exist_ok=True)
         temporary = Path(tempfile.mkdtemp(prefix=f"{date_text}-", dir=staging_root)) / "evidence"
@@ -985,8 +985,9 @@ class LabService:
                 openbb_api_key=openbb_api_key,
                 screening_rules=screening_rules or None,
                 history_cache_root=self.paths.research_root / "cache/daily_bars",
-                allow_replay=True,
+                allow_replay=False,
             )
+            validate_today_evidence(evidence, datetime.now(ET))
             destination = self.paths.research_root / "evidence" / evidence.manifest["evidence_hash"]
             destination.parent.mkdir(parents=True, exist_ok=True)
             if destination.exists():
@@ -1004,6 +1005,13 @@ class LabService:
         except Exception:
             shutil.rmtree(temporary.parent, ignore_errors=True)
             raise
+
+    def _require_today_available(self):
+        now = datetime.now(ET)
+        status = today_collection_status(now)
+        if not status['today_available']:
+            raise LabServiceError(status['today_message'])
+        return now
 
     def _set_job(self, job_id: str, **updates: Any) -> None:
         with self.jobs_lock:

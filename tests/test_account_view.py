@@ -39,7 +39,7 @@ class AccountViewTests(unittest.TestCase):
         entry = replay_day('2026-09-09', fixture.predictions(), fixture.labels(), AccountRules(), minute=minute)
         self.assertEqual(entry['status'], 'unavailable')
         html = self.render('dayHtml', entry)
-        for text in ['AAA', 'BBB', '0 股整数数量', '9 股整数数量', 'unavailable_entry', 'closed',
+        for text in ['AAA', 'BBB', '开仓分钟缺失 · 未模拟成交', '9 股整数数量', '已平仓',
                      '$99.95', '$90.05', '$88.29', '$0.85', 'trade-detail', 'Completed', '开仓', '平仓']:
             self.assertIn(text, html)
         self.assertNotIn('资料不可用 · 未成交', html)
@@ -51,10 +51,28 @@ class AccountViewTests(unittest.TestCase):
         html = self.render('dayHtml', {'status':'unavailable', 'scope':'forward', 'orders':[],
             'trades':[{'symbol':'AAA', 'quantity':0, 'status':'unavailable_entry'}]})
         self.assertIn('AAA', html)
-        self.assertIn('0 股整数数量', html)
+        self.assertNotIn('0 股整数数量', html)
+        self.assertIn('开仓分钟缺失 · 未模拟成交', html)
         self.assertIn('无模拟订单', html)
         self.assertIn('尚未计入持续账户净值', html)
         self.assertNotIn('Completed', html)
+
+    def test_missing_entry_hides_undetermined_amounts_but_budget_zero_is_explicit(self):
+        row = {'status': 'unavailable', 'gross_pnl': 0, 'fees': 0, 'slippage_cost': 0, 'net_pnl': 0,
+               'trades': [{'symbol': 'AAA', 'quantity': 0, 'status': 'unavailable_entry',
+                           'fees': 0, 'slippage_cost': 0, 'net_pnl': 0}]}
+        html = self.render('dayHtml', row)
+        self.assertNotIn('$0.00', html)
+        self.assertIn('手续费 —', html)
+        budget = self.render('dayHtml', {'status': 'final', 'trades': [
+            {'symbol': 'AAA', 'quantity': 0, 'status': 'unfilled_budget', 'fees': 0, 'net_pnl': 0}]})
+        self.assertIn('预算不足', budget)
+        self.assertIn('$0.00', budget)
+
+    def test_balance_chart_names_date_and_usd_axes(self):
+        html = self.render('plot', [{'curve': [{'date':'2026-09-09', 'equity': 10000}]}])
+        self.assertIn('余额（USD）', html)
+        self.assertIn('日期（交易日）', html)
 
     def test_final_execution_keeps_confirmation_but_shows_failed_refresh_receipt(self):
         html = self.render('dayHtml', {'status':'final', 'scope':'forward', 'orders':[], 'trades':[],

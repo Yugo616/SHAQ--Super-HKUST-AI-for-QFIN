@@ -22,6 +22,10 @@ const SHAQProgress = (() => {
   function scheduleText(value) {
     return value.enabled ? `自动运行已开启 · 美东 ${String(value.start_et || '').slice(0,5)}` : '自动运行未开启 · 当前不会每天自动跑';
   }
+  function applyTodayAvailability(button, clock, hasModel) {
+    button.disabled = !hasModel || clock?.today_available !== true;
+    button.title = clock?.today_message || '正在核验美东交易日与盘前时段';
+  }
   function progressHtml(jobs, versions, now) {
     const rows = currentJobs(jobs, now);
     if (!rows.length) return '<p class="progress-empty">今天还没有启动分析。历史记录请到「查看结果」。</p>';
@@ -59,6 +63,6 @@ const SHAQProgress = (() => {
     const timelineOpen=(selection.open||[]).includes('timeline')?' open':'';
     return `<section class="research-view"><label>版本 <select data-research-variant>${variants.map(v=>option(v,chosen,'data-research-variant-option')).join('')}</select></label><label>候选 <select data-research-symbol>${symbols.map(s=>option(s,symbol,'data-research-symbol')).join('')}</select></label><p>实际任务 ${tasks.size} · 已完成 ${completed} · 进行中 ${inflight} · 实际耗时 ${elapsed.toFixed(1)} 秒</p><details data-research-section="timeline"${timelineOpen}><summary>执行时间线</summary><ol>${timeline}</ol></details>${sections||'<p>尚无已校验报告；原始无效输出不会显示为结论。</p>'}</section>`;
   }
-  return {etDay,currentJobs,retryVersions,scheduleText,progressHtml,researchHtml};
+  return {etDay,currentJobs,retryVersions,scheduleText,progressHtml,researchHtml,applyTodayAvailability};
 })();
 if (typeof module !== 'undefined') module.exports = SHAQProgress;

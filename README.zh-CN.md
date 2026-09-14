@@ -6,16 +6,16 @@ SHAQ Daily Oracle Lab 是一套本地金融研究对照工作台：它让受治�
 
 结果页先区分**方法修改、模型身份、冻结数据、候选筛选和交易规则**，再比较预测。输入不同或历史资料未记录时会直接标明，不包装成严格的同条件实验。
 
-## 已发布安装包
+## 0.7.0 平台发布页
 
-当前已发布的内部测试安装包版本是 **0.6.1**：
+此源码是 **0.7.0 发布候选版**。下列平台页实际提供对应安装包、源码标签、校验值和 `Acceptance.json` 后才可用于下载；本文不替代验收，也不声称已发布：
 
-- [Windows 10/11 x64](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.6.1-windows)
-- [macOS 15+：Apple Silicon 或 Intel](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.6.1-macos)
+- [0.7.0 Windows 10/11 x64](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.0-windows)
+- [0.7.0 macOS 15+：Apple Silicon 或 Intel](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.0-macos)
 
 Mac 请按电脑架构只选择一个 DMG。每个发布页均附校验值和验收记录，并明确标为预发布。这些研究构建没有商业签名，首次打开时操作系统可能要求确认。
 
-[当前 `main` 源码](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/tree/main)比 0.6.1 新。`8ede112` 已通过 [Windows x64 与两种 Mac 的构建、安装及回放检查](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/actions/runs/34678254740)，但 0.6.2 安装包尚未作为升级发布。这些平台样例测试不等于已验证每位组员的真实 Claude／API 连接。详见[软件更新](docs/software-updates.md)。
+现有 **0.6.1／0.6.2** 需要先完整安装一次受管理的新应用，不能靠差分更新获得新更新器。先关闭旧程序、安装适合本机的完整包，再打开新版；若旧安装位置不同，只通过系统「应用」界面移除旧程序，不删除 SHAQ 用户数据。本地记录、余额、设置和方法草稿独立存放。详见[软件更新](docs/software-updates.md)中的图形界面步骤。平台样例测试不等于已验证每位组员的真实模型连接。
 
 ## 三步完成第一次对照
 
@@ -24,6 +24,18 @@ Mac 请按电脑架构只选择一个 DMG。每个发布页均附校验值和验
 3. 在「查看结果」选中两条记录，点击「比较选中版本」。只有模型、冻结数据、候选集合、模拟交易规则和交易日期全部标为相同，差异才能单独解读为方法差异。
 
 ## 三页工作台
+
+### 三个模型连接入口，任选一个
+
+- **连接 Codex**：检测可用且已登录的 Codex CLI，再测试结构化返回。只安装聊天 App 不等于完成此连接；参见 [Codex 官方说明](https://learn.chatgpt.com/docs/codex/cli)。
+- **连接 Claude Code**：检测 Claude Code CLI 及其登录，Claude 网页／聊天 App 登录并不等同。
+- **配置 API**：选 OpenAI／Anthropic 官方协议或兼容中转，填写 HTTPS 服务地址、API Key、准确模型 ID 和支持的上下文长度。只用 API，无需安装两个 CLI。
+
+中转站的模型 ID、密钥分组／权限与协议必须匹配实时模型广场；展示名称不是接口 ID。错误会显示实际收到的 HTTP 状态、有限的服务代码／信息及请求编号（若有）。仅凭 HTTP 400 不能确定原因，应核对地址、协议、模型和密钥权限，不认定某家服务的具体故障。软件不会偷偷换模型或服务。详见[连接指南](docs/user-guide.md#1-connect-an-analysis-model)。
+
+「今日运行」按纽约时间和 NYSE 日历判断：休市或美东 04:00 前不能启动，香港周一早晨可能仍是美东周日。正常 NYSE 周一在取得当天盘前股票数据后可以运行。若全部股票都缺当天盘前资料，批次在模型分析前停止；空数据只表示「未取得当天盘前数据」，不代表已证明没有成交或接口故障。部分缺失会明确保留，工作日迟到重跑不计正式盘前成绩，历史记录与显式历史回放保留。
+
+### 主页面
 
 - **开始运行**：选择模型和方法版本，启动或恢复批次，查看真实进度。
 - **修改版本**：将方法复制为本地草稿，修改模块、校验，然后由用户明确分享或下载团队版本。

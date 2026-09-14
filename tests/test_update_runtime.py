@@ -185,6 +185,15 @@ def asset(kind='Full', **changes):
 
 
 class UpdateRuntimeTests(unittest.TestCase):
+    def setUp(self):
+        # These tests simulate a 0.6.2 installation upgrading to 0.7.0;
+        # the checkout's release version must not select a different GUI path.
+        for target in ('shaq_daily_oracle.app_paths.application_version',
+                       'shaq_daily_oracle.software_updates.application_version'):
+            fixture_version = patch(target, return_value='0.6.2')
+            fixture_version.start()
+            self.addCleanup(fixture_version.stop)
+
     def test_feed_without_content_identity_explicitly_uses_full_not_delta(self):
         with tempfile.TemporaryDirectory() as directory:
             runtime,manager,selected,feed=self.runtime(directory,delta=True)

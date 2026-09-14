@@ -6,7 +6,7 @@ window.showCandidate = function(batchId, key, symbol) {
   if (!summary) return;
   const section = document.createElement('section');
   section.className = 'aftermarket';
-  section.innerHTML = `<h3>简短复盘 · 盘后查看</h3><p>${esc(summary.explanation)}</p>
+  section.innerHTML = `<h3>简短复盘 · 盘后查看</h3><p>${esc(({provisional:'初步价格',revised:'价格已修订 · 初步结果',final:'价格已复核'})[summary.price_status]||'价格尚未完整核验')}</p><p>${esc(summary.explanation)}</p>
     ${summary.return_pct == null ? '' : `<p>开盘至收盘 ${Number(summary.return_pct).toFixed(2)}% · ${summary.correct == null ? '未计方向成绩' : summary.correct ? '预测正确' : '预测错误'}。扣费盈亏另见虚拟账户。</p>`}
     ${(summary.basis || []).map(r => `<details><summary>当时依据 · ${esc(moduleName(r.domain))}</summary><p>${esc(r.thesis)}</p><p>反向考虑：${esc(r.antithesis)}</p><small>引用：${esc((r.evidence_ids || []).join('、'))}</small></details>`).join('')}`;
   q('#candidate-analysis .aftermarket').after(section);
@@ -19,13 +19,14 @@ window.showCandidate=function(batchId,key,symbol){
   showCandidateWithImmediateResults(batchId,key,symbol);
   const batch=state.selectedBatch,label=batch?.labels?.labels?.[symbol]||{};
   if(!['provisional','final'].includes(label.status))return;
+  if([label.official_unadjusted_open,label.official_unadjusted_close].some(value=>value==null||!Number.isFinite(Number(value))||Number(value)<=0))return;
   const prediction=batch?.variants?.[key]?.predictions?.find(row=>row.symbol===symbol);
   const panel=q('#candidate-analysis .aftermarket p');
   if(!panel)return;
   const pnl=prediction ? (prediction.direction==='bearish'
     ? Number(label.official_unadjusted_open)-Number(label.official_unadjusted_close)
     : Number(label.official_unadjusted_close)-Number(label.official_unadjusted_open)) : null;
-  const phase=label.status==='final'?'已复核':'初步';
+  const phase=label.status==='final'?'已复核':label.corrections?.length?'价格已修订 · 初步':'初步';
   panel.textContent=`${phase}：官方未复权开盘 $${Number(label.official_unadjusted_open).toFixed(2)}，收盘 $${Number(label.official_unadjusted_close).toFixed(2)}；实际${dir(label.actual_direction)}。${prediction?`一股方向回放 ${money(pnl)}。`:''}`;
 };
 
@@ -63,7 +64,8 @@ renderHistory=function(){
       tr.children[3].textContent=`${row.correct} / ${row.incorrect}`;
     }
     if(row&&tr.children[6]){
-      tr.children[4].textContent=SHAQAccounts.usd(account?.net_pnl);
+      const missingEntry=account?.status==='unavailable'&&!(account.trades||[]).some(trade=>trade.quantity>0);
+      tr.children[4].textContent=SHAQAccounts.usd(missingEntry?null:account?.net_pnl);
       tr.children[5].textContent=SHAQAccounts.usd(account?.account_cumulative_net_pnl);
       const balance=document.createElement('td');
       balance.textContent=SHAQAccounts.usd(account?.account_balance);

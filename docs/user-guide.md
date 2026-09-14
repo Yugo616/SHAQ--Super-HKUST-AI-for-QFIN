@@ -4,10 +4,10 @@ SHAQ Daily Oracle Lab is a local comparative-research workbench. Its research mo
 
 ## Install
 
-The published 0.6.1 internal-test downloads are:
+The 0.7.0 candidate's platform pages below become usable downloads only after they supply the matching package, checksum and acceptance record:
 
-- [Windows 10/11 x64 installer](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.6.1-windows)
-- [macOS 15+ Apple Silicon and Intel disk images](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.6.1-macos)
+- [Windows 10/11 x64 installer](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.0-windows)
+- [macOS 15+ Apple Silicon and Intel disk images](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.0-macos)
 
 On Mac, choose the disk image matching the computer's processor. On Windows, WebView2 Evergreen Runtime is required; the installer identifies a missing runtime before installation. Python and Git are not end-user prerequisites. The GitHub pages mark these builds as prereleases, and they are not commercially signed or notarized, so review the release page, checksum, and operating-system warning before first launch.
 
@@ -19,16 +19,22 @@ Open **Connection Settings** from the app header and complete the four cards.
 
 ### 1. Connect an analysis model
 
-Choose one route:
+The model card has three buttons: **Connect Codex**, **Connect Claude Code**, and **Configure API**. Choose one route:
 
-- **Codex** uses the Codex CLI already installed and logged in on this computer.
+- **Codex** uses a detected, usable Codex CLI logged in on this computer. Installing the chat app alone is not enough; see [official CLI setup](https://learn.chatgpt.com/docs/codex/cli) and [authentication](https://learn.chatgpt.com/docs/auth).
 - **Claude Code** uses the Claude Code CLI already installed and logged in. A Claude website or desktop-chat login is not the same login.
 - **OpenAI API** and **Anthropic API** take the model ID and API key.
 - **Compatible relay** takes its explicit base URL, model ID, context limit, and API key.
 
+API-only users need neither CLI. Enter the provider's HTTPS base URL, not its chat website; the protocol determines the request path. Match the exact model ID, key group/permissions, protocol and supported context length to the live catalog. Provider switches retain separate form drafts and successful save clears the submitted key.
+
+For example, Packy's [OpenAI-compatible CLI guide](https://docs.packyapi.com/docs/register/6-cli.html) and [Kimi Code guide](https://docs.packyapi.com/docs/cli/7-kimi-code.html) describe different integrations. At documentation review the OpenAI-compatible base was `https://cf.api.fan/v1`; verify its live catalog/guide before use. This is a documentation example, not an app default or a promise that all models support all protocols.
+
 On Windows, local-subscription discovery accepts the provider's native `.exe` or `.com` CLI. Shell launchers are not accepted because they do not meet the desktop process boundary; an API profile remains available instead. Use the official installation links in the dialog when a native CLI is absent.
 
 The app performs a small structured-response probe before saving a profile. A malformed response, authentication error, rate limit, timeout, or schema failure is shown with **Retry**, **Edit Connection**, and **Copy Error** actions. It does not silently switch provider, endpoint, or model. Ordinary setup has no temperature field; each protocol sends only parameters supported by that profile.
+
+Errors include observed HTTP status and bounded/redacted provider code, message and request ID when available. HTTP 400 alone does not identify a cause: verify URL, protocol, model ID and key group/permissions. For 401/403 check credential validity/access; for 429 check limits; for timeout check network/reachability. Do not share full keys or unredacted request bodies.
 
 API secrets and GitHub credentials go to macOS Keychain or Windows Credential Manager. Non-secret profile metadata is stored in the app's per-user configuration directory.
 
@@ -60,15 +66,17 @@ The comparison checks six dimensions: method snapshot, model-profile hash, froze
 
 Select method versions and a model, request a cost estimate when price metadata exists, and start the batch. Progress comes from saved collection and analysis events: candidate intake, six domains, adversary review, decision, and later result refresh. The interface preserves the selected stock and open detail sections while a job is active.
 
+Today never silently falls back to a previous session. NYSE closed dates and times before 04:00 ET disable the button and are independently blocked by the backend. Local Monday can still be Sunday in New York; an ordinary NYSE Monday is not blacklisted. At least one valid current-session stock premarket observation is required before model analysis; partial coverage remains explicit without a new coverage/voting threshold. `no_data` means current-day observations were not obtained; `provider_error` requires an observed provider failure. Cached evidence must match today's date/cutoff and observation status. A late weekday run stays research-only, never relabeled as an on-time formal prediction.
+
 After an interruption, retry the failed version from its saved batch. Completed valid work is reused; a retry does not rerun a successful model call merely to seek a preferred answer.
 
 Automatic runs are off until explicitly enabled. Their method selection is separate from the manual selection. The computer must remain on and online at the displayed local time.
 
 ### Edit Versions
 
-Choose a base version and **Copy as New Version** before editing. A method package contains the eight Skill documents, agent metadata, references, module code/tests, and decision code/tests. Validation rejects arbitrary Python, binaries, workflow files, credentials, runtime data, and local paths. Decision JavaScript runs in a restricted local sandbox without file, network, shell, credential, broker, or result-label access.
+Choose a base version and **Copy Version (`复制版本`)** before editing; **Save Changes (`保存修改`)** saves draft edits. A method package contains the eight Skill documents, agent metadata, references, module code/tests, and decision code/tests. Validation rejects arbitrary Python, binaries, workflow files, credentials, runtime data, and local paths. Decision JavaScript runs in a restricted local sandbox without file, network, shell, credential, broker, or result-label access.
 
-Saving creates a local immutable method version. **Team Sync** is a separate explicit action. It adds a complete package without overwriting earlier versions or application source.
+**Save Version** creates a local immutable method version. **Team Sync → Upload Version (`上传版本`) / Download Team Version (`下载团队版本`)** is a separate explicit action. It adds a complete package without overwriting earlier versions or application source.
 
 ### View Results
 
@@ -89,6 +97,8 @@ Zipline-reloaded 3.1.1 performs brokerless after-close replay from the frozen di
 An explicitly activated experimental continuity policy can instead size from the 20 prior eligible trading days: `opening equity × 0.2% ÷ frozen volatility`, capped at 10% per symbol and 30% gross exposure. The interface labels that policy experimental; it is not an optimality claim. If the required point-in-time volatility is missing or invalid, that symbol is not sized by guessing.
 
 Minute observations are independently re-read before final confirmation. Missing entry or exit minutes are not replaced with daily bars or forward-filled prices. Reopening the app can fill still-verifiable incomplete records, but does not promise that a provider will retain old minute data. Duplicate refreshes do not double-book a result; a changed provider observation is recorded as a revision rather than silently rewriting confirmed profit and loss.
+
+A missing opening minute shows **No entry-minute data / no simulated fill**, with dashes for undetermined simulated fees/profit, not a completed zero-share trade. Genuine budget/volume non-fills stay distinct. Existing partial fills remain visible and missing exits retain incomplete positions. Charts label trading date and USD balance without inventing intraday paths. Price-only summaries explain return arithmetic and the original thesis, not an invented causal story; provisional/revised prices remain labeled as such.
 
 ### Account boundaries
 
