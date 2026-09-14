@@ -1,0 +1,11 @@
+{
+  "references": {
+    "REF-VELOPACK-001": "Velopack Python SDK 1.2.0: https://docs.velopack.io/getting-started/python and https://docs.velopack.io/integrating/overview"
+  },
+  "decisions": {
+    "DEC-NATIVE-UPDATE-001": "User-approved native update integration: one package identity, three architecture channels, trusted configured GitHub Release feeds, SDK payload verification, explicit download/apply, atomic cross-process mutation admission; no startup auto-apply or model/settings migration."
+  },
+  "experiments": {
+    "EXP-NATIVE-UPDATE-001": "Runtime boundary tests are not installed V1-to-V2 release acceptance. Each platform requires separate real installed update, restart, corruption, and retained-state verification before publication."
+  }
+}

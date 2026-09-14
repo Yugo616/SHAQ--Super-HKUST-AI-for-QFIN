@@ -1,3 +1,47 @@
+let softwareUpdateTimer;
+function renderSoftwareUpdate(value) {
+  const target=q('#software-update-detail');
+  const labels={available:'有新版本可下载',current:'已是最新发布版',local_newer:'本机版本比公开安装包更新',
+    no_release:'还没有适合这台电脑的安装包',unsupported:'暂不提供此平台安装包',unknown_local_version:'无法识别本机版本',
+    downloading:'正在后台下载并校验',ready:'更新已准备就绪',applying:'正在更新并重启',download_failed:'下载或校验失败'};
+  const managed=value.mode==='managed';
+  const timestamp=value=>value?`<time datetime="${esc(value)}">${esc(new Date(value).toLocaleString())}</time>`:'暂无记录';
+  const size=bytes=>`${(Number(bytes||0)/1048576).toFixed(1)} MB`;
+  target.innerHTML=`<h3>${labels[value.status]||'检查完成'}</h3><p>${esc(value.platform||'')} · 当前 ${esc(value.current_version)}${value.latest_version?` · 最新 ${esc(value.latest_version)}${value.internal_test_release?'（内部测试版）':''}`:''}</p>
+    <p>${esc(value.waiting_for_idle?'已下载，等待本地任务运行完更新':value.message||'旧安装仅提供完整安装包：请等待分析和结算结束，关闭应用后安装。')}</p>
+    ${value.target_version?`<p>更新目标版本：${esc(value.target_version)}</p>`:''}
+    <label><input type="checkbox" id="automatic-software-update" ${value.automatic_enabled?'checked':''}>自动软件更新（默认关闭）</label>
+    <p>仅在应用打开时自动检查、下载，并等待所有本地任务结束后更新重启；不会更改自动预测开关、模型或方法包。</p>
+    <p>最近检查：${timestamp(value.last_checked_at)}<br>上次成功更新：${value.last_update?`${esc(value.last_update.version)} · ${value.last_update.method==='automatic'?'自动':'手动'} · ${timestamp(value.last_update.completed_at)}`:'暂无已确认记录'}</p>
+    ${managed?`<p>预计下载 ${size(value.download_size_bytes)}；完整包 ${size(value.size_bytes)}</p>`:''}
+    ${value.status==='downloading'?`<progress max="100" value="${Number(value.progress)||0}"></progress><span>${Number(value.progress)||0}%</span>`:''}
+    ${['available','download_failed'].includes(value.status)?`<button class="primary" id="download-software">${managed?'下载更新':'下载完整安装包（首次接入更新）'}</button>`:''}
+    ${value.status==='ready'?'<button class="primary" id="apply-software">更新并重启</button>':''}
+    <p id="software-update-error" role="alert"></p>
+    <details><summary>发布说明</summary><pre class="release-notes">${esc(value.notes||'暂无发布说明')}</pre></details>
+    ${!['downloading','applying'].includes(value.status)?'<button class="secondary" id="retry-software-check">重新检查</button>':''}`;
+  if(['available','download_failed'].includes(value.status))q('#download-software').onclick=async()=>{
+    try {
+      if(!managed){await api('open_software_release');return;}
+      renderSoftwareUpdate(await api('download_software_update'));
+    } catch(error){q('#software-update-error').textContent=error.message;}
+  };
+  q('#automatic-software-update').onchange=async()=>{
+    try{renderSoftwareUpdate(await api('set_automatic_software_update',q('#automatic-software-update').checked));}
+    catch(error){q('#automatic-software-update').checked=Boolean(value.automatic_enabled);q('#software-update-error').textContent=error.message;}
+  };
+  if(value.status==='ready')q('#apply-software').onclick=async()=>{
+    try {renderSoftwareUpdate(await api('apply_software_update'));}
+    catch(error){q('#software-update-error').textContent=error.message;}
+  };
+  if(!['downloading','applying'].includes(value.status))q('#retry-software-check').onclick=checkSoftwareUpdate;
+  clearTimeout(softwareUpdateTimer);
+  if(value.status==='downloading'||value.waiting_for_idle||value.automatic_enabled)softwareUpdateTimer=setTimeout(pollSoftwareUpdate,700);
+}
+async function pollSoftwareUpdate() {
+  try {renderSoftwareUpdate(await api('software_update_status'));}
+  catch(error){q('#software-update-error').textContent=error.message;softwareUpdateTimer=setTimeout(pollSoftwareUpdate,2000);}
+}
 async function checkSoftwareUpdate() {
   const target=q('#software-update-detail');
   q('#software-update-modal').showModal();
@@ -5,21 +49,15 @@ async function checkSoftwareUpdate() {
   target.dataset.checking='true';
   target.innerHTML='<p role="status">正在检查这台电脑适用的软件版本…</p>';
   try {
-    const value=await api('check_software_update');
-    const text={available:'有新版本可下载',current:'已是最新发布版',local_newer:'本机版本比当前公开安装包更新',
-      no_release:'还没有适合这台电脑的安装包',unsupported:'暂不提供此平台安装包',unknown_local_version:'无法识别本机版本'};
-    target.innerHTML=`<h3>${text[value.status]||'检查完成'}</h3><p>${esc(value.platform)} · 当前 ${esc(value.current_version)}${value.latest_version?` · 最新发布 ${esc(value.latest_version)}${value.internal_test_release?'（内部测试版）':''}`:''}</p>
-      <p>方法通过「上传版本／下载团队版本」更新，无需重装软件。本次软件更新使用完整安装包；安装前请等待分析和结算结束，关闭应用后再安装。</p>
-      ${value.status==='available'?'<button class="primary" id="download-software">下载此电脑适用的安装包</button>':''}
-      <details><summary>发布说明</summary><pre class="release-notes">${esc(value.notes||'暂无发布说明')}</pre></details>
-      <button class="secondary" id="retry-software-check">重新检查</button>`;
-    if(q('#download-software'))q('#download-software').onclick=async()=>{
-      try{await api('open_software_release');}catch(error){notice(error.message,true);}
-    };
-    q('#retry-software-check').onclick=checkSoftwareUpdate;
+    renderSoftwareUpdate(await api('check_software_update'));
   } catch(error) {
-    target.innerHTML=`<p role="alert">未能检查更新：${esc(error.message)}</p><button id="retry-software-check">重试</button>`;
-    q('#retry-software-check').onclick=checkSoftwareUpdate;
+    try {
+      renderSoftwareUpdate(await api('software_update_status'));
+      q('#software-update-error').textContent=`未能检查更新：${error.message}`;
+    } catch(localError) {
+      target.innerHTML=`<p role="alert">未能读取更新状态：${esc(localError.message)}</p><button id="retry-software-check">重试</button>`;
+      q('#retry-software-check').onclick=checkSoftwareUpdate;
+    }
   } finally {target.dataset.checking='false';}
 }
 document.querySelector('#software-update-button').onclick=checkSoftwareUpdate;

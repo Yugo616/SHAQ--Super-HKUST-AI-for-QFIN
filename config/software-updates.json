@@ -1,0 +1,19 @@
+{
+  "package_id": "SHAQDailyOracleLab",
+  "maximum_deltas_before_fallback": 10,
+  "automatic_check_interval_seconds": 3600,
+  "automatic_idle_poll_seconds": 10,
+  "channels": {
+    "Darwin/arm64": "osx-arm64-stable",
+    "Darwin/x86_64": "osx-x64-stable",
+    "Windows/amd64": "win-x64-stable",
+    "Windows/x86_64": "win-x64-stable"
+  },
+  "parameter_bindings": {
+    "package_id": ["REF-VELOPACK-001", "DEC-NATIVE-UPDATE-001", "EXP-NATIVE-UPDATE-001"],
+    "maximum_deltas_before_fallback": ["REF-VELOPACK-001", "DEC-NATIVE-UPDATE-001", "EXP-NATIVE-UPDATE-001"],
+    "automatic_check_interval_seconds": ["REF-VELOPACK-001", "DEC-NATIVE-UPDATE-001", "EXP-NATIVE-UPDATE-001"],
+    "automatic_idle_poll_seconds": ["REF-VELOPACK-001", "DEC-NATIVE-UPDATE-001", "EXP-NATIVE-UPDATE-001"],
+    "channels": ["REF-VELOPACK-001", "DEC-NATIVE-UPDATE-001", "EXP-NATIVE-UPDATE-001"]
+  }
+}

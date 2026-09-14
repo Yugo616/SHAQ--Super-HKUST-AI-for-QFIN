@@ -7,6 +7,7 @@ import socket
 import sys
 import tempfile
 import webbrowser
+from contextlib import nullcontext
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -20,6 +21,7 @@ from .market_calendar import market_session, next_market_session
 from .service import disable_future_runs, enable_autostart, run_worker, start_worker
 from .settings import SettingsError, SettingsStore, _atomic_json
 from .sandboxed_codex import attest_sandboxed_codex
+from .update_admission import gate_for, guarded_method
 
 
 def _tcp_ready(host: str, port: int) -> bool:
@@ -31,6 +33,7 @@ def _tcp_ready(host: str, port: int) -> bool:
 
 
 class DesktopBridge:
+    @guarded_method
     def __init__(self, paths=None) -> None:
         self.paths = (paths or app_paths()).ensure()
         migrate_legacy_runtime(self.paths)
@@ -45,11 +48,14 @@ class DesktopBridge:
             "requires_separate_setup": True,
         }
         self.window = None
+        self._software_updater().start_automatic_checks()
 
-    @staticmethod
-    def _result(action, *args, **kwargs) -> dict[str, Any]:
+    def _result(self, action, *args, _update_control=False, **kwargs) -> dict[str, Any]:
         try:
-            return {"ok": True, "value": action(*args, **kwargs)}
+            # All bridge calls can trigger index/setting writes, including reads.
+            admission = gate_for(self.paths).work() if hasattr(self, 'paths') and not _update_control else nullcontext()
+            with admission:
+                return {"ok": True, "value": action(*args, **kwargs)}
         except Exception as exc:
             result = {"ok": False, "error": str(exc), "error_type": type(exc).__name__}
             diagnostic = getattr(exc, "diagnostic", None)
@@ -180,11 +186,28 @@ class DesktopBridge:
 
     def check_software_update(self) -> dict[str, Any]:
         def check():
-            from .software_updates import check_releases
-            value = check_releases(self.paths.package_root)
+            value = self._software_updater().check()
             self._offered_software_release = value
             return value
-        return self._result(check)
+        return self._result(check, _update_control=True)
+
+    def _software_updater(self):
+        if not hasattr(self, '_updater'):
+            from .software_updates import UpdateRuntime
+            self._updater = UpdateRuntime(self.paths)
+        return self._updater
+
+    def software_update_status(self):
+        return self._result(self._software_updater().status, _update_control=True)
+
+    def download_software_update(self):
+        return self._result(self._software_updater().download, _update_control=True)
+
+    def apply_software_update(self):
+        return self._result(self._software_updater().apply, _update_control=True)
+
+    def set_automatic_software_update(self, enabled):
+        return self._result(self._software_updater().set_automatic, enabled, _update_control=True)
 
     def open_software_release(self) -> dict[str, Any]:
         def open_release():
@@ -677,6 +700,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--smoke-output", type=Path)
     parser.add_argument("--gui-smoke", type=Path)
     args, _ = parser.parse_known_args(argv)
+    if getattr(sys, 'frozen', False) and not (args.smoke or args.gui_smoke):
+        paths = app_paths()
+        gate = gate_for(paths)
+        from .app_paths import application_version
+        gate.finish_restart(application_version(paths.package_root))
+        if (gate.root / 'installing.json').exists():
+            if args.worker or args.research_worker:
+                return 0  # No writes and no recovery window for scheduler launches.
+            from .software_updates import launch_update_recovery
+            return launch_update_recovery(paths)
     if args.research_worker:
         from .research_schedule import run_research_worker
         return run_research_worker(app_paths().ensure())

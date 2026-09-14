@@ -18,6 +18,7 @@ from zoneinfo import ZoneInfo
 from filelock import FileLock, Timeout as LockTimeout
 
 from .app_paths import AppPaths
+from .update_admission import guarded_method, start_guarded_thread
 from .data_providers import DataProfile, load_versioned_universe
 from .hashing import sha256_payload
 from .model_backends import ModelProfile, probe_model_profile, uses_local_subscription
@@ -115,6 +116,7 @@ class LabService:
         self.registry.install(manifest=manifest, files=complete, commit_sha="local:" + manifest.identity())
         return {"version_id": draft_id, "author": author}
 
+    @guarded_method
     def __init__(self, paths: AppPaths) -> None:
         if not all((
             paths.research_root, paths.batches_root, paths.skill_registry_root,
@@ -141,6 +143,7 @@ class LabService:
             # the reviewed controller entrypoint.
             account_store.activate(AccountRules())
 
+    @guarded_method
     def _refresh_minute_accounts(self, profile, eligible_dates=None):
         from .minute_settlements import refresh_minute_observations
         from .virtual_accounts import AccountStore
@@ -167,6 +170,7 @@ class LabService:
         except (FileNotFoundError, json.JSONDecodeError):
             return {"status": "idle", "operation_id": "", "result": {}}
 
+    @guarded_method
     def start_result_refresh(self, *, manual: bool = False, eligible_dates=None) -> dict[str, Any]:
         """Start one credential-free price/result refresh across app instances."""
         now = datetime.now(ET)
@@ -216,7 +220,7 @@ class LabService:
             name="shaq-result-refresh",
         )
         self._owned_result_refresh = (operation_id, thread)
-        thread.start()
+        start_guarded_thread(self.paths, thread)
         return running
 
     def wait_result_refresh(self, operation_id, timeout=180):
@@ -846,6 +850,7 @@ class LabService:
             variants.append(VariantSelection.from_registry_row(available[key]))
         return variants
 
+    @guarded_method
     def start_batch(
         self, *, selections: list[dict[str, str]], model_profile_id: str = ""
     ) -> dict[str, Any]:
@@ -890,7 +895,7 @@ class LabService:
             daemon=True,
             name=f"shaq-research-{job_identity}",
         )
-        thread.start()
+        start_guarded_thread(self.paths, thread)
         return dict(self.jobs[job_id])
 
     def _run_batch_job(

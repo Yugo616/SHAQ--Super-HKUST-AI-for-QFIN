@@ -1,4 +1,5 @@
 # CPython 3.13 native release closure. Build tables from sources first.
+velopack==1.2.0
 Bottleneck==1.6.0
 Cython==3.2.4
 Mako==1.4.1

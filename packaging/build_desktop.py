@@ -150,7 +150,7 @@ def pyinstaller_args(root, output, name, blosc2_library=None):
         args += ['--add-binary', f'{blosc2_library}:tables']
     args += ['--collect-submodules', 'scipy._external']
     for package in ('webview', 'zipline', 'tables', 'bcolz', 'pandas_market_calendars',
-                    'exchange_calendars', 'yfinance', 'keyring'):
+                    'exchange_calendars', 'yfinance', 'keyring', 'velopack'):
         args += ['--collect-all', package]
     for package in ('openai', 'quickjs', '_quickjs', 'keyring.backends.macOS' if sys.platform == 'darwin' else 'keyring.backends.Windows'):
         args += ['--hidden-import', package]

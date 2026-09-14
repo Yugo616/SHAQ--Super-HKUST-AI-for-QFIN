@@ -24,6 +24,7 @@ from .postmortem_runner import PostmortemRunner
 from .settings import SettingsStore, _atomic_json
 from .workflow import Workflow
 from .operator_control import requested_today
+from .update_admission import WorkerAdmission, UpdateBusy, start_guarded_thread
 
 
 class ServiceError(RuntimeError):
@@ -94,6 +95,14 @@ def run_worker(
     *, paths: AppPaths, once: bool = False,
     research_companion: Callable[[], None] | None = None,
 ) -> int:
+    try:
+        with WorkerAdmission(paths) as admission:
+            return _run_worker(paths=paths, once=once, research_companion=research_companion, admission=admission)
+    except UpdateBusy:
+        return 0
+
+
+def _run_worker(*, paths, once, research_companion, admission):
     paths.ensure()
     lock = FileLock(str(paths.data_root / "worker.lock"))
     try:
@@ -131,7 +140,7 @@ def run_worker(
                 })
                 if once:
                     return 0
-                time.sleep(300)
+                admission.pause(300)
                 continue
             start_time = clock_time.fromisoformat(str(settings["automatic_start_et"]))
             start = datetime.combine(session.session_date, start_time, ZoneInfo("America/New_York"))
@@ -139,10 +148,10 @@ def run_worker(
                 _write_status(paths, {"state": "waiting", "next_start_et": start.isoformat()})
                 if once:
                     return 0
-                time.sleep(min(300, max(30, int((start - now_et).total_seconds()))))
+                admission.pause(min(300, max(30, int((start - now_et).total_seconds()))))
                 continue
             if now_et > session.market_close + timedelta(minutes=30):
-                _wait_for_next_day(paths)
+                _wait_for_next_day(paths, admission)
                 if once:
                     return 0
                 continue
@@ -188,7 +197,7 @@ def run_worker(
                         })
                     if once:
                         return 0
-                    time.sleep(300)
+                    admission.pause(300)
                     continue
                 if not provisional.is_file() and now_et < review_at:
                     _write_status(paths, {
@@ -198,12 +207,12 @@ def run_worker(
                     })
                     if once:
                         return 0
-                    time.sleep(min(300, max(30, int((review_at - now_et).total_seconds()))))
+                    admission.pause(min(300, max(30, int((review_at - now_et).total_seconds()))))
                     continue
                 _write_status(paths, {"state": "session_already_recorded"})
                 if once:
                     return 0
-                time.sleep(300)
+                admission.pause(300)
                 continue
             runtime_config = json.loads(
                 (paths.package_root / "config/runtime.json").read_text(encoding="utf-8")
@@ -225,7 +234,7 @@ def run_worker(
                 })
                 if once:
                     return 0
-                time.sleep(300)
+                admission.pause(300)
                 continue
             if session.session_date.isoformat() in attempted_sessions:
                 _write_status(paths, {
@@ -234,7 +243,7 @@ def run_worker(
                 })
                 if once:
                     return 2
-                time.sleep(300)
+                admission.pause(300)
                 continue
             _write_status(paths, {"state": "workflow_running", "session": session.session_date.isoformat()})
             attempted_sessions.add(session.session_date.isoformat())
@@ -275,7 +284,7 @@ def run_worker(
                             name="daily-oracle-research-companion",
                             daemon=False,
                         )
-                        companion_thread.start()
+                        start_guarded_thread(paths, companion_thread)
                     campaign_failed = False
 
                     def observe_preflight(preflight: dict[str, Any]) -> None:
@@ -342,7 +351,7 @@ def run_worker(
                         })
                     if once:
                         return 2 if campaign_failed else 0
-                    time.sleep(300)
+                    admission.pause(300)
                     continue
             workflow = Workflow(
                 package_root=paths.package_root,
@@ -365,18 +374,18 @@ def run_worker(
                     return 2
             if once:
                 return 0
-            time.sleep(300)
+            admission.pause(300)
     finally:
         lock.release()
 
 
-def _wait_for_next_day(paths: AppPaths) -> None:
+def _wait_for_next_day(paths: AppPaths, admission: WorkerAdmission) -> None:
     following = next_market_session(datetime.now(ZoneInfo("America/New_York")).date())
     _write_status(paths, {
         "state": "session_finished", "next_session": following.session_date.isoformat(),
         "next_market_open_et": following.market_open.isoformat(),
     })
-    time.sleep(300)
+    admission.pause(300)
 
 
 def start_worker(paths: AppPaths, *, once: bool = False) -> int:

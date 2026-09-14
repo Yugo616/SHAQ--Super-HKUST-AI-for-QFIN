@@ -14,6 +14,7 @@ from filelock import FileLock, Timeout
 
 from .market_calendar import market_session, next_market_session
 from .settings import _atomic_json
+from .update_admission import guarded_worker
 
 ET = ZoneInfo("America/New_York")
 SERVICE_LABEL = "org.shaq.daily-oracle.research"
@@ -94,6 +95,7 @@ def due_status(now, start_et):
     return "due"
 
 
+@guarded_worker
 def run_research_worker(paths):
     from .lab_service import LabService
     lock = FileLock(str(paths.research_root / "schedule.lock"))
