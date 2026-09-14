@@ -1,4 +1,6 @@
 /* Connection feedback is presentation only. The backend performs a real schema probe. */
+const providerDraftFields=['model','secret','base_url','relay_base_url','auth_style','output_mode','maximum_context_tokens'];
+const providerDraftControllers=new WeakMap();
 const SHAQConnections = {
   diagnosticMessage(diagnostic, fallback) {
     if(!diagnostic)return fallback || '连接失败，请重新检测。';
@@ -10,21 +12,52 @@ const SHAQConnections = {
     return parts.join(' · ');
   },
   bindProviderDrafts(form, applyPreset) {
-    const names=['model','secret','base_url','relay_base_url','auth_style','output_mode','maximum_context_tokens'];
-    const drafts=new Map();
-    let current=form.elements.protocol.value;
-    const capture=()=>Object.fromEntries(names.map(name=>[name,form.elements[name]?.value??'']));
-    const restore=value=>names.forEach(name=>{if(form.elements[name])form.elements[name].value=value?.[name]??''});
-    drafts.set(current,capture());
+    let controller=providerDraftControllers.get(form);
+    const values=()=>Object.fromEntries(providerDraftFields.map(
+      name=>[name,form.elements[name]?.value??'']));
+    const restore=value=>providerDraftFields.forEach(
+      name=>{if(form.elements[name])form.elements[name].value=value?.[name]??''});
+    if(!controller) {
+      controller={drafts:new Map(),current:form.elements.protocol.value,
+        secretGenerations:new Map(),applyPreset};
+      controller.capture=()=>controller.drafts.set(controller.current,values());
+      controller.capture();
+      providerDraftControllers.set(form,controller);
+    } else {
+      controller.current=form.elements.protocol.value;
+      controller.capture();
+      controller.applyPreset=applyPreset;
+    }
     form.elements.protocol.onchange=()=>{
-      drafts.set(current,capture());
-      current=form.elements.protocol.value;
+      controller.capture();
+      controller.current=form.elements.protocol.value;
       restore(null);
-      applyPreset();
-      if(drafts.has(current))restore(drafts.get(current));
-      else drafts.set(current,capture());
+      controller.applyPreset();
+      if(controller.drafts.has(controller.current))restore(controller.drafts.get(controller.current));
+      else controller.capture();
     };
-    return drafts;
+    if(form.elements.secret)form.elements.secret.oninput=()=>{
+      const protocol=form.elements.protocol.value;
+      controller.secretGenerations.set(protocol,(controller.secretGenerations.get(protocol)||0)+1);
+    };
+    return controller.drafts;
+  },
+  captureSubmission(form, protocol, secret) {
+    const controller=providerDraftControllers.get(form);
+    if(controller) {
+      controller.current=protocol;
+      controller.capture();
+    }
+    return {protocol,secret,generation:controller?.secretGenerations.get(protocol)||0};
+  },
+  clearSubmittedSecret(form, drafts, submission) {
+    const controller=providerDraftControllers.get(form);
+    if(controller&&(controller.secretGenerations.get(submission.protocol)||0)!==submission.generation)return;
+    const draft=drafts?.get(submission.protocol);
+    if(draft?.secret===submission.secret)draft.secret='';
+    if(form.elements.protocol.value===submission.protocol&&form.elements.secret.value===submission.secret) {
+      form.elements.secret.value='';
+    }
   },
   clearDraftSecret(drafts, protocol) {
     const draft=drafts?.get(protocol);
@@ -64,7 +97,6 @@ function showConnectionState(value) {
 
 let modelConnectionController;
 let lastConnectionProtocol;
-let providerDrafts;
 function connectionController() {
   if(!modelConnectionController)modelConnectionController=SHAQConnections.controller(
     (profile,secret,test)=>api('save_lab_model_profile',profile,secret,test),showConnectionState);
@@ -115,10 +147,11 @@ function bindModelConnections() {
     try {await api('open_model_installation',button.dataset.installModel);}
     catch(error){notice(error.message,true);}
   });
-  providerDrafts=SHAQConnections.bindProviderDrafts(form,applyProtocolPreset);
+  const providerDrafts=SHAQConnections.bindProviderDrafts(form,applyProtocolPreset);
   form.onsubmit=async event=>{
     event.preventDefault();
     const profile=Object.fromEntries(new FormData(form).entries()),secret=profile.secret;
+    const submission=SHAQConnections.captureSubmission(form,profile.protocol,secret);
     delete profile.secret;
     lastConnectionProtocol=profile.protocol;
     if(profile.protocol==='openai-chat-completions')profile.base_url=profile.relay_base_url.trim();
@@ -130,8 +163,8 @@ function bindModelConnections() {
       reasoning_effort:'high',input_price_per_million:optional(profile.input_price_per_million),
       output_price_per_million:optional(profile.output_price_per_million)});
     if(await connectionController().test(profile,secret)) {
-      SHAQConnections.clearDraftSecret(providerDrafts,profile.protocol);
-      form.elements.secret.value='';await load(false);q('#setup').classList.remove('hidden');
+      SHAQConnections.clearSubmittedSecret(form,providerDrafts,submission);
+      await load(false);q('#setup').classList.remove('hidden');
     }
   };
 }

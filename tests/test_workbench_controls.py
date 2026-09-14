@@ -74,6 +74,87 @@ console.log(JSON.stringify({relayEmpty,anthropicEmpty,relayRestored,
             'openai-responses', 'openai-chat-completions', 'anthropic-messages'
         ])
 
+    def test_api_provider_drafts_survive_actual_connection_rebind(self):
+        result = self.node('connections.js', '''
+const fields={protocol:{value:'openai-responses'},model:{value:'gpt-a'},secret:{value:'openai-key'},
+ base_url:{value:'https://api.openai.com/v1'},relay_base_url:{value:''},
+ auth_style:{value:'bearer'},output_mode:{value:'strict'},maximum_context_tokens:{value:'128000'}};
+const form={elements:fields,classList:{remove(){}},requestSubmit(){}};
+const nodes={'#model-form':form};
+const q=selector=>nodes[selector]||=( {classList:{remove(){},toggle(){}},focus(){},scrollIntoView(){}} );
+const qa=()=>[];const applyProtocolPreset=()=>{};
+bindModelConnections();
+fields.protocol.value='openai-chat-completions';fields.protocol.onchange();
+fields.model.value='relay-model';fields.secret.value='relay-key';
+fields.relay_base_url.value='https://relay.test/v1';
+bindModelConnections();
+fields.protocol.value='openai-responses';fields.protocol.onchange();
+console.log(JSON.stringify({model:fields.model.value,secret:fields.secret.value}));''')
+        self.assertEqual(result, {'model': 'gpt-a', 'secret': 'openai-key'})
+
+    def test_delayed_success_preserves_new_secret_after_provider_switch(self):
+        result = self.node('connections.js', '''
+(async()=>{
+const fields={protocol:{value:'openai-responses'},model:{value:'gpt-a'},secret:{value:'submitted-key'},
+ base_url:{value:'https://api.openai.com/v1'},relay_base_url:{value:'https://unused-relay.test/v1'},
+ auth_style:{value:'bearer'},output_mode:{value:'strict'},maximum_context_tokens:{value:'128000'},
+ max_concurrency:{value:'2'},rate_limit_per_minute:{value:'30'},input_price_per_million:{value:''},
+ output_price_per_million:{value:''}};
+const form={elements:fields,classList:{remove(){}},requestSubmit(){}};
+const nodes={'#model-form':form,'#model-status':{textContent:'',dataset:{}},
+ '#model-error-actions':{classList:{toggle(){}}},'#setup':{classList:{remove(){}}}};
+globalThis.q=selector=>nodes[selector]||=( {classList:{remove(){},toggle(){}},focus(){},scrollIntoView(){}} );
+globalThis.qa=()=>[];globalThis.applyProtocolPreset=()=>{};
+globalThis.FormData=class {constructor(target){this.values=Object.entries(target.elements).map(([name,field])=>[name,field.value])}entries(){return this.values[Symbol.iterator]()}};
+let release;const calls=[];
+globalThis.api=(name,profile,secret,test)=>new Promise(resolve=>{calls.push({name,profile,secret,test});release=resolve});
+globalThis.load=async()=>bindModelConnections();
+bindModelConnections();
+const pending=form.onsubmit({preventDefault(){}});
+fields.protocol.value='openai-chat-completions';fields.protocol.onchange();
+fields.model.value='relay-model';fields.secret.value='new-relay-key';fields.secret.oninput?.();
+release({ok:true});await pending;
+const relay={model:fields.model.value,secret:fields.secret.value};
+fields.protocol.value='openai-responses';fields.protocol.onchange();
+console.log(JSON.stringify({relay,officialSecret:fields.secret.value,call:calls[0]}));
+})();''')
+        self.assertEqual(result['relay'], {
+            'model': 'relay-model', 'secret': 'new-relay-key',
+        })
+        self.assertEqual(result['officialSecret'], '')
+        self.assertEqual(result['call']['secret'], 'submitted-key')
+        self.assertEqual(result['call']['profile']['protocol'], 'openai-responses')
+        self.assertEqual(result['call']['profile']['base_url'], 'https://api.openai.com/v1')
+        self.assertNotIn('relay_base_url', result['call']['profile'])
+
+    def test_delayed_success_preserves_same_provider_secret_edit(self):
+        result = self.node('connections.js', '''
+(async()=>{
+const fields={protocol:{value:'openai-responses'},model:{value:'gpt-a'},secret:{value:'submitted-key'},
+ base_url:{value:'https://api.openai.com/v1'},relay_base_url:{value:''},auth_style:{value:'bearer'},
+ output_mode:{value:'strict'},maximum_context_tokens:{value:'128000'},max_concurrency:{value:'2'},
+ rate_limit_per_minute:{value:'30'},input_price_per_million:{value:''},output_price_per_million:{value:''}};
+const form={elements:fields,classList:{remove(){}},requestSubmit(){}};
+const nodes={'#model-form':form,'#model-status':{textContent:'',dataset:{}},
+ '#model-error-actions':{classList:{toggle(){}}},'#setup':{classList:{remove(){}}}};
+globalThis.q=selector=>nodes[selector]||=( {classList:{remove(){},toggle(){}},focus(){},scrollIntoView(){}} );
+globalThis.qa=()=>[];globalThis.applyProtocolPreset=()=>{};
+globalThis.FormData=class {constructor(target){this.values=Object.entries(target.elements).map(([name,field])=>[name,field.value])}entries(){return this.values[Symbol.iterator]()}};
+let release;globalThis.api=()=>new Promise(resolve=>release=resolve);globalThis.load=async()=>bindModelConnections();
+bindModelConnections();
+const pending=form.onsubmit({preventDefault(){}});
+fields.secret.value='new-official-key';fields.secret.oninput?.();
+release({ok:true});await pending;
+const activeSecret=fields.secret.value;
+fields.protocol.value='anthropic-messages';fields.protocol.onchange();
+fields.protocol.value='openai-responses';fields.protocol.onchange();
+console.log(JSON.stringify({activeSecret,restoredSecret:fields.secret.value}));
+})();''')
+        self.assertEqual(result, {
+            'activeSecret': 'new-official-key',
+            'restoredSecret': 'new-official-key',
+        })
+
     def test_connection_controller_formats_structured_chinese_diagnostic(self):
         result = self.node('connections.js', '''
 (async()=>{const states=[];const error=new Error('opaque');error.diagnostic={
