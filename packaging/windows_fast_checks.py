@@ -32,6 +32,7 @@ TESTS = (
     'test_desktop_lifecycle.DesktopLifecycleTests.test_request_exception_releases_lifetime_without_exposing_private_methods',
     'test_worker_protocol_acceptance',
     'test_result_recovery',
+    'test_settings_publication',
 )
 
 
