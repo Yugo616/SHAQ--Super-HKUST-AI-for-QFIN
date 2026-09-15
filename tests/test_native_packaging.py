@@ -45,7 +45,7 @@ class NativePackagingTests(unittest.TestCase):
         self.assertNotIn('path:', ''.join(checkouts))  # Frozen app is root, not nested/copied.
         stage = native.split('name: Stage immutable',1)[1].split('      - uses:',1)[0]
         for requirement in ("'^[a-fA-F0-9]{40}$'", '$validationSha -ne $env:GITHUB_SHA',
-                            "Join-Path $env:RUNNER_TEMP", 'git archive --format=tar --output=$archive $validationSha tests/native_layout_check.py tests/native_geometry.py packaging/windows_ci_display.py',
+                            "Join-Path $env:RUNNER_TEMP", 'git archive --format=tar --output=$archive $validationSha\n',
                             'tar -xf $archive -C $harnessRoot'):
             self.assertIn(requirement, stage)
         self.assertIn('$applicationSha -ne $env:APPLICATION_REF -or (git status --porcelain)', native)
@@ -53,7 +53,8 @@ class NativePackagingTests(unittest.TestCase):
         self.assertIn('python $env:SHAQ_EXTERNAL_LAYOUT_HARNESS --output', native)
         self.assertIn("if: inputs.target != 'windows-validated'\n        run: python tests/native_layout_check.py", native)
         self.assertIn('$env:SHAQ_LAYOUT_APPLICATION_SHA -or (git status --porcelain)', native)
-        # Every non-layout acceptance command remains the clean application's own.
+        # Builds remain frozen; reviewed tests require identical runtime files.
+        self.assertIn('validation_tests.py" --application "$PWD" --output', native)
         for command in ('python packaging/build_native.py', 'python -m unittest discover -s tests -v',
                         'python packaging/installed_update_acceptance.py', '.\\packaging\\build_windows.ps1',
                         'python scripts/validate_release.py'):
@@ -78,7 +79,8 @@ class NativePackagingTests(unittest.TestCase):
 
     def test_validated_route_uses_external_acceptance_and_verified_dependency_only_reuse(self):
         native=(ROOT/'.github/workflows/build-desktop.yml').read_text().split('\n  native:',1)[1]
-        self.assertIn('packaging/installed_setup_recovery.py packaging/windows_layout_dependencies.py packaging/windows_release_dependencies.py',native)
+        self.assertIn('git archive --format=tar --output=$archive $validationSha\n',native)
+        self.assertIn('SHAQ_EXTERNAL_PACKAGING=$harnessRoot/packaging',native)
         self.assertIn('python "$env:SHAQ_EXTERNAL_PACKAGING/installed_update_acceptance.py" --application "$PWD" --recover-initial-admission',native)
         self.assertIn("if: inputs.target != 'windows-validated' || inputs.native_artifact_id == ''\n        run: python packaging/build_native.py",native)
         self.assertIn('python "$env:SHAQ_EXTERNAL_PACKAGING/windows_release_dependencies.py"',native)

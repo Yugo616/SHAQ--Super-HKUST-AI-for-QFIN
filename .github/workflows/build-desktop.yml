@@ -158,7 +158,7 @@ jobs:
           $harnessRoot = Join-Path $env:RUNNER_TEMP 'shaq-external-layout'
           New-Item -ItemType Directory -Force -Path $harnessRoot | Out-Null
           $archive = Join-Path $env:RUNNER_TEMP 'shaq-external-layout.tar'
-          git archive --format=tar --output=$archive $validationSha tests/native_layout_check.py tests/native_geometry.py packaging/windows_ci_display.py packaging/installed_update_acceptance.py packaging/installed_setup_recovery.py packaging/windows_layout_dependencies.py packaging/windows_release_dependencies.py
+          git archive --format=tar --output=$archive $validationSha
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           tar -xf $archive -C $harnessRoot
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -279,7 +279,14 @@ jobs:
           python "$env:SHAQ_EXTERNAL_PACKAGING/windows_release_dependencies.py" --application "$PWD" --artifact-root "$env:RUNNER_TEMP/native-release-dependencies" --run-metadata dist/diagnostic/native-run.json --artifact-metadata dist/diagnostic/native-artifact.json --run-id $env:NATIVE_RUN_ID --artifact-id $env:NATIVE_ARTIFACT_ID --output dist/diagnostic/release-dependency-reuse.json
           exit $LASTEXITCODE
       - name: Validate all application tests
+        if: inputs.target != 'windows-validated'
         run: python -m unittest discover -s tests -v
+      - name: Validate reviewed tests against identical frozen application runtime
+        if: inputs.target == 'windows-validated'
+        shell: pwsh
+        run: |
+          python "$env:SHAQ_EXTERNAL_PACKAGING/validation_tests.py" --application "$PWD" --output "$PWD/dist/diagnostic/validation-tests.json"
+          exit $LASTEXITCODE
       - name: Check native desktop layout at normal and narrow widths
         if: inputs.target != 'windows-validated'
         run: python tests/native_layout_check.py --output dist/diagnostic/desktop-layout.json

@@ -241,7 +241,7 @@ class PartialBatchIntegrityTests(unittest.TestCase):
         profile = replace(fixtures.ResearchBatchTests().profile(), protocol='codex-cli')
         raw = "ERROR: You've hit your usage limit. Try again later.\n" + 'FROZEN PRIVATE EVIDENCE ' * 200
         process = subprocess.CompletedProcess(['codex'], 1, '', raw)
-        with patch('shaq_daily_oracle.model_backends._local_cli', return_value='/fake/codex'), \
+        with patch('shaq_daily_oracle.model_backends._local_cli', return_value='/fake/codex.exe'), \
              patch('shaq_daily_oracle.model_backends.run_model_process', return_value=process):
             with self.assertRaises(ModelBackendError) as caught:
                 _codex_cli_call(profile=profile, prompt='private evidence', schema={})
