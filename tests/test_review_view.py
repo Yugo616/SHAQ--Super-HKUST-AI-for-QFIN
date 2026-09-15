@@ -25,6 +25,44 @@ for(const file of scripts)vm.runInContext(fs.readFileSync(path.join(desktop,file
 
 
 class ReviewViewTests(unittest.TestCase):
+    def test_history_mounts_comparison_once_per_frozen_record_not_per_stock(self):
+        value = self.bundle(r'''
+const inputs=[],bars=[],calls=[];
+const choices=[['b','team/main','AAA'],['b','team/main','BBB'],['b','team/other','CCC'],['older','team/main','DDD']];
+const rows=choices.map(([batch,variantKey,resultSymbol])=>({dataset:{batch,variantKey,resultSymbol},
+ children:[{prepend(input){inputs.push(input)}}]}));
+nodes['#history .result-table']={before(bar){bars.push(bar.innerHTML)}};
+ctx.document.createElement=()=>({dataset:{},setAttribute(){},remove(){this.removed=true}});
+ctx.document.querySelectorAll=selector=>selector==='#history .result-table tr[data-batch]'||selector==='[data-result-symbol]'?rows:
+ selector==='#history .compare-record'?inputs.filter(input=>!input.removed):[];
+nodes['#comparison-modal']={showModal(){this.open=true}};
+ctx.window.pywebview={api:{compare_research_runs:async(left,right)=>{calls.push([left,right]);return {ok:true,value:{left,right,dimensions:{},stocks:[],outcomes:{}}}}}};
+vm.runInContext(`state.data={versions:[],dashboard:{daily_results:[
+ {batch_id:'b',variant_key:'team/main',predictions:[{symbol:'AAA'},{symbol:'BBB'}]},
+ {batch_id:'b',variant_key:'team/other',predictions:[{symbol:'CCC'}]},
+ {batch_id:'older',variant_key:'team/main',predictions:[{symbol:'DDD'}]}],virtual_accounts:{}}};renderHistory()`,ctx);
+(async()=>{
+ const visible=inputs.filter(input=>!input.removed);
+ for(const input of visible.slice(0,2)){input.checked=true;input.onchange();}
+ if(nodes['#compare-selected']?.onclick)nodes['#compare-selected'].onclick();
+ await Promise.resolve();await Promise.resolve();
+ console.log(JSON.stringify({bars,visible:visible.map(input=>JSON.parse(input.dataset.comparisonKey)),
+  enabled:nodes['#compare-selected']?.disabled===false,calls,count:nodes['#comparison-selection-count']?.textContent}));
+})().catch(error=>{console.error(error);process.exitCode=1});
+''')
+        self.assertEqual(len(value['bars']), 1, 'The actual history render must mount its comparison toolbar')
+        self.assertIn('id="compare-selected"', value['bars'][0])
+        self.assertEqual(value['visible'], [
+            {'batch_id':'b','variant_key':'team/main'},
+            {'batch_id':'b','variant_key':'team/other'},
+            {'batch_id':'older','variant_key':'team/main'},
+        ])
+        self.assertTrue(value['enabled'])
+        self.assertEqual(value['calls'], [[
+            {'batch_id':'b','variant_key':'team/main'},
+            {'batch_id':'b','variant_key':'team/other'},
+        ]])
+
     def bundle(self, body):
         return json.loads(subprocess.check_output(['node', '-'], input=BUNDLE+body,
                           text=True, encoding='utf-8', cwd=ROOT))

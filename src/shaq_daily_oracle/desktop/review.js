@@ -58,5 +58,13 @@ if(typeof document!=='undefined'){
     q('#history').innerHTML=`<div class="history-filters"><label>开始日期<input id="history-from" type="date" value="${esc(filters.from||'')}"></label><label>结束日期<input id="history-to" type="date" value="${esc(filters.to||'')}"></label><label>版本<select id="history-version"><option value="">全部版本</option>${[...identities].map(([key,name])=>`<option value="${esc(key)}"${filters.version===key?' selected':''}>${esc(name)}</option>`).join('')}</select></label><label>模型<select id="history-model"><option value="">全部模型</option>${models.map(model=>`<option${filters.model===model?' selected':''}>${esc(model)}</option>`).join('')}</select></label></div><section class="sheet balance-overview">${SHAQAccounts.compactOverviewHtml(accounts,versions,filters)}</section><section class="sheet"><h2>每日结果</h2><p>点击股票查看当时的六领域分析与最终判断。版本当日净盈亏为整版本账户结果，不是单只股票盈亏。</p>${SHAQResults.dailyHtml(rows,accounts.results||[],versions)}</section>`;
     for(const [id,key] of [['history-from','from'],['history-to','to'],['history-version','version'],['history-model','model']])q('#'+id).onchange=event=>{filters[key]=event.target.value;renderHistory()};
     qa('[data-result-symbol]').forEach(row=>row.onclick=()=>loadBatch(row.dataset.batch,row.dataset.variantKey,row.dataset.resultSymbol||undefined));
+    addHistoryComparisonControls();
+    // Stock rows share one frozen version record. Offer that record once,
+    // while keeping different batches of the same version independently selectable.
+    const comparisonRecords=new Set();
+    qa('#history .compare-record').forEach(input=>{
+      const key=input.dataset.comparisonKey;
+      if(comparisonRecords.has(key))input.remove();else comparisonRecords.add(key);
+    });
   };
 }
