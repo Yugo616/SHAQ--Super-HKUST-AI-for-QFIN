@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +17,9 @@ class SettingsError(ValueError):
 
 SERVICE_NAME = "SHAQ Daily Oracle"
 OPENAI_KEY_NAME = "openai-api-key"
+# Windows readers briefly deny destination replacement. Keep the old document
+# intact and retry only this OS error, for at most 310 ms in total.
+WINDOWS_REPLACE_RETRY_DELAYS = (0.01, 0.02, 0.04, 0.08, 0.16)
 
 
 def default_settings() -> dict[str, Any]:
@@ -33,7 +38,7 @@ def default_settings() -> dict[str, Any]:
     }
 
 
-def _atomic_json(path: Path, value: dict[str, Any]) -> None:
+def _atomic_json(path: Path, value: dict[str, Any], *, retry_windows_readers: bool = False) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary_name = tempfile.mkstemp(
         dir=path.parent, prefix=f".{path.name}.", suffix=".tmp"
@@ -45,7 +50,16 @@ def _atomic_json(path: Path, value: dict[str, Any]) -> None:
             handle.write("\n")
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temporary, path)
+        for attempt in range(len(WINDOWS_REPLACE_RETRY_DELAYS) + 1):
+            try:
+                os.replace(temporary, path)
+                break
+            except PermissionError as exc:
+                if (not retry_windows_readers or sys.platform != 'win32'
+                        or getattr(exc, 'winerror', None) not in (5, 32, 33)
+                        or attempt == len(WINDOWS_REPLACE_RETRY_DELAYS)):
+                    raise
+                time.sleep(WINDOWS_REPLACE_RETRY_DELAYS[attempt])
     finally:
         temporary.unlink(missing_ok=True)
 

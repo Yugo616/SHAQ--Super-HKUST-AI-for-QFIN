@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from copy import deepcopy
+from functools import partial
 import hashlib
 import math
 import os
@@ -34,7 +35,7 @@ from .research_dashboard import ResearchDashboardIndex
 from .research_labels import refresh_research_labels
 from .research_progress import ResearchProgressLog
 from .research_settings import ResearchSettingsStore
-from .settings import _atomic_json
+from .settings import _atomic_json as _settings_atomic_json
 from .skill_versions import (
     GitHubRepositoryConfig,
     GitHubSkillClient,
@@ -44,6 +45,9 @@ from .skill_versions import (
     render_agent_profile,
     validate_artifact_set,
 )
+
+
+_atomic_json = partial(_settings_atomic_json, retry_windows_readers=True)
 
 
 class LabServiceError(ValueError):
