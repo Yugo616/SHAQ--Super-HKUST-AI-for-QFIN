@@ -151,9 +151,11 @@ const SHAQAccounts = (() => {
     let lo=Math.min(...points.map(point => point.equity));
     let hi=Math.max(...points.map(point => point.equity));
     if (hi===lo) {hi+=1;lo-=1;}
-    const x=point=>85+dates.indexOf(point.date)/Math.max(1,dates.length-1)*755;
+    const x=point=>dates.length===1?462.5:85+dates.indexOf(point.date)/(dates.length-1)*755;
     const y=point=>150-(point.equity-lo)/(hi-lo)*125;
-    return `<h3>收盘净值</h3><svg class="pnl-chart" viewBox="0 0 900 220" role="img" aria-label="各账户收盘净值；纵轴余额（USD），横轴日期（交易日）"><text x="0" y="12" font-size="12">余额（USD）</text><text x="0" y="30">${usd(hi)}</text><text x="0" y="150">${usd(lo)}</text>${accounts.map((account,index)=>`<polyline fill="none" stroke="${colors[index%colors.length]}" stroke-width="2" points="${(account.curve||[]).map(point=>`${x(point)},${y(point)}`).join(' ')}"/>${(account.curve||[]).map(point=>`<circle cx="${x(point)}" cy="${y(point)}" r="3" fill="${colors[index%colors.length]}"><title>${e(account.method_name || account.label)} ${e(point.date)} ${usd(point.equity)}</title></circle>`).join('')}`).join('')}<text x="85" y="185">${e(dates[0])}</text><text x="750" y="185">${e(dates.at(-1))}</text><text x="450" y="211" text-anchor="middle" font-size="12">日期（交易日）</text></svg>`;
+    const axis=dates.length===1?`<text x="462.5" y="185" text-anchor="middle">${e(dates[0])}</text>`:`<text x="85" y="185">${e(dates[0])}</text><text x="840" y="185" text-anchor="end">${e(dates.at(-1))}</text>`;
+    const legend=`<div class="balance-legend">${accounts.map((account,index)=>`<span><i style="background:${colors[index%colors.length]}"></i>${e(account.method_name||account.label||'未标明版本')}${account.model?` · ${e(account.model)}`:''}</span>`).join('')}</div>`;
+    return `<h3>收盘净值</h3>${legend}<svg class="pnl-chart" viewBox="0 0 900 220" role="img" aria-label="各账户收盘净值；纵轴余额（USD），横轴日期（交易日）"><text x="0" y="12" font-size="12">余额（USD）</text><text x="0" y="30">${usd(hi)}</text><text x="0" y="150">${usd(lo)}</text>${accounts.map((account,index)=>`<polyline fill="none" stroke="${colors[index%colors.length]}" stroke-width="2" points="${(account.curve||[]).map(point=>`${x(point)},${y(point)}`).join(' ')}"/>${(account.curve||[]).map(point=>`<circle cx="${x(point)}" cy="${y(point)}" r="3" fill="${colors[index%colors.length]}"><title>${e(account.method_name || account.label)} ${e(point.date)} ${usd(point.equity)}</title></circle>`).join('')}`).join('')}${axis}<text x="450" y="211" text-anchor="middle" font-size="12">日期（交易日）</text></svg>`;
   }
 
   function resultRows(rows, versions) {
@@ -197,44 +199,18 @@ const SHAQAccounts = (() => {
       <details class="account-secondary"><summary>旧版已保存结果（只读） · ${e(legacy.status === 'saved_only' ? 'saved-only' : legacy.status || 'unavailable')}</summary><p>旧引擎记录仅显示已保存文件，不重算、不并入 Zipline 分钟账户。</p><div class="account-scroll"><table class="table"><thead><tr><th>日期</th><th>旧引擎</th><th>保存状态</th><th>净盈亏</th></tr></thead><tbody>${legacyRows || '<tr><td colspan="4">没有可核验的旧版已保存结果。</td></tr>'}</tbody></table></div></details>`;
   }
 
-  return {dayHtml, overviewHtml, plot, rulesText, usd, scopeName, statusName,
+  function compactOverviewHtml(data,versions=[],filters={}){
+    const accounts=(data.accounts||[]).filter(account=>(!filters.version||historyIdentity(account,versions).filter_key===filters.version)&&(!filters.model||account.model===filters.model)).map(account=>({...account,method_name:methodMeta(account,versions).method_name,curve:(account.curve||[]).filter(point=>(!filters.from||point.date>=filters.from)&&(!filters.to||point.date<=filters.to))}));
+    const cards=accounts.map(account=>{
+      const rows=(data.results||[]).filter(row=>row.scope==='forward'&&(account.series_key?row.series_key===account.series_key:row.variant_key===account.variant_key)).sort((a,b)=>String(b.trade_date).localeCompare(String(a.trade_date)));
+      const latest=rows[0];
+      return `<article class="balance-card" data-view-key="${e(account.series_key||account.variant_key||account.label)}"><h3>${method(account,versions)}</h3><small>${e(account.model||'未记录模型')}</small><p>当前余额 <b>${usd(account.equity)}</b></p><p>${e(latest?.trade_date||'当日')} 净盈亏 <b>${amount(latest,'net_pnl')}</b></p></article>`;
+    }).join('');
+    return `<h2>版本余额</h2><div class="balance-cards">${cards||'<p>尚无可用余额。</p>'}</div>${plot(accounts)}`;
+  }
+
+  return {dayHtml, overviewHtml, compactOverviewHtml, plot, rulesText, usd, scopeName, statusName,
     methodMeta, historyIdentity, normalizeSelections, escape:e};
 })();
 
-if (typeof document !== 'undefined') {
-  const previousRun = renderRun;
-  renderRun = function() {
-    previousRun();
-    const data=state.data.dashboard.virtual_accounts;
-    const versions=state.data.versions || [];
-    q('#run .run-toolbar')?.insertAdjacentHTML('afterend', `<details class="account-policy"><summary>虚拟账户规则</summary><p>${SHAQAccounts.rulesText(data?.rules)}</p><small>预测完成后等待收盘，结果和结算统一在「查看结果」中显示。</small></details>`);
-  };
-
-  const previousHistory = renderHistory;
-  renderHistory = function() {
-    previousHistory();
-    const data=state.data.dashboard.virtual_accounts;
-    if (!data?.rules) return;
-    const section=document.createElement('details');
-    section.className='sheet virtual-accounts';
-    section.innerHTML='<summary>账户余额、手续费与滑点明细</summary><p>这里是按实际模拟股数计算的资金账户；与下方一股零费用对照分开，不相加。</p>'+SHAQAccounts.overviewHtml(data, state.data.versions || [], wb.filters || {});
-    q('#history .result-summary')?.insertAdjacentElement('afterend', section);
-    qa('[data-account-batch]').forEach(row => row.onclick=async() => {
-      const details=q('.official-direction-history');
-      if (details) details.open=true;
-      await loadBatch(row.dataset.accountBatch, row.dataset.accountKey);
-      q('#batch-detail')?.scrollIntoView({block:'start'});
-    });
-  };
-
-  const previousBatch = renderBatch;
-  renderBatch = function(batch,key,symbol) {
-    const selected=key&&batch.variants?.[key]?key:Object.keys(batch.variants||{})[0];
-    previousBatch(batch,selected,symbol);
-    const rows=batch.virtual_accounts?.results.filter(row=>row.variant_key===selected)||[];
-    if (!rows.length) return;
-    const section=document.createElement('section'); section.className='sheet';
-    section.innerHTML=rows.map(row=>SHAQAccounts.dayHtml(row)).join('<hr>');
-    q('.batch-head')?.insertAdjacentElement('afterend',section);
-  };
-}
+// The compact desktop does not mount the legacy detailed-account renderers.

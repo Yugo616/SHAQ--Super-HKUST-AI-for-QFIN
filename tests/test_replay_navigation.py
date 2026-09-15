@@ -111,8 +111,9 @@ const element=()=>new Proxy({classList:cls,dataset:{},parentElement:{prepend(){}
  append(){},prepend(){},before(){},insertBefore(){},insertAdjacentHTML(){},insertAdjacentElement(){},
  addEventListener(){},remove(){},closest(){return null},scrollIntoView(){},focus(){}},
  {get:(o,k)=>k in o?o[k]:'',set:(o,k,v)=>(o[k]=v,true)});
+const nodes={};
 const ctx={console,window:{addEventListener(){},scrollY:0,scrollTo(){}},
- document:{createElement:element,querySelector:element,querySelectorAll:()=>[],addEventListener(){}},
+ document:{createElement:element,querySelector:s=>nodes[s]||=(element()),querySelectorAll:()=>[],addEventListener(){}},
  q:element,qa:()=>[],esc:String,dir:String,money:String,api:async()=>({}),notice(){},
  setInterval(){},setTimeout(){},Intl,Date};
 vm.createContext(ctx);
@@ -120,6 +121,10 @@ for(const file of scripts)vm.runInContext(fs.readFileSync(path.join(desktop,file
 const batch={batch_id:'fixture',evidence:{cutoff_status:'on_time',candidates:[{symbol:'AAA'},{symbol:'BBB'}],catalog:[]},labels:{labels:{}},replay_summaries:{},virtual_accounts:{results:[]},variants:{v:{variant:{label:'Fixture'},candidate_intake:{candidates:[{symbol:'AAA'},{symbol:'BBB'}]},reports_by_symbol:{},adversary_by_symbol:{},integration_audit:{},predictions:[]}}};
 ctx.renderBatch(batch,'v','BBB');
 assert.equal(vm.runInContext('state.replay.symbol',ctx),'BBB');
+vm.runInContext(`state.data={versions:[{author:'team',version_id:'main',method_name:'甲方法'}],dashboard:{daily_results:[{batch_id:'b',variant_key:'team/main',trade_date:'2026-09-15',status:'final',predictions:[{symbol:'BBB',direction:'bullish'}],labels:{BBB:{status:'final',official_unadjusted_open:100,official_unadjusted_close:110}}}],virtual_accounts:{accounts:[],results:[]}}};renderHistory()`,ctx);
+assert.match(nodes['#history'].innerHTML,/BBB/);
+assert.match(nodes['#history'].innerHTML,/10\.00%/);
+assert.doesNotMatch(nodes['#history'].innerHTML,/一股|手续费|滑点|<details/,'the final loaded wrapper must keep the simplified results surface');
 '''
         subprocess.run(['node', '-'], input=script, text=True, encoding='utf-8',
                        cwd=root, check=True)

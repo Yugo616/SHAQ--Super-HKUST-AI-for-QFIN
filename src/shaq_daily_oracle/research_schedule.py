@@ -155,24 +155,11 @@ def run_research_worker(paths):
         lock.acquire(timeout=0)
     except Timeout:
         return 0
+    lab = None
+    state = None
     try:
         value = schedule_status(paths)
         lab = LabService(paths)
-        refresh = lab.refresh_labels_if_due()
-        if refresh.get('status') == 'running':
-            refresh = lab.wait_result_refresh(refresh['operation_id'])
-        refresh_deadline = time.monotonic() + 180
-        while refresh.get('status') == 'already_running':
-            current = lab.result_refresh_status()
-            if current.get('status') not in {'running', 'already_running'}:
-                break
-            if time.monotonic() >= refresh_deadline:
-                _atomic_json(paths.research_root / 'schedule_status.json', {
-                    'message': '收盘刷新等待超时；下次按持久化计划重试',
-                    'recorded_at': datetime.now(ET).isoformat(),
-                })
-                break
-            time.sleep(.1)
         if not value["enabled"]:
             return 0
         now = datetime.now(ET)
@@ -205,4 +192,25 @@ def run_research_worker(paths):
             _atomic_json(ledger, {'status': 'failed', 'error': str(exc)})
         return 1
     finally:
-        lock.release()
+        try:
+            if lab is not None:
+                # First finish the time-sensitive forecast decision. Historical
+                # prices must not spend its premarket collection window.
+                owned = getattr(lab, '_owned_result_refresh', None)
+                if owned:
+                    lab.wait_result_refresh(owned[0], timeout=None)
+                elif state != 'waiting':
+                    refresh = lab.refresh_labels_if_due()
+                    if refresh.get('status') == 'running':
+                        # Worker network calls enforce their actual deadlines.
+                        # Do not abandon our daemon at the GUI's short wait limit.
+                        lab.wait_result_refresh(refresh['operation_id'], timeout=None)
+                    # Another process owns an already_running operation and its
+                    # lifetime; this scheduler neither waits nor changes it.
+        except Exception as exc:
+            _atomic_json(paths.research_root / 'schedule_status.json', {
+                'message': '价格与成绩刷新失败：' + str(exc),
+                'recorded_at': datetime.now(ET).isoformat(), 'error_type': type(exc).__name__,
+            })
+        finally:
+            lock.release()

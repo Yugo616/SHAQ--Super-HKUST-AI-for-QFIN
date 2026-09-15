@@ -170,6 +170,7 @@ def refresh_research_labels(
     market_provider: Any | None = None,
     openbb_api_key: str = "",
     eligible_dates: set[str] | None = None,
+    batch_ids: set[str] | None = None,
 ) -> dict[str, Any]:
     now = (observed_at or datetime.now(ET)).astimezone(ET)
     if market_provider is None:
@@ -183,6 +184,8 @@ def refresh_research_labels(
     refreshed = []
     failures = []
     for batch_root in sorted(batches_root.glob("LAB-*")):
+        if batch_ids is not None and batch_root.name not in batch_ids:
+            continue
         try:
             manifest_path = batch_root / "batch_manifest.json"
             if not manifest_path.is_file():
@@ -259,5 +262,6 @@ def refresh_research_labels(
             failures.append({
                 "batch_id": batch_root.name,
                 "error_type": type(exc).__name__, "message": str(exc),
+                "diagnostic": getattr(exc, 'diagnostic', {}),
             })
     return {"refreshed_batches": refreshed, "failures": failures}

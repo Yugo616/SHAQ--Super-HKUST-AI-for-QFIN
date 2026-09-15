@@ -4,7 +4,13 @@ const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&
 const api=async(name,...args)=>{const fn=window.pywebview?.api?.[name];if(!fn)throw new Error('桌面服务尚未连接');const saved=window.SHAQUpdateExit?.beforeSave(name,args);const r=await fn(...args);if(!r?.ok){const error=new Error(r?.error||'操作失败');if(r?.diagnostic)error.diagnostic=r.diagnostic;throw error}window.SHAQUpdateExit?.afterSave(saved);return r.value};
 const dir=v=>({bullish:'看涨',bearish:'看跌',neutral:'中性',unavailable:'无数据',not_applicable:'今日不适用'}[v]||v||'—');
 function notice(text,bad=false){const n=q('#notice');n.textContent=text;n.className='notice '+(bad?'bad':'');setTimeout(()=>n.classList.add('hidden'),6500)}
-function refreshStatusText(value={}){const status=value.status||'idle';if(status==='running'||status==='already_running')return '正在更新价格与成绩…';if(status==='complete')return `更新完成${value.completed_at?' · '+String(value.completed_at).replace('T',' ').slice(0,22):''}`;if(status==='partial_failure')return `更新完成，但有 ${Number(value.failure_count||0)} 项失败`;if(status==='failed')return `更新失败：${value.error||'请稍后重试'}`;return ''}
+function refreshStatusText(value={}){const status=value.status||'idle',retry=value.next_retry_at?` · 将于 ${String(value.next_retry_at).slice(11,16)} 重试失败项`:'';
+  const failures=[...(value.result?.failures||[]),...(value.result?.minute_settlement?.failures||[]),...(value.result?.stage_failures||[])];
+  const reason=String(value.error||failures[0]?.message||'请重试失败项').replace(/\s+/g,' ').slice(0,120);
+  if(status==='running'||status==='already_running')return '正在更新价格与成绩…';
+  if(status==='complete')return '价格与成绩更新完成';
+  if(status==='partial_failure')return `部分更新失败（${Number(value.failure_count||0)} 项）：${reason}${retry}`;
+  if(status==='failed')return `更新失败：${reason}${retry}`;return ''}
 function metric(label,value,note=''){return `<div class="metric"><span>${esc(label)}</span><strong>${esc(value)}</strong>${note?`<small>${esc(note)}</small>`:''}</div>`}
 function versionKey(v){return `${v.author||'team'}/${v.version_id}`}
 function selectedVersions(){return qa('.version-check:checked').map(box=>({author:box.dataset.author,version_id:box.dataset.version}))}
@@ -31,7 +37,8 @@ function renderData(){const d=state.data.data_status||{},labels={fresh:'本次�
 async function loadBatch(id,key,symbol,quiet=false){
   const modal=q('#replay-modal'),target=q('#batch-detail');
   const request=(loadBatch.request||0)+1;loadBatch.request=request;
-  state.replay=null;state.replayGeneration=(state.replayGeneration||0)+1;
+  const previousReplay=state.replay,previousGeneration=state.replayGeneration||0;
+  if(!quiet){state.replay=null;state.replayGeneration=(state.replayGeneration||0)+1;}
   if(!quiet){target.innerHTML='<p class="card">正在加载分析详情…</p>';target.scrollTop=0;}
   const invalidateReplay=()=>{loadBatch.request=(loadBatch.request||0)+1;state.replay=null;state.replayGeneration=(state.replayGeneration||0)+1};
   modal.oncancel=invalidateReplay;modal.onclose=invalidateReplay;
@@ -40,7 +47,11 @@ async function loadBatch(id,key,symbol,quiet=false){
   try{
     const batch=await api('get_shadow_batch',id);
     if(loadBatch.request!==request||!modal.open)return;
+    if(quiet&&(state.replay!==previousReplay||(state.replayGeneration||0)!==previousGeneration))return;
+    if(quiet&&JSON.stringify(state.selectedBatch)===JSON.stringify(batch))return;
+    const restore=quiet?preserveReadingView(target):()=>{};
     renderBatch(batch,key,symbol);
+    restore();
     if(!quiet)target.scrollTop=0;
   }catch(e){
     if(loadBatch.request!==request||!modal.open)return;
@@ -82,7 +93,79 @@ function bindSetup() {
 }
 function showPage(page){state.page=page;qa('.page,.nav').forEach(e=>e.classList.remove('active'));q('#'+page).classList.add('active');q(`.nav[data-page="${page}"]`).classList.add('active');q('#page-title').textContent={run:'运行今日 Shadow',editor:'编辑方法',upload:'上传 Shadow 版本',updates:'检查团队更新',history:'历史与比较',data:'数据状态',settings:'系统设置',operator:'Mac 操作员'}[page];renderPage()}
 function renderPage(){({run:renderRun,editor:renderEditor,upload:renderUpload,updates:renderUpdates,history:renderHistory,data:renderData,settings:renderSettings,operator:renderOperator}[state.page]||renderRun)()}
-function render(){q('#operator-nav').classList.toggle('hidden',!state.data.operator_mode.safety_ready);q('#service-text').textContent=state.data.settings.setup_complete?'本地研究工作台已连接':'等待首次设置';q('#service-dot').className='dot '+(state.data.settings.setup_complete?'ok':'');const status=state.data.result_refresh||{};q('#refresh-status').textContent=refreshStatusText(status);q('#refresh-button').disabled=['running','already_running'].includes(status.status);renderPage();bindSetup();if(!state.data.settings.setup_complete)q('#setup').classList.remove('hidden')}
-async function load(showError=true){const request=(load.request||0)+1;load.request=request;const replay=q('#replay-modal')?.open?state.replay:null,replayGeneration=state.replayGeneration||0,detailScroll=q('#batch-detail')?.scrollTop||0,pageScroll=window.scrollY||0;try{const value=await api('get_lab_state');if(load.request!==request)return;state.data=value;render();if(replay&&state.replay===replay&&state.replayGeneration===replayGeneration&&q('#replay-modal')?.open){await loadBatch(replay.batchId,replay.key,replay.symbol,true);q('#batch-detail').scrollTop=detailScroll}window.scrollTo?.(0,pageScroll);return true}catch(e){if(showError&&load.request===request)notice(e.message,true);return false}}
+function render(pageChanged=true,settingsChanged=true){q('#operator-nav').classList.toggle('hidden',!state.data.operator_mode.safety_ready);q('#service-text').textContent=state.data.settings.setup_complete?'本地研究工作台已连接':'等待首次设置';q('#service-dot').className='dot '+(state.data.settings.setup_complete?'ok':'');const status=state.data.result_refresh||{};q('#refresh-status').textContent=refreshStatusText(status);q('#refresh-button').disabled=['running','already_running'].includes(status.status);renderRefreshControls(status);if(pageChanged)renderPage();if(settingsChanged)bindSetup();if(!state.data.settings.setup_complete)q('#setup').classList.remove('hidden')}
+async function load(showError=true){
+  const request=(load.request||0)+1;load.request=request;
+  const replay=q('#replay-modal')?.open?state.replay:null,replayGeneration=state.replayGeneration||0;
+  try{
+    const value=await api('get_lab_state');if(load.request!==request)return;
+    // Read user-owned view state after the asynchronous response, not before it.
+    const pageScroll=window.scrollY||0,restore=preserveReadingView(q('#'+state.page));
+    const restoreSetup=preserveReadingView(q('#setup'));
+    const pageChanged=pageSnapshot(state.data,state.page)!==pageSnapshot(value,state.page);
+    const settingsChanged=JSON.stringify(state.data?.settings)!==JSON.stringify(value.settings);
+    state.data=value;render(pageChanged,settingsChanged);restore();restoreSetup();
+    window.scrollTo?.(0,pageScroll);
+    if(replay&&state.replay===replay&&state.replayGeneration===replayGeneration&&q('#replay-modal')?.open){
+      await loadBatch(replay.batchId,replay.key,replay.symbol,true);
+    }
+    return true;
+  }catch(e){if(showError&&load.request===request)notice(e.message,true);return false}
+}
+function pageSnapshot(data,page){
+  if(!data)return '';
+  if(page==='history')return JSON.stringify([data.dashboard,data.versions]);
+  if(page==='run'){
+    const {et,local,...clock}=data.clock||{};
+    return JSON.stringify([data.settings,data.versions,data.jobs,data.data_status,data.formal_operator,clock]);
+  }
+  return JSON.stringify([data.settings,data.versions,data.drafts,data.data_status]);
+}
+function renderRefreshControls(status){
+  let button=q('#retry-failed-results');
+  if(!button){button=document.createElement('button');button.id='retry-failed-results';button.className='secondary';button.textContent='重试失败项';q('#refresh-button').insertAdjacentElement('afterend',button);}
+  button.hidden=!(Number(status.failure_count)>0||['failed','partial_failure'].includes(status.status));
+  button.disabled=['running','already_running'].includes(status.status);
+  button.onclick=async()=>{button.disabled=true;try{await api('retry_failed_results');await load(false)}catch(error){notice(error.message,true)}finally{button.disabled=['running','already_running'].includes(state.data?.result_refresh?.status)}};
+}
+function preserveReadingView(root){
+  if(!root)return ()=>{};
+  // Semantic identities survive inserted progress rows and refreshed reports.
+  const identity=element=>{
+    if(element.id)return '#'+element.id;
+    const parts=[];
+    for(let node=element;node&&node!==root;node=node.parentElement){
+      const data=node.dataset||{};
+      const key=data.viewKey||data.progressJob||data.researchSection||data.batch||data.accountBatch||(data.version?`${data.author||'team'}/${data.version}`:null);
+      if(key)parts.push(node.tagName+':'+key);
+      else if(node.tagName==='DETAILS')parts.push('details:'+node.querySelector?.(':scope > summary')?.textContent?.trim());
+      else if(node.name)parts.push(node.tagName+':'+node.name);
+    }
+    return parts.join('/');
+  };
+  const elements=()=>[...(root.querySelectorAll?.('details,input,select,textarea,[data-view-scroll],.account-scroll,pre')||[])];
+  const active=typeof document!=='undefined'?document.activeElement:null;
+  const saved=new Map(elements().map(element=>[identity(element),{
+    open:element.tagName==='DETAILS'?element.open:undefined,
+    value:['INPUT','SELECT','TEXTAREA'].includes(element.tagName)?element.value:undefined,
+    checked:['checkbox','radio'].includes(element.type)?element.checked:undefined,
+    top:element.scrollTop,left:element.scrollLeft,focused:element===active,
+    start:element.selectionStart,end:element.selectionEnd,
+  }]));
+  const top=root.scrollTop,left=root.scrollLeft;
+  return ()=>{
+    for(const element of elements()){
+      const value=saved.get(identity(element));if(!value)continue;
+      if(value.open!==undefined)element.open=value.open;
+      if(value.value!==undefined){
+        if(element.tagName!=='SELECT'||[...(element.options||[])].some(option=>option.value===value.value))element.value=value.value;
+      }
+      if(value.checked!==undefined)element.checked=value.checked;
+      if(value.focused){element.focus?.({preventScroll:true});if(value.start!=null)element.setSelectionRange?.(value.start,value.end);}
+      element.scrollTop=value.top;element.scrollLeft=value.left;
+    }
+    root.scrollTop=top;root.scrollLeft=left;
+  };
+}
 async function startDesktop(){if(await load())await api('confirm_desktop_ready')}
 qa('.nav').forEach(b=>b.onclick=()=>showPage(b.dataset.page));q('#refresh-button').onclick=async()=>{try{const value=await api('refresh_prices_and_results');state.data.result_refresh=value;render();await load(false)}catch(e){notice(e.message,true)}};window.addEventListener('pywebviewready',()=>startDesktop().catch(e=>notice(e.message,true)));setInterval(()=>{if(state.data&&((state.data.jobs||[]).some(job=>['queued','running'].includes(job.status))||['running','already_running'].includes(state.data.result_refresh?.status)))load(false)},10000);setInterval(async()=>{try{const r=await api("check_result_refresh_due");if(["running","already_running"].includes(r.status))await load(false)}catch(e){}},60*1000);

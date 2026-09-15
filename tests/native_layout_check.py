@@ -73,6 +73,13 @@ def main():
                         window.evaluate_js(f"document.querySelector('.nav[data-page={page}]').click()")
                         wait(f"Boolean(document.querySelector('#{page}.active').textContent.trim())")
                         measure(f'{width} {page}', 'main')
+                        if page == 'history' and not window.evaluate_js("""
+                            Boolean(document.querySelector('.balance-overview')) &&
+                            Boolean(document.querySelector('.result-table')) &&
+                            !/一股|手续费|滑点/.test(document.querySelector('#history').textContent) &&
+                            !document.querySelector('#history details')
+                        """):
+                            raise AssertionError('Results page contains obsolete accounting clutter')
                     window.evaluate_js("document.querySelector('.nav[data-page=run]').click(); "
                         "if(document.querySelector('#automatic-panel').classList.contains('hidden')) "
                         "document.querySelector('#edit-automatic').click()")
@@ -97,21 +104,31 @@ def main():
                 window.evaluate_js("document.querySelector('.nav[data-page=run]').click()")
                 wait("Boolean(document.querySelector('[data-progress-retry]'))")
                 window.evaluate_js("""
-                    document.querySelector('.progress-batch > details').open=true;
-                    const select=document.querySelector('[data-research-symbol]');
-                    select.value='MSFT';select.dispatchEvent(new Event('change'));
-                    document.querySelector('[data-research-section=timeline]').open=true;
+                    document.querySelector('[data-progress-variant]').open=true;
+                    document.querySelector('[data-research-section="MSFT:price_volume"]').open=true;
+                    document.querySelector('#run').style.minHeight='1600px';
+                    state.data.jobs[0].message='force a changed refresh';
+                    window.fixtureGetState=window.pywebview.api.get_lab_state;
+                    window.pywebview.api.get_lab_state=async()=>{
+                        const result=await window.fixtureGetState();
+                        await new Promise(resolve=>window.fixtureReleaseState=resolve);
+                        return result;
+                    };
+                    window.fixtureRefreshed=false;
+                    load(false).then(()=>window.fixtureRefreshed=true);
                 """)
-                # Toggle events persist disclosure state before the actual refresh.
-                wait("Boolean(wb.researchSelections['fixture-recovery']?.open.includes('timeline'))")
-                window.evaluate_js("window.fixtureRefreshed=false;load(false).then(()=>window.fixtureRefreshed=true)")
+                wait('Boolean(window.fixtureReleaseState)')
+                # The user keeps reading while a real bridge response is pending.
+                window.evaluate_js("window.scrollTo(0,240);window.fixtureScroll=window.scrollY;window.fixtureReleaseState()")
                 wait('window.fixtureRefreshed')
-                if not window.evaluate_js("document.querySelector('[data-research-symbol]').value==='MSFT' && "
-                    "document.querySelector('.progress-batch > details').open && "
-                    "document.querySelector('[data-research-section=timeline]').open && "
-                    "document.querySelector('.progress-batch').textContent.includes('实际任务')"):
-                    raise AssertionError('Progress refresh changed selection or expansion')
+                if not window.evaluate_js("document.querySelector('[data-progress-variant]').open && "
+                    "document.querySelector('[data-research-section=\"MSFT:price_volume\"]').open && "
+                    "document.querySelector('[data-progress-variant] progress').hasAttribute('value') && "
+                    "Math.abs(window.scrollY-window.fixtureScroll)<=2"):
+                    raise AssertionError('Progress refresh changed reading position or expansion')
+                window.evaluate_js("window.pywebview.api.get_lab_state=window.fixtureGetState")
                 report['progress_preserved_selection_and_expansion'] = True
+                report['pending_refresh_preserved_latest_scroll'] = True
                 window.evaluate_js("document.querySelector('[data-progress-retry]').click()")
                 wait("state.data.fixture_resumed_batch==='fixture-original-batch'")
                 report['resume_original_batch_action'] = True

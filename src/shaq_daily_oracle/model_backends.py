@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from .background_process import background_process_options
-from .model_execution import call_timeout_seconds, run_model_process
+from .model_execution import QUOTA_ERROR_CODES, call_timeout_seconds, run_model_process
 
 import hashlib
 import json
@@ -26,6 +26,9 @@ class ModelBackendError(ValueError):
     """A configured model endpoint cannot produce an auditable structured result."""
 
     def __init__(self, message: str, *, diagnostic: dict[str, Any] | None = None) -> None:
+        if diagnostic and (diagnostic.get('kind') == 'quota' or diagnostic.get('provider_code') in QUOTA_ERROR_CODES):
+            message = '模型使用额度已用尽；请等待额度重置或补充额度后继续。'
+            diagnostic = {**diagnostic, 'kind': 'quota', 'provider_message': message}
         super().__init__(message)
         self.diagnostic = diagnostic
 
@@ -414,6 +417,22 @@ def safe_model_error_summary(
     return text[-maximum_length:]
 
 
+def _local_call_failure(backend, completed, *, prompt=''):
+    # CLI stderr can echo the complete frozen packet. Never surface that tail.
+    # Only a standalone stderr diagnostic may classify an error. The supplied
+    # input can be echoed by a CLI; its contents are never an error authority.
+    output = str(completed.stderr or '')
+    if prompt:
+        output = output.replace(prompt, '')
+    quota = re.search(r"(?im)^(?:ERROR:\s*)?(?:you['’]ve hit your usage limit|"
+                      r"usage limit reached|insufficient_quota|quota exceeded)\b", output)
+    if quota:
+        return ModelBackendError('quota exhausted', diagnostic={'kind': 'quota', 'backend': backend})
+    detail = f'退出码 {completed.returncode}'
+    return ModelBackendError(f'{backend} 本地调用失败：{detail}',
+        diagnostic={'kind': 'local_call', 'backend': backend, 'returncode': completed.returncode})
+
+
 def _codex_cli_call(
     *, profile: ModelProfile, prompt: str, schema: dict[str, Any]
 ) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -445,8 +464,7 @@ def _codex_cli_call(
         except subprocess.TimeoutExpired as exc:
             raise ModelBackendError("Codex 本地调用超时", diagnostic={"kind": "timeout"}) from exc
         if completed.returncode != 0 or not output_path.is_file():
-            detail = safe_model_error_summary(completed.stderr or completed.stdout)
-            raise ModelBackendError(f"Codex 本地调用失败：{detail}")
+            raise _local_call_failure('Codex', completed, prompt=prompt)
         parsed = _json_from_text(output_path.read_text(encoding="utf-8"))
     return parsed, {
         "backend": "codex-cli",
@@ -485,8 +503,7 @@ def _claude_code_call(
     except subprocess.TimeoutExpired as exc:
         raise ModelBackendError("Claude 本地调用超时", diagnostic={"kind": "timeout"}) from exc
     if completed.returncode != 0:
-        detail = safe_model_error_summary(completed.stderr or completed.stdout)
-        raise ModelBackendError(f"Claude 本地调用失败：{detail}")
+        raise _local_call_failure('Claude', completed, prompt=prompt)
     envelope = _json_from_text(completed.stdout)
     parsed = envelope.get("structured_output")
     if not isinstance(parsed, dict):
@@ -860,13 +877,6 @@ def call_structured(
     except Exception as exc:
         detail = safe_model_error_summary(exc, sensitive_values=(secret,))
         raise ModelBackendError(f"model call failed: {type(exc).__name__}: {detail}") from exc
-    returned_model = str(provider_audit.get("response_model", "")).strip()
-    if (
-        returned_model and profile.model != "subscription-default"
-        and not _model_identity_matches(profile.model, returned_model)
-    ):
-        raise ModelBackendError("model endpoint returned a different model than configured")
-    parsed = _validate_result(parsed, schema)
     completed = datetime.now(ZoneInfo("America/New_York")).isoformat()
     audit = {
         **provider_audit,
@@ -882,6 +892,16 @@ def call_structured(
         "secret_recorded": False,
         "model_facing_tools_allowed": False,
     }
+    try:
+        returned_model = str(provider_audit.get("response_model", "")).strip()
+        if (returned_model and profile.model != "subscription-default"
+                and not _model_identity_matches(profile.model, returned_model)):
+            raise ModelBackendError("model endpoint returned a different model than configured")
+        parsed = _validate_result(parsed, schema)
+    except ModelBackendError as exc:
+        # The cache owner may archive this response, but it is never a valid return.
+        exc.rejected_output = {'result': parsed, 'audit': audit}
+        raise
     return parsed, audit
 
 

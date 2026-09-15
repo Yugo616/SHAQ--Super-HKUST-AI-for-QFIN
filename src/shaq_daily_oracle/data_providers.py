@@ -3,6 +3,8 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import math
+import time
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -11,6 +13,7 @@ from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
 from .hashing import sha256_file, sha256_payload
+from .data_retry import failure_diagnostic, failure_message, is_transient_diagnostic
 
 
 class DataProviderError(ValueError):
@@ -50,6 +53,8 @@ class DataProfile:
     maximum_event_characters: int = 60_000
     maximum_option_contracts_per_side: int = 40
     yahoo_worker_timeout_seconds: int = 900
+    yahoo_request_max_retries: int = 1
+    yahoo_retry_backoff_seconds: float = 0.25
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> "DataProfile":
@@ -95,6 +100,13 @@ class DataProfile:
             raise DataProviderError("provider timeouts and batch size must be positive")
         if self.yahoo_worker_timeout_seconds <= 0:
             raise DataProviderError("Yahoo worker deadline must be positive")
+        if (type(self.yahoo_request_max_retries) is not int
+                or not 0 <= self.yahoo_request_max_retries <= 3):
+            raise DataProviderError("Yahoo request retries must be an integer from 0 to 3")
+        if (type(self.yahoo_retry_backoff_seconds) not in {int, float}
+                or not math.isfinite(self.yahoo_retry_backoff_seconds)
+                or not 0 <= self.yahoo_retry_backoff_seconds <= 5):
+            raise DataProviderError("Yahoo retry backoff must be between 0 and 5 seconds")
         if self.maximum_candidates <= 0:
             raise DataProviderError("maximum_candidates must be positive")
         if self.maximum_event_characters <= 0:
@@ -108,6 +120,8 @@ class DataProfile:
         value = asdict(self)
         # A process deadline changes execution, never the source/data identity.
         value.pop('yahoo_worker_timeout_seconds')
+        value.pop('yahoo_request_max_retries')
+        value.pop('yahoo_retry_backoff_seconds')
         return value
 
     def identity(self) -> str:
@@ -240,6 +254,22 @@ class YFinanceProvider:
     def __init__(self, profile: DataProfile) -> None:
         self.profile = profile
 
+    def _request_with_retry(self, request, *, stage):
+        # Validate even directly constructed profiles before issuing any request.
+        self.profile.validate()
+        for attempt in range(self.profile.yahoo_request_max_retries + 1):
+            try:
+                return request()
+            except Exception as exc:
+                diagnostic = failure_diagnostic(exc, stage)
+                if diagnostic['kind'] == 'no_data':
+                    raise
+                if (not is_transient_diagnostic(diagnostic)
+                        or attempt >= self.profile.yahoo_request_max_retries):
+                    diagnostic.update(attempts=attempt + 1, retry_count=attempt)
+                    raise DataProviderError(failure_message(diagnostic), diagnostic=diagnostic) from exc
+                time.sleep(self.profile.yahoo_retry_backoff_seconds * (attempt + 1))
+
     @staticmethod
     def _module():
         try:
@@ -282,11 +312,12 @@ class YFinanceProvider:
                         # Bulk download catches all ticker errors and turns even
                         # EMFILE into empty data. Direct history preserves errors
                         # under the worker's explicit exception configuration.
-                        frames[symbol] = yf.Ticker(symbol, session=session).history(
+                        ticker = yf.Ticker(symbol, session=session)
+                        frames[symbol] = self._request_with_retry(lambda: ticker.history(
                             start=start.isoformat(), end=end.isoformat(),
                             interval=interval, prepost=prepost, auto_adjust=False,
                             actions=False, timeout=self.profile.request_timeout_seconds,
-                        )
+                        ), stage='history')
                     except (YFPricesMissingError, YFTzMissingError):
                         frames[symbol] = pd.DataFrame()
                 nonempty = [frame for frame in frames.values() if frame is not None and not frame.empty]
@@ -302,9 +333,8 @@ class YFinanceProvider:
                         frame.index = frame.index.tz_localize(None)
                 frame = pd.concat(frames, axis=1, sort=True)
             except Exception as exc:
-                raise DataProviderError(
-                    f"yfinance history request failed: {type(exc).__name__}: {exc}"
-                ) from exc
+                diagnostic = failure_diagnostic(exc, 'history')
+                raise DataProviderError(failure_message(diagnostic), diagnostic=diagnostic) from exc
             group_original = [normalized[value] for value in group]
             rows = _frame_rows(frame, group_original)
             output.update(rows)
@@ -347,15 +377,17 @@ class YFinanceProvider:
     def _option_surface_inline(self, symbol: str, *, session) -> dict[str, Any]:
         yf = self._module()
         ticker = yf.Ticker(_yahoo_symbol(symbol), session=session)
-        expiries = list(ticker.options or [])
+        expiries = list(self._request_with_retry(lambda: ticker.options, stage='option_surface') or [])
         if not expiries:
             return {"symbol": symbol, "status": "no_data", "expiries": {}}
         output: dict[str, Any] = {}
         for expiry in expiries[:3]:
             try:
-                chain = ticker.option_chain(expiry)
+                chain = self._request_with_retry(lambda: ticker.option_chain(expiry), stage='option_surface')
             except Exception as exc:
-                output[expiry] = {"status": "provider_error", "error": type(exc).__name__}
+                diagnostic = failure_diagnostic(exc, 'option_surface')
+                output[expiry] = {"status": "provider_error", "error": diagnostic.get('error_type'),
+                                  "diagnostic": diagnostic}
                 continue
             sides = {}
             for name, frame in (("calls", chain.calls), ("puts", chain.puts)):

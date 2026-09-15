@@ -192,7 +192,8 @@ def refresh_minute_observations(*, research_root, rows, profile, observed_at=Non
             else:
                 refreshed.append(day.isoformat())
         except Exception as exc:
-            failures.append(dict(trade_date=day.isoformat(), error_type=type(exc).__name__, message=str(exc)))
+            failures.append(dict(trade_date=day.isoformat(), error_type=type(exc).__name__, message=str(exc),
+                                 diagnostic=getattr(exc, 'diagnostic', {})))
     return {'refreshed_dates': refreshed, 'failures': failures}
 
 

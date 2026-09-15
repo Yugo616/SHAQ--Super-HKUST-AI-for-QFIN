@@ -222,18 +222,4 @@ renderBatch=function(batch,key,symbol){
   const chosen=key&&batch.variants?.[key]?key:Object.keys(batch.variants||{})[0];
   const chosenSymbol=symbol||state.replay?.symbol||Object.keys(batch.variants?.[chosen]?.reports_by_symbol||{})[0];
   renderBatchWithResearchProgress(batch,chosen,chosenSymbol);
-  const reports=batch.variants?.[chosen]?.reports_by_symbol?.[chosenSymbol]||[];
-  const selection={variant:chosen,symbol:chosenSymbol,open:state.researchOpen||[]};
-  const box=document.createElement('details');box.className='card research-progress';box.open=state.researchOuterOpen!==false;
-  box.addEventListener?.('toggle',()=>{state.researchOuterOpen=box.open});
-  box.innerHTML=`<summary>研究执行明细</summary>${SHAQProgress.researchHtml(batch.research_progress||[],reports,selection)}`;
-  const head=q('.batch-head');
-  if(head?.parentNode)head.parentNode.insertBefore(box,head.nextSibling||null);
-  if(typeof box.querySelector==='function'){
-    box.querySelector('[data-research-variant]')?.addEventListener('change',e=>renderBatch(batch,e.target.value,chosenSymbol));
-    box.querySelector('[data-research-symbol]')?.addEventListener('change',e=>renderBatch(batch,chosen,e.target.value));
-  }
-  if(typeof box.querySelectorAll==='function')box.querySelectorAll('[data-research-section]').forEach(row=>row.addEventListener('toggle',()=>{
-    state.researchOpen=[...box.querySelectorAll('[data-research-section][open]')].map(item=>item.dataset.researchSection);
-  }));
 };

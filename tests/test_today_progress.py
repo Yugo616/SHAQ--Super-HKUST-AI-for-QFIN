@@ -5,6 +5,60 @@ from pathlib import Path
 
 
 class TodayProgressTests(unittest.TestCase):
+    def test_failed_version_has_short_actionable_reason_without_raw_tail(self):
+        self.run_js(r'''
+const assert=require('node:assert/strict');
+const html=ui.progressHtml([{job_id:'j',started_at_et:'2026-09-15T08:00:00-04:00',status:'partial_failure',variant_progress:{good:'complete',bad:'failed'},
+ variant_errors:{bad:{message:'模型额度已用完，请恢复额度后继续分析。'+ 'X'.repeat(1000)}}}],[],'2026-09-15T08:00:00-04:00');
+assert.match(html,/模型额度已用完/);
+assert.doesNotMatch(html,/X{121}/);
+assert.match(html,/已完成/);
+''')
+    def test_variant_bar_uses_declared_tasks_and_never_exceeds_unique_completions(self):
+        self.run_js(r"""
+const assert=require('node:assert/strict');
+const events=[{stage:'tasks_planned',variant_key:'v',tasks:[{task_id:'report:AAA:market',symbol:'AAA',domain:'market'},{task_id:'decision'}]},
+ {stage:'report_validated',variant_key:'v',symbol:'AAA',domain:'market',status:'validated',report:{thesis:'saved conclusion'}},
+ {stage:'report_validated',variant_key:'v',symbol:'AAA',domain:'market',status:'validated',report:{thesis:'saved conclusion'}}];
+const html=ui.progressHtml([{job_id:'j',status:'running',variant_progress:{v:'running'},research_progress:events}],[],'2026-09-15T08:00:00-04:00');
+assert.match(html,/<progress[^>]*max="2"[^>]*value="1"/);
+assert.match(html,/saved conclusion/);
+assert.doesNotMatch(html,/执行时间线|call_requested|report_validated/);
+const old=ui.progressHtml([{job_id:'old',status:'running',variant_progress:{v:'running'},research_progress:events.slice(1)}],[],'2026-09-15T08:00:00-04:00');
+assert.doesNotMatch(old,/<progress[^>]*value=/,'old records must not invent a denominator');
+""")
+    def test_calls_are_counted_per_version_without_report_or_stage_inflation(self):
+        self.run_js(r"""
+const assert=require('node:assert/strict');
+const events=[
+ {variant_key:'team/main',stage:'call_requested',call_id:'a',attempt:1},
+ {variant_key:'team/main',stage:'model_started',call_id:'a',attempt:1},
+ {variant_key:'team/main',stage:'model_returned',call_id:'a',attempt:1,status:'complete'},
+ {variant_key:'team/main',stage:'report_validated',call_id:'a',symbol:'AAA',domain:'market',status:'validated'},
+ {variant_key:'team/main',stage:'report_validated',call_id:'a',symbol:'BBB',domain:'market',status:'validated'},
+ {variant_key:'team/main',stage:'decision_complete',status:'complete'},
+ {variant_key:'team/main',stage:'call_requested',call_id:'b',attempt:1},
+ {variant_key:'team/main',stage:'failure',call_id:'b',attempt:1,status:'failed'},
+ {variant_key:'team/main',stage:'call_requested',call_id:'b',attempt:2},
+ {variant_key:'team/other',stage:'call_requested',call_id:'a',attempt:1}
+];
+assert.equal(typeof ui.callSummary,'function','call counters must be independent of report events');
+assert.deepEqual(ui.callSummary(events,'team/main'),{total:2,complete:1,running:1,failed:0,reused:0,attempts:3});
+assert.deepEqual(ui.callSummary(events,'team/other'),{total:1,complete:0,running:1,failed:0,reused:0,attempts:1});
+""")
+
+    def test_completed_versions_stay_visible_and_old_failures_are_not_today(self):
+        self.run_js(r"""
+const assert=require('node:assert/strict');
+const jobs=[{job_id:'old',batch_id:'old-batch',status:'partial_failure',started_at_et:'2026-09-01T08:00:00-04:00',variant_progress:{'team/main':'failed'}},
+ {job_id:'today',status:'complete',started_at_et:'2026-09-15T08:00:00-04:00',variant_progress:{'team/main':'complete'}}];
+const html=ui.progressHtml(jobs,[{author:'team',version_id:'main',method_name:'独立证据门禁版'}],'2026-09-15T09:00:00-04:00');
+assert.match(html,/历史未完成/);
+const today=html.slice(html.indexOf('data-progress-job="today"'));
+assert.match(today,/独立证据门禁版/,'a completed batch must still name its versions');
+assert.match(today,/<progress/);
+""")
+
     def test_failed_original_batch_remains_recoverable_after_its_trading_day(self):
         self.run_js(r"""
 const assert=require('node:assert/strict');
@@ -74,8 +128,8 @@ console.log(ui.progressHtml([
 ], [{author:'alice',version_id:'new',method_name:'<unsafe>'}], '2026-09-10T08:20:00-04:00'));
 """)
         self.assertNotIn('OLD', html)
-        self.assertLess(html.index('COLLECT'), html.index('&lt;unsafe&gt;'))
-        self.assertLess(html.index('&lt;unsafe&gt;'), html.index('PARTIAL'))
+        self.assertLess(html.index('data-progress-job="one"'), html.index('&lt;unsafe&gt;'))
+        self.assertLess(html.index('&lt;unsafe&gt;'), html.index('data-progress-job="two"'))
         self.assertIn('data-progress-result="b2"', html)
         self.assertIn('data-progress-retry="two"', html)
         self.assertNotIn('<unsafe>', html)
@@ -99,7 +153,7 @@ const events=[
 ];
 const html=ui.researchHtml(events,[],{variant:'team/main',symbol:'AAPL',open:['timeline','domain-market','original-AAPL-market']});
 assert.match(html,/AAPL、MSFT/);
-assert.match(html,/实际任务 2/);
+assert.match(html,/实际调用 1/);
 assert.match(html,/&lt;b&gt;x&lt;\/b&gt;/);
 assert.doesNotMatch(html,/<b>x<\/b>/);
 assert.match(html,/data-research-symbol="AAPL"[^>]*selected/);

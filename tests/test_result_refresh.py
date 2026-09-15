@@ -79,7 +79,7 @@ class ResultRefreshTests(unittest.TestCase):
                  }):
                 self.assertEqual(service.start_result_refresh(manual=True)["status"], "running")
                 completed = self.wait_status(service, {"partial_failure", "failed"})
-            self.assertEqual(completed["status"], "partial_failure")
+            self.assertEqual(completed["status"], "failed")
             self.assertEqual(completed["result"]["failures"][0]["message"], "offline")
 
     def test_desktop_bridge_exposes_async_refresh_without_model_arguments(self):
@@ -113,7 +113,7 @@ class ResultRefreshTests(unittest.TestCase):
                 self.assertNotEqual(started["operation_id"], "crashed-process")
                 self.assertEqual(self.wait_status(service, {"complete"})["status"], "complete")
 
-    def test_missing_daily_price_finishes_as_partial_failure_not_complete(self):
+    def test_missing_daily_price_with_no_success_finishes_as_failed(self):
         with tempfile.TemporaryDirectory() as name:
             root = Path(name)
             (root / "batches").mkdir()
@@ -127,7 +127,7 @@ class ResultRefreshTests(unittest.TestCase):
                  }):
                 service.start_result_refresh(manual=True)
                 result = self.wait_status(service, {"complete", "partial_failure", "failed"})
-        self.assertEqual(result["status"], "partial_failure")
+        self.assertEqual(result["status"], "failed")
         self.assertEqual(result["failure_count"], 1)
         self.assertEqual(result["result"]["failures"][0]["missing_symbols"], ["AAPL"])
 

@@ -23,7 +23,7 @@ from .contracts import DOMAINS, validate_adversary_report, validate_domain_repor
 from .decision_sandbox import build_decision_input, execute_decision_script, decision_parameters, decision_mode
 from .hashing import sha256_file, sha256_payload
 from .lineage import build_lineage_graph
-from .model_backends import ModelProfile, call_structured, safe_model_error_summary
+from .model_backends import ModelProfile, call_structured, safe_model_error_summary, _validate_result
 from .model_execution import (ExecutionPolicy, execution_policy_scope, transient_model_failure,
                               compact_market_tables)
 from .research_progress import safe_observe
@@ -462,16 +462,38 @@ class ContentAddressedModelCache:
                     on_model_start()
                 attempt_started = time.monotonic()
                 timestamp = datetime.now(ZoneInfo('America/New_York')).isoformat()
+                returned = False
                 try:
                     with execution_policy_scope(policy):
                         result, audit = caller(profile=profile, secret=secret, prompt=prompt, schema=schema)
+                    returned = True
                     if validate:
                         validate(result)
                 except Exception as exc:
+                    rejected_output = {'result': result, 'audit': audit} if returned else getattr(exc, 'rejected_output', None)
+                    rejected_hash = None
+                    if rejected_output is not None:
+                        # A returned but rejected response is evidence, never a valid checkpoint.
+                        rejected = {
+                            'schema_version': 1, 'status': 'validation_rejected',
+                            'cache_key': cache_key, 'key_document': key_document,
+                            'prompt': prompt, 'schema': schema, **rejected_output,
+                            'result_sha256': sha256_payload(rejected_output['result']),
+                            'audit_sha256': sha256_payload(rejected_output['audit']),
+                            'validation_error': {'kind': getattr(exc, 'kind', 'validation'),
+                                'error_type': type(exc).__name__,
+                                'message': safe_model_error_summary(exc, sensitive_values=(secret,))},
+                            'invocation_id': invocation_id, 'attempt': attempt + 1,
+                        }
+                        rejected_hash = sha256_payload(rejected)
+                        rejected_root = snapshot_root.parent if snapshot_root else policy_root
+                        _write_json_same_or_once(rejected_root / 'rejected_model_calls' / f'{rejected_hash}.json',
+                            {**rejected, 'rejected_document_sha256': rejected_hash})
                     transient = transient_model_failure(exc)
                     attempts.append({'attempt': attempt + 1, 'started_at_et': timestamp,
                         'elapsed_seconds': time.monotonic() - attempt_started,
                         'status': 'failed', 'error_type': type(exc).__name__, 'transient': transient,
+                        **({'rejected_document_sha256': rejected_hash} if rejected_hash else {}),
                         'message': safe_model_error_summary(exc, sensitive_values=(secret,))})
                     if snapshot_root:
                         _atomic_json(snapshot_root.parent / 'call_attempts' / f'{cache_key}-{invocation_id}.json', {
@@ -844,6 +866,91 @@ def _validated_adversary(value, expected_symbols):
     return by_symbol
 
 
+def _variant_evidence(evidence, documents):
+    screening_path = evidence.root / "raw/screening.json"
+    if not screening_path.is_file():
+        return evidence
+    from .module_rules import default_rule
+    packet = json.loads(screening_path.read_text(encoding="utf-8"))
+    script = documents.get("modules/screening/compute.js", default_rule("screening"))
+    symbols = packet["candidate_sets"].get(sha256_payload(script))
+    if symbols is None:
+        raise ResearchBatchError("此筛选版本没有共享的候选证据，请重新采集")
+    return replace(evidence, candidate_intake={**evidence.candidate_intake,
+        "candidates": [c for c in evidence.candidate_intake["candidates"] if c["symbol"] in symbols]})
+
+
+def authenticated_failed_checkpoints(*, evidence, manifest, skill_snapshots, failed_variants, calls):
+    """Authenticate partial checkpoints by rebuilding their exact frozen requests.
+
+    The adapter below has no storage, provider or fallback: missing calls never run.
+    Reuse domain input construction/validation, including screening and compute rules,
+    so self-consistent foreign prompts cannot masquerade as failed-variant outputs.
+    """
+    profile = ModelProfile.from_dict(manifest['model_profile'])
+    if profile.identity() != manifest['batch_identity']['model_profile_hash']:
+        raise ResearchBatchError('batch model profile differs from frozen identity')
+    config = manifest['batch_identity'].get('execution_config', {})
+    prompt_version = config.get('prompt_format_version', 1)
+    if prompt_version not in {1, 2}:
+        raise ResearchBatchError('unsupported original prompt format')
+
+    class SnapshotInputs:
+        def __init__(self):
+            self.authenticated = set()
+
+        def call(self, *, profile, prompt, schema, validate=None, **unused):
+            key = sha256_payload({'cache_schema_version': 2,
+                'profile_sha256': profile.identity(),
+                'prompt_sha256': hashlib.sha256(prompt.encode('utf-8')).hexdigest(),
+                'schema_sha256': sha256_payload(schema)})
+            document = calls.get(key)
+            if document is None:
+                raise ResearchBatchError('frozen checkpoint unavailable')
+            if document['prompt'] != prompt or document['schema'] != schema:
+                raise ResearchBatchError('frozen checkpoint input mismatch')
+            _validate_result(document['result'], schema)
+            if validate:
+                validate(document['result'])
+            self.authenticated.add(key)
+            return document['result'], ContentAddressedModelCache._public_audit(document), True
+
+    cache = SnapshotInputs()
+    for key in sorted(failed_variants):
+        documents = skill_snapshots[key]['documents']
+        selected = _variant_evidence(evidence, documents)
+        reports_by_symbol = {str(row['symbol']).upper(): [] for row in selected.candidate_intake['candidates']}
+        incomplete = False
+        for domain in sorted(DOMAINS):
+            try:
+                reports, _ = _run_domain(domain=domain, evidence=selected, documents=documents,
+                    profile=profile, secret='', cache=cache, caller=None,
+                    prompt_format_version=prompt_version)
+            except ValueError:
+                incomplete = True
+                continue
+            for candidate, report in zip(selected.candidate_intake['candidates'], reports, strict=True):
+                reports_by_symbol[str(candidate['symbol']).upper()].append(report)
+        if incomplete or not reports_by_symbol:
+            continue
+        try:
+            adversary, _, _ = cache.call(profile=profile,
+                prompt=_adversary_prompt(reports_by_symbol=reports_by_symbol, documents=documents),
+                schema=_adversary_schema(), validate=lambda value: _validated_adversary(value, reports_by_symbol))
+            if decision_mode(documents['decision/cases.json']) == 'synthesis':
+                from .synthesis import synthesis_prompt, synthesis_schema, validate_synthesis
+                maximum = decision_parameters(documents['decision/cases.json'])['maximum_predictions']
+                cache.call(profile=profile, prompt=synthesis_prompt(reports=reports_by_symbol,
+                    adversary=_validated_adversary(adversary, reports_by_symbol), documents=documents,
+                    as_of_et=selected.manifest['as_of_et'], maximum_predictions=maximum,
+                    citation_contract_version=config.get('synthesis_citation_contract_version', 1)),
+                    schema=synthesis_schema(list(reports_by_symbol)), validate=lambda value: validate_synthesis(
+                        value, reports_by_symbol, selected.lineage['evidence_to_roots'], maximum_predictions=maximum))
+        except ValueError:
+            continue
+    return cache.authenticated
+
+
 def run_variant(
     *,
     variant: VariantSelection,
@@ -861,6 +968,7 @@ def run_variant(
     prompt_format_version: int = 1,
     documents_snapshot: dict[str, str] | None = None,
     recover_rejected_cache: bool = False,
+    synthesis_citation_contract_version: int = 2,
 ) -> dict[str, Any]:
     variant_key = f"{variant.author}/{variant.version_id}"
     stage_started = time.monotonic()
@@ -885,15 +993,7 @@ def run_variant(
                              report={**report, "original": report, "evidence": []})
         return result
     documents = documents_snapshot if documents_snapshot is not None else registry.effective_skills(variant.version_id, variant.author)
-    screening_path = evidence.root / "raw/screening.json"
-    if screening_path.is_file():
-        from .module_rules import default_rule
-        packet = json.loads(screening_path.read_text(encoding="utf-8"))
-        script = documents.get("modules/screening/compute.js", default_rule("screening"))
-        symbols = packet["candidate_sets"].get(sha256_payload(script))
-        if symbols is None:
-            raise ResearchBatchError("此筛选版本没有共享的候选证据，请重新采集")
-        evidence = replace(evidence, candidate_intake={**evidence.candidate_intake, "candidates": [c for c in evidence.candidate_intake["candidates"] if c["symbol"] in symbols]})
+    evidence = _variant_evidence(evidence, documents)
     safe_observe(observer, stage="screening", batch_id=batch_id,
                  variant_key=variant_key,
                  symbols=[str(row["symbol"]).upper() for row in evidence.candidate_intake["candidates"]],
@@ -901,6 +1001,15 @@ def run_variant(
     reports_by_symbol = {
         str(row["symbol"]).upper(): [] for row in evidence.candidate_intake["candidates"]
     }
+    tasks = [{'task_id': f'report:{symbol}:{domain}', 'symbol': symbol, 'domain': domain}
+             for symbol in sorted(reports_by_symbol) for domain in sorted(DOMAINS)]
+    if reports_by_symbol:
+        tasks.append({'task_id': 'adversary'})
+        if decision_mode(documents['decision/cases.json']) == 'synthesis':
+            tasks.append({'task_id': 'synthesis'})
+    tasks.append({'task_id': 'decision'})
+    safe_observe(observer, stage='tasks_planned', batch_id=batch_id, variant_key=variant_key,
+                 symbols=sorted(reports_by_symbol), tasks=tasks)
     audits, domain_failures = [], []
     for domain in sorted(DOMAINS):
         try:
@@ -958,11 +1067,14 @@ def run_variant(
     synthesis = None
     if mode == "synthesis" and reports_by_symbol:
         from .synthesis import synthesis_prompt, synthesis_schema, validate_synthesis
+        safe_observe(observer, stage='synthesis', batch_id=batch_id, variant_key=variant_key,
+                     symbols=sorted(reports_by_symbol), status='running')
         synthesis, synthesis_audit, cache_hit = cache.call(
             profile=profile, secret=secret, caller=caller,
             prompt=synthesis_prompt(reports=reports_by_symbol, adversary=adversary_by_symbol,
                 documents=documents, as_of_et=evidence.manifest["as_of_et"],
-                maximum_predictions=parameters["maximum_predictions"]),
+                maximum_predictions=parameters["maximum_predictions"],
+                citation_contract_version=synthesis_citation_contract_version),
             schema=synthesis_schema(list(reports_by_symbol)),
             execution_policy=execution_policy, snapshot_root=output_root.parent / 'model_calls',
             group_symbols=sorted(reports_by_symbol),
@@ -974,6 +1086,8 @@ def run_variant(
         decision_input["synthesis"] = validate_synthesis(synthesis, reports_by_symbol,
             evidence.lineage["evidence_to_roots"], maximum_predictions=parameters["maximum_predictions"])
         audits.append({**synthesis_audit, "domain": "synthesis", "cache_hit": cache_hit})
+        safe_observe(observer, stage='synthesis', batch_id=batch_id, variant_key=variant_key,
+                     symbols=sorted(reports_by_symbol), status='complete')
     elif mode == "synthesis":
         synthesis = {"decisions": []}
         decision_input["synthesis"] = {"schema_version": 1, "decisions": []}
@@ -1184,7 +1298,8 @@ class ResearchBatchRunner:
             "selected_skill_commits": selected_commits,
             "skill_snapshot_sha256s": skill_snapshot_sha256s,
             "cutoff_status": evidence.manifest.get("cutoff_status"),
-            "execution_config": {"prompt_format_version": 2, "price_volume_group_size": 1},
+            "execution_config": {"prompt_format_version": 2, "price_volume_group_size": 1,
+                                 "synthesis_citation_contract_version": 2},
         }
         if _resume_manifest is not None:
             identity = _resume_manifest['batch_identity']
@@ -1236,6 +1351,8 @@ class ResearchBatchRunner:
                 execution_policy=execution_policy, prompt_format_version=prompt_format_version,
                 documents_snapshot=skill_snapshots[key]['documents'],
                 recover_rejected_cache=_resume_manifest is not None,
+                synthesis_citation_contract_version=identity.get('execution_config', {}).get(
+                    'synthesis_citation_contract_version', 1),
             )
             self.cache.snapshot_calls(
                 value.get("model_call_audits", []),

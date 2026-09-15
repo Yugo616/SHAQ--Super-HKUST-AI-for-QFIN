@@ -5,6 +5,45 @@ import subprocess
 
 
 class AccountViewTests(unittest.TestCase):
+    def test_single_date_chart_has_one_centered_date_and_named_color_legend(self):
+        from html.parser import HTMLParser
+        class Chart(HTMLParser):
+            def __init__(self):
+                super().__init__(); self.axis_dates=[]; self.circle_x=[]; self.in_text=False
+            def handle_starttag(self, tag, attrs):
+                attrs=dict(attrs)
+                if tag == 'text': self.in_text=True
+                if tag == 'circle': self.circle_x.append(attrs.get('cx'))
+            def handle_endtag(self, tag):
+                if tag == 'text': self.in_text=False
+            def handle_data(self, text):
+                if self.in_text and text == '2026-09-15': self.axis_dates.append(text)
+        html = self.render('plot', [
+            {'method_name':'甲方法','curve':[{'date':'2026-09-15','equity':10000}]},
+            {'method_name':'乙方法','curve':[{'date':'2026-09-15','equity':10010}]},
+        ])
+        chart=Chart(); chart.feed(html)
+        self.assertEqual(len(chart.axis_dates), 1)
+        self.assertEqual(chart.circle_x, ['462.5', '462.5'])
+        self.assertIn('class="balance-legend"', html)
+        self.assertIn('甲方法', html)
+        self.assertIn('乙方法', html)
+
+    def test_compact_overview_shows_net_balances_without_duplicate_daily_cost_tables(self):
+        html = self.render('compactOverviewHtml', {
+            'rules':{'initial_cash':10000},
+            'accounts':[{'label':'甲方法','equity':10008,'opening_simulation_balance':10000,
+                         'curve':[{'date':'2026-09-15','equity':10008}]}],
+            'results':[{'trade_date':'2026-09-15','scope':'forward','net_pnl':8,'fees':1,'slippage_cost':1}],
+        })
+        self.assertIn('$10,008.00', html)
+        self.assertIn('$8.00', html)
+        self.assertNotIn('一股', html)
+        self.assertNotIn('手续费', html)
+        self.assertNotIn('累计净盈亏', html)
+        self.assertNotIn('<table', html)
+        self.assertNotIn('<details', html)
+
     def render(self, name, value):
         path = Path(__file__).parents[1] / 'src/shaq_daily_oracle/desktop/accounts.js'
         self.assertTrue(path.exists(), 'Virtual account view must render actual settlement data')

@@ -14,19 +14,19 @@ SHAQ brings six specialist research domains, adversarial review and a brokerless
 
 ## Download
 
-The primary downloads below target **0.7.2**. A platform is available only when its page contains the matching installer, checksum and acceptance record. If those assets are absent, do not treat this source page as a release announcement; use the clearly labelled legacy fallback below.
+The primary downloads below target **0.7.3**. A platform is available only when its page contains the matching installer, checksum and acceptance record. If those assets are absent, do not treat this source page as a release announcement; use the clearly labelled legacy fallback below.
 
-In 0.7.2, model calls have a configurable 600-second total deadline and one transient retry by default (**Connection Settings → Advanced call settings**). **Resume original batch** fills only unfinished calls using the same frozen evidence; late recovery remains research, not on-time formal performance. Automatic research uses the native Windows/macOS scheduler. Progress refresh preserves expanded sections and selections, and isolated data collection releases its own resources. Model identity, methods, fees, balances and historical records are unchanged. See the [update guide](docs/software-updates.md).
+In 0.7.3, model calls have a configurable 600-second total deadline and one transient retry by default (**Connection Settings → Advanced call settings**). **Resume original batch** fills only unfinished calls using the same frozen evidence; late recovery remains research, not on-time formal performance. Automatic research uses the native Windows/macOS scheduler. Progress refresh preserves expanded sections and selections, and isolated data collection releases its own resources. Model identity, methods, fees, balances and historical records are unchanged. See the [update guide](docs/software-updates.md).
 
 | Your computer | Download |
 |---|---|
-| Windows 10/11, x64 | [Windows 0.7.2 installer](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.2-windows) |
-| Mac with Apple Silicon (M series), macOS 15+ | [Apple Silicon 0.7.2 DMG](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.2-macos) |
-| Intel Mac, macOS 15+ | [Intel 0.7.2 DMG](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.2-macos) |
+| Windows 10/11, x64 | [Windows 0.7.3 installer](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.3-windows) |
+| Mac with Apple Silicon (M series), macOS 15+ | [Apple Silicon 0.7.3 DMG](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.3-macos) |
+| Intel Mac, macOS 15+ | [Intel 0.7.3 DMG](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.3-macos) |
 
 Download the **`.exe`** or **`.dmg`** only. Other assets serve the updater, checksum verification and third-party notices. Installers include Python and the simulation engine: Git, Python, Futu and a brokerage account are not end-user prerequisites. Windows requires WebView2; the installer checks it. These are internally tested prereleases without commercial signing or notarization. Check the release page before accepting an operating-system source warning.
 
-**Legacy fallback, not 0.7.2:** [Windows 0.7.1](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.1-windows) ([source `bc144f1`](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/commit/bc144f1c4135b7b009e07d009f73724f95848bb7)); [Mac 0.7.0](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.0-macos) (Apple Silicon source [`56d6467`](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/commit/56d64679bb8a9291e229e29743c9be29a7a16517), Intel source [`97384db`](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/commit/97384db94f4ccf1c85b046c4c82bc170f0c9a8d0)). Releases supply per-platform acceptance records and checksums; old artifacts remain unchanged.
+**Legacy fallback, not 0.7.3:** [Windows 0.7.1](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.1-windows) ([source `bc144f1`](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/commit/bc144f1c4135b7b009e07d009f73724f95848bb7)); [Mac 0.7.0](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.0-macos) (Apple Silicon source [`56d6467`](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/commit/56d64679bb8a9291e229e29743c9be29a7a16517), Intel source [`97384db`](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/commit/97384db94f4ccf1c85b046c4c82bc170f0c9a8d0)). Releases supply per-platform acceptance records and checksums; old artifacts remain unchanged.
 
 ## Your first run
 

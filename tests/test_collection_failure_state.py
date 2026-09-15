@@ -15,6 +15,29 @@ from shaq_daily_oracle.hashing import sha256_file
 
 
 class CollectionFailureStateTests(unittest.TestCase):
+    def test_no_completed_variants_is_failure_not_partial_success(self):
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            service = self.service(root)
+            service.paths.package_root = Path(__file__).resolve().parents[1]
+            service.paths.batches_root = root / 'batches'
+            service.registry = SimpleNamespace()
+            service.settings.execution_policy = lambda: None
+            failed = {'team/a': {'error_type':'ModelBackendError', 'message':'模型额度已用尽'},
+                      'team/b': {'error_type':'ModelBackendError', 'message':'模型额度已用尽'}}
+            outcome = {'status': {'all_variants_completed':False,'completed_variants':[],
+                                 'failed_variants':failed, 'batch_id':'LAB-test'}}
+            with patch.object(service, '_today_evidence', return_value=object()), \
+                 patch('shaq_daily_oracle.lab_service.ResearchBatchRunner') as runner, \
+                 patch.object(service, 'start_result_refresh', return_value={'status':'not_due'}):
+                runner.return_value.run.return_value = outcome
+                service._run_batch_job(job_id='job-fixture',variants=[],profile=None,secret='')
+            saved = json.loads((root/'jobs/job-fixture.json').read_text())
+            self.assertEqual(saved['status'], 'failed')
+            self.assertEqual(saved.get('completed_variant_count'), 0)
+            self.assertEqual(saved.get('failed_variant_count'), 2)
+            self.assertEqual(saved.get('variant_errors'), failed)
+
     def service(self, root):
         service = LabService.__new__(LabService)
         service.paths = SimpleNamespace(research_root=root)

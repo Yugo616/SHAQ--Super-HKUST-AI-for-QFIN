@@ -460,8 +460,12 @@ class ResearchDashboardIndex:
         if set(skill_snapshots) != set(manifest.get("skill_snapshot_sha256s", {})):
             raise ResearchDashboardError("batch Skill snapshot set is incomplete")
         model_calls = []
+        call_documents = {}
         for path in sorted((root / "model_calls").glob("*.json")):
             call = _verified_model_call(path)
+            if call['key_document']['profile_sha256'] != manifest['batch_identity'].get('model_profile_hash'):
+                raise ResearchDashboardError('batch model call profile mismatch')
+            call_documents[call['cache_key']] = call
             audit = call["audit"]
             model_calls.append({
                 "cache_key": call["cache_key"],
@@ -497,8 +501,22 @@ class ResearchDashboardIndex:
         actual_model_calls = {
             row["cache_key"]: row["cache_document_sha256"] for row in model_calls
         }
-        if actual_model_calls != expected_model_calls:
+        if any(actual_model_calls.get(key) != digest for key, digest in expected_model_calls.items()):
             raise ResearchDashboardError("batch model call snapshot set is incomplete")
+        failed = status.get('failed_variants', {})
+        if (not isinstance(failed, dict) or not set(failed) <= set(skill_snapshots)
+                or set(failed) & set(variants)):
+            raise ResearchDashboardError('batch failed variant identity mismatch')
+        extras = set(actual_model_calls) - set(expected_model_calls)
+        if extras:
+            from .research_batch import authenticated_failed_checkpoints
+            try:
+                authenticated = authenticated_failed_checkpoints(evidence=evidence, manifest=manifest,
+                    skill_snapshots=skill_snapshots, failed_variants=failed, calls=call_documents)
+            except (ValueError, KeyError, TypeError) as exc:
+                raise ResearchDashboardError('failed variant checkpoint authentication failed') from exc
+            if not extras <= authenticated:
+                raise ResearchDashboardError('batch contains model checkpoints outside frozen failed variants')
         if status:
             if set(status.get("completed_variants", [])) != set(variants):
                 raise ResearchDashboardError("batch completion status differs from results")

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 import hashlib
 import math
 import os
@@ -20,7 +21,7 @@ from filelock import FileLock, Timeout as LockTimeout
 
 from .app_paths import AppPaths
 from .update_admission import guarded_method, start_guarded_thread
-from .data_providers import DataProfile, load_versioned_universe
+from .data_providers import DataProfile, DataProviderError, YFinanceProvider, load_versioned_universe
 from .hashing import sha256_payload
 from .model_backends import ModelProfile, probe_model_profile, uses_local_subscription
 from .research_batch import (
@@ -51,6 +52,33 @@ class LabServiceError(ValueError):
 
 ET = ZoneInfo("America/New_York")
 RESULT_REFRESH_INTERVAL = timedelta(minutes=15)
+# Transport recovery is not a trading/model parameter. Polling only starts this
+# one deferred retry when due; it must not endlessly repeat a failed day.
+RESULT_RETRY_DELAY = timedelta(minutes=1)
+RESULT_AUTOMATIC_RETRIES = 1
+
+
+class _RefreshMarket:
+    """One refresh shares a provider outage boundary, not independent storms."""
+
+    def __init__(self, profile):
+        self.provider = YFinanceProvider(profile)
+        self.failure = None
+
+    def history(self, *args, **kwargs):
+        if self.failure is not None:
+            raise DataProviderError(str(self.failure), diagnostic={
+                **self.failure.diagnostic, 'deferred_after_provider_failure': True})
+        try:
+            return self.provider.fresh_history(*args, **kwargs)
+        except DataProviderError as exc:
+            from .data_retry import is_transient_diagnostic
+            if (is_transient_diagnostic(exc.diagnostic) or exc.diagnostic.get('kind') in {
+                    'resource_exhausted', 'auth_error', 'worker_crash', 'protocol_error'}):
+                self.failure = exc
+            raise
+
+    fresh_history = history
 
 
 SKILL_EXPLANATIONS = {
@@ -165,7 +193,8 @@ class LabService:
             account_store.activate(AccountRules())
 
     @guarded_method
-    def _refresh_minute_accounts(self, profile, eligible_dates=None):
+    def _refresh_minute_accounts(self, profile, eligible_dates=None, market_provider=None,
+                                 reconcile_only=False):
         from .minute_settlements import refresh_minute_observations
         from .virtual_accounts import AccountStore
         try:
@@ -173,10 +202,20 @@ class LabService:
                 # A batch completion and reopen refresh can arrive concurrently.
                 # The whole collect/reconcile pair is one background operation.
                 rows = self.dashboard.overview()['daily_results']
-                result = refresh_minute_observations(research_root=self.paths.research_root,
-                            rows=rows, profile=profile, eligible_dates=eligible_dates)
-                rows = self.dashboard.account_rows(rows)
-                AccountStore(self.paths.research_root / 'virtual_accounts').refresh(rows)
+                result = ({'refreshed_dates': [], 'failures': []} if reconcile_only else
+                          refresh_minute_observations(research_root=self.paths.research_root,
+                            rows=rows, profile=profile, eligible_dates=eligible_dates,
+                            market_provider=market_provider))
+                try:
+                    rows = self.dashboard.account_rows(rows)
+                    AccountStore(self.paths.research_root / 'virtual_accounts').refresh(rows)
+                except Exception as exc:
+                    # Collection receipts already exist. Recover local account
+                    # reconciliation without calling the provider again.
+                    result['stage_failures'] = [{
+                        'stage': 'account_reconciliation', 'error_type': type(exc).__name__,
+                        'message': str(exc), 'diagnostic': getattr(exc, 'diagnostic', {}),
+                    }]
                 return result
         except LockTimeout:
             return {'status': 'already_running', 'refreshed_dates': [], 'failures': []}
@@ -192,10 +231,50 @@ class LabService:
             return {"status": "idle", "operation_id": "", "result": {}}
 
     @guarded_method
-    def start_result_refresh(self, *, manual: bool = False, eligible_dates=None) -> dict[str, Any]:
+    def start_result_refresh(self, *, manual: bool = False, eligible_dates=None,
+                             retry_failed_only: bool = False) -> dict[str, Any]:
         """Start one credential-free price/result refresh across app instances."""
         now = datetime.now(ET)
-        if not manual and eligible_dates is None and hasattr(self, 'dashboard'):
+        prior = self.result_refresh_status()
+        retry_at = prior.get('next_retry_at')
+        automatic_retry = False
+        if not manual and retry_at:
+            if datetime.fromisoformat(retry_at).astimezone(ET) > now:
+                return {**prior, 'status': 'not_due'}
+            if prior.get('automatic_retry_count', 0) < RESULT_AUTOMATIC_RETRIES:
+                retry_failed_only = automatic_retry = True
+        retry_targets = None
+        if retry_failed_only:
+            from .data_retry import is_transient_diagnostic
+            previous = prior.get('result', {})
+            daily_failures = previous.get('failures', [])
+            minute_failures = previous.get('minute_settlement', {}).get('failures', [])
+            stage_failures = previous.get('stage_failures', [])
+            selectable = lambda f: not automatic_retry or is_transient_diagnostic(f.get('diagnostic') or {})
+            selected_stages = [f for f in stage_failures if selectable(f)]
+            retry_targets = {
+                'batches': [f['batch_id'] for f in daily_failures if f.get('batch_id') and selectable(f)],
+                'dates': [f['trade_date'] for f in minute_failures if f.get('trade_date') and selectable(f)],
+                'retained_daily_failures': [f for f in daily_failures if not selectable(f)],
+                'retained_minute_failures': [f for f in minute_failures if not selectable(f)],
+                'prior_result': previous,
+                'stages': [f['stage'] for f in selected_stages],
+                'all_batches': False, 'all_dates': False,
+                'daily_dates': prior.get('eligible_dates'),
+            }
+            for failure in selected_stages:
+                if failure['stage'] in {'daily_labels', 'setup'}:
+                    ids = failure.get('batch_ids')
+                    retry_targets['all_batches'] |= ids is None
+                    retry_targets['batches'].extend(ids or [])
+                    retry_targets['daily_dates'] = failure.get('daily_eligible_dates', failure.get('eligible_dates'))
+                if failure['stage'] in {'daily_labels', 'minute_settlement', 'setup'}:
+                    dates = failure.get('eligible_dates')
+                    retry_targets['all_dates'] |= dates is None
+                    retry_targets['dates'].extend(dates or [])
+            if not retry_targets['batches'] and not retry_targets['dates'] and not selected_stages:
+                return {**prior, 'status': 'nothing_to_retry'}
+        if not manual and not retry_failed_only and eligible_dates is None and hasattr(self, 'dashboard'):
             from .minute_settlements import (load_settlement_attempts,
                                              record_settlement_attempt,
                                              settlement_due_dates)
@@ -205,7 +284,6 @@ class LabService:
                 load_settlement_attempts(self.paths.research_root), app_open=True)
             if not eligible_dates:
                 return {'status': 'not_due', 'eligible_dates': []}
-        prior = self.result_refresh_status()
         lock = FileLock(
             str(self.paths.research_root / "result_refresh.lock"),
             timeout=0, thread_local=False,
@@ -215,10 +293,10 @@ class LabService:
         except LockTimeout:
             current = self.result_refresh_status()
             return {**current, "status": "already_running"}
-        if not manual and eligible_dates is not None:
+        if not manual and not retry_failed_only and eligible_dates is not None:
             from .minute_settlements import record_settlement_attempt
             record_settlement_attempt(self.paths.research_root, eligible_dates, now, app_open=True)
-        if not manual and eligible_dates is None and prior.get("attempted_at"):
+        if not manual and not retry_failed_only and eligible_dates is None and prior.get("attempted_at"):
             try:
                 attempted = datetime.fromisoformat(str(prior["attempted_at"])).astimezone(ET)
             except ValueError:
@@ -233,6 +311,9 @@ class LabService:
             "status": "running", "operation_id": operation_id,
             "attempted_at": now.isoformat(), "manual": manual,
             "eligible_dates": eligible_dates,
+            "retry_failed_only": retry_failed_only,
+            "retry_targets": retry_targets,
+            "automatic_retry_count": prior.get('automatic_retry_count', 0) + 1 if automatic_retry else 0,
         }
         _atomic_json(self._result_refresh_receipt, running)
         thread = threading.Thread(
@@ -245,51 +326,87 @@ class LabService:
         return running
 
     def wait_result_refresh(self, operation_id, timeout=180):
+        """Wait observationally; only the owner running the work writes its outcome."""
         owned = getattr(self, '_owned_result_refresh', None)
         if owned and owned[0] == operation_id:
             owned[1].join(timeout)
-        value = self.result_refresh_status()
-        if value.get('operation_id') == operation_id and value.get('status') == 'running':
-            timed_out = {**value, 'status':'failed', 'error_type':'RefreshTimeout',
-                         'error':'Refresh exceeded bounded worker lifetime',
-                         'completed_at':datetime.now(ET).isoformat()}
-            _atomic_json(self._result_refresh_receipt, timed_out)
-            return timed_out
-        return value
+        return self.result_refresh_status()
 
     def _run_result_refresh(self, lock: FileLock, running: dict[str, Any], eligible_dates=None) -> None:
-        def finish(value):
-            current = self.result_refresh_status()
-            if (current.get('operation_id') == running['operation_id']
-                    and current.get('error_type') == 'RefreshTimeout'):
-                return
-            _atomic_json(self._result_refresh_receipt, value)
+        targets = running.get('retry_targets')
+        result = deepcopy(targets.get('prior_result', {})) if targets else {}
+        result.setdefault('refreshed_batches', [])
+        result.setdefault('failures', [])
+        result.setdefault('minute_settlement', {'refreshed_dates': [], 'failures': []})
+        result.setdefault('stage_failures', [])
+        batch_ids = (None if not targets or targets.get('all_batches') else set(targets['batches']))
+        daily_dates = targets.get('daily_dates') if targets else eligible_dates
+        minute_dates = (set(eligible_dates) if eligible_dates is not None else None) if not targets else (
+            None if targets.get('all_dates') else set(targets['dates']))
+        stage = 'setup'
+
+        def clear_stage(name):
+            result['stage_failures'] = [f for f in result['stage_failures'] if f.get('stage') != name]
+
+        def finish():
+            failures = result['failures'] + result['minute_settlement']['failures'] + result['stage_failures']
+            successes = len(result['refreshed_batches']) + len(result['minute_settlement']['refreshed_dates'])
+            from .data_retry import is_transient_diagnostic
+            will_retry = (running.get('automatic_retry_count', 0) < RESULT_AUTOMATIC_RETRIES
+                          and any(is_transient_diagnostic(f.get('diagnostic') or {}) for f in failures))
+            next_retry = datetime.now(ET) + RESULT_RETRY_DELAY if will_retry else None
+            _atomic_json(self._result_refresh_receipt, {
+                **running, 'status': ('partial_failure' if successes else 'failed') if failures else 'complete',
+                'completed_at': datetime.now(ET).isoformat(), 'result': result,
+                'failure_count': len(failures), 'success_count': successes,
+                'next_retry_at': next_retry.isoformat() if next_retry else None,
+                **({'error_type': result['stage_failures'][-1]['error_type'],
+                    'error': result['stage_failures'][-1]['message']} if result['stage_failures'] else {}),
+            })
         try:
             profile = DataProfile.from_dict(self.settings.load()["data_profile"])
             if profile.market_provider != "yfinance":
                 raise LabServiceError(
                     "价格与成绩刷新仅使用无需凭据的 Yahoo 数据配置；当前配置未执行"
                 )
-            result = refresh_research_labels(
-                research_root=self.paths.research_root,
-                batches_root=self.paths.batches_root,
-                profile=profile,
-                eligible_dates=set(eligible_dates) if eligible_dates is not None else None,
-            )
-            result["minute_settlement"] = self._refresh_minute_accounts(profile, eligible_dates=eligible_dates)
-            failures = list(result.get("failures", []))
-            minute = result.get("minute_settlement", {})
-            failures.extend(minute.get("failures", []))
-            status = "partial_failure" if failures else "complete"
-            finish({
-                **running, "status": status, "completed_at": datetime.now(ET).isoformat(),
-                "result": result, "failure_count": len(failures),
-            })
+            market = _RefreshMarket(profile)
+            clear_stage('setup')
+            if batch_ids is None or batch_ids:
+                stage = 'daily_labels'
+                daily = refresh_research_labels(
+                    research_root=self.paths.research_root, batches_root=self.paths.batches_root,
+                    profile=profile,
+                    eligible_dates=set(daily_dates) if daily_dates is not None else None,
+                    batch_ids=batch_ids, market_provider=market,
+                )
+                result['refreshed_batches'] = sorted(set(result['refreshed_batches']) | set(daily['refreshed_batches']))
+                retained = [f for f in result['failures'] if batch_ids is not None and f.get('batch_id') not in batch_ids]
+                result['failures'] = retained + daily['failures']
+                clear_stage(stage)
+            stage = 'minute_settlement'
+            reconcile_only = targets is not None and not minute_dates and minute_dates is not None
+            minute = self._refresh_minute_accounts(
+                profile, eligible_dates=minute_dates, market_provider=market,
+                **({'reconcile_only': True} if reconcile_only else {}))
+            prior_minute = result['minute_settlement']
+            minute['refreshed_dates'] = sorted(set(prior_minute['refreshed_dates']) | set(minute['refreshed_dates']))
+            minute['failures'] = [f for f in prior_minute['failures']
+                                 if minute_dates is not None and f.get('trade_date') not in minute_dates] + minute['failures']
+            clear_stage(stage)
+            clear_stage('account_reconciliation')
+            result['stage_failures'].extend(minute.pop('stage_failures', []))
+            result['minute_settlement'] = minute
+            finish()
         except Exception as exc:
-            finish({
-                **running, "status": "failed", "completed_at": datetime.now(ET).isoformat(),
-                "error_type": type(exc).__name__, "error": str(exc),
+            clear_stage(stage)
+            result['stage_failures'].append({
+                'stage': stage, 'error_type': type(exc).__name__, 'message': str(exc),
+                'diagnostic': getattr(exc, 'diagnostic', {}),
+                'batch_ids': sorted(batch_ids) if batch_ids is not None else None,
+                'eligible_dates': sorted(minute_dates) if minute_dates is not None else None,
+                'daily_eligible_dates': sorted(daily_dates) if daily_dates is not None else None,
             })
+            finish()
         finally:
             lock.release()
 
@@ -966,12 +1083,19 @@ class LabService:
             if label_refresh.get('status') == 'running':
                 label_refresh = self.wait_result_refresh(label_refresh['operation_id'])
             completed = result["status"]["all_variants_completed"]
+            completed_count = len(result['status'].get('completed_variants', []))
+            variant_errors = result['status'].get('failed_variants', {})
+            final_status = 'complete' if completed else ('partial_failure' if completed_count else 'failed')
             self._set_job(
-                job_id, status="complete" if completed else "partial_failure",
+                job_id, status=final_status,
                 completed_at_et=datetime.now(ET).isoformat(),
-                message="批量Shadow已完成" if completed else "部分版本失败，其他结果已保留",
+                message=("所选版本已完成" if completed else
+                         f"{completed_count} 个版本完成，{len(variant_errors)} 个未完成；可继续未完成分析"),
                 batch_id=result["status"]["batch_id"],
                 label_refresh=label_refresh,
+                completed_variant_count=completed_count,
+                failed_variant_count=len(variant_errors),
+                variant_errors=variant_errors,
             )
         except Exception as exc:
             try:

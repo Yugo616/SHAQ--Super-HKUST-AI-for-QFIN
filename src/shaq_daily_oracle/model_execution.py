@@ -49,6 +49,9 @@ def call_timeout_seconds():
     return _POLICY.get().timeout_seconds
 
 
+QUOTA_ERROR_CODES = frozenset({'insufficient_quota', 'usage_limit_reached', 'quota_exceeded'})
+
+
 def transient_model_failure(error: Exception) -> bool:
     """Fail closed: transport failures only, never arbitrary provider text."""
     seen = set()
@@ -56,6 +59,8 @@ def transient_model_failure(error: Exception) -> bool:
     while current is not None and id(current) not in seen:
         seen.add(id(current))
         diagnostic = getattr(current, 'diagnostic', None) or {}
+        if diagnostic.get('kind') == 'quota' or diagnostic.get('provider_code') in QUOTA_ERROR_CODES:
+            return False
         status = diagnostic.get('status', getattr(current, 'status_code', None))
         if isinstance(status, int):
             return status == 429 or 500 <= status <= 599

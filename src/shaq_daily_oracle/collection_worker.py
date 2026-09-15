@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import contextlib
-import errno
 import json
 import os
 import subprocess
@@ -13,16 +12,11 @@ from datetime import date
 
 from .model_execution import run_model_process
 from .model_http_worker import _worker_stream
+from .data_retry import failure_diagnostic, failure_message, sanitize_diagnostic
 
 
 def _failure_diagnostic(exc, stage):
-    cause = exc
-    while cause.__cause__ is not None:
-        cause = cause.__cause__
-    code = getattr(cause, 'errno', None)
-    return {'kind': 'resource_exhausted' if code in {errno.EMFILE, errno.ENFILE} else 'provider_error',
-            'error_type': type(cause).__name__, 'errno': code if isinstance(code, int) else None,
-            'stage': stage}
+    return failure_diagnostic(exc, stage)
 
 
 def call_in_worker(operation, profile, payload):
@@ -38,7 +32,8 @@ def call_in_worker(operation, profile, payload):
     # Explicit allowlist: no SEC identity, endpoint credentials or whole settings.
     source = {key: value for key, value in asdict(profile).items() if key in {
         'profile_id', 'universe_file', 'request_timeout_seconds', 'batch_size',
-        'maximum_option_contracts_per_side', 'intraday_interval'}}
+        'maximum_option_contracts_per_side', 'intraday_interval',
+        'yahoo_request_max_retries', 'yahoo_retry_backoff_seconds'}}
     try:
         # Parent owns scratch cleanup even after a forced owned-tree termination.
         with tempfile.TemporaryDirectory(prefix='shaq-collection-') as cache_parent:
@@ -63,13 +58,8 @@ def call_in_worker(operation, profile, payload):
         raise DataProviderError('Yahoo collection worker returned malformed output',
                                 diagnostic={'kind':'protocol_error','stage':operation}) from exc
     if isinstance(envelope, dict) and 'error' in envelope:
-        diagnostic = envelope.get('diagnostic') or {}
-        # Only the structured allowlist crosses into a durable parent job record.
-        diagnostic = {key: value for key, value in diagnostic.items() if key in {
-            'kind', 'error_type', 'errno', 'stage'}} if isinstance(diagnostic, dict) else {}
-        message = ('Yahoo collection worker resource exhausted' if diagnostic.get('kind') == 'resource_exhausted'
-                   else 'Yahoo collection provider request failed')
-        raise DataProviderError(message, diagnostic=diagnostic)
+        diagnostic = sanitize_diagnostic(envelope.get('diagnostic'), operation)
+        raise DataProviderError(failure_message(diagnostic), diagnostic=diagnostic)
     if not isinstance(envelope, dict) or 'error' in envelope or not isinstance(envelope.get('result'), dict):
         # Never expose third-party stderr, exception text, headers or payloads.
         raise DataProviderError('Yahoo collection worker could not complete request')

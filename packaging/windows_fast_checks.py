@@ -31,6 +31,7 @@ TESTS = (
     'test_desktop_lifecycle.DesktopLifecycleTests.test_disposable_api_drains_admitted_writer_and_rejects_late_requests',
     'test_desktop_lifecycle.DesktopLifecycleTests.test_request_exception_releases_lifetime_without_exposing_private_methods',
     'test_worker_protocol_acceptance',
+    'test_result_recovery',
 )
 
 

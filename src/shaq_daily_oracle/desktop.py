@@ -140,6 +140,9 @@ class DesktopBridge:
     def refresh_prices_and_results(self) -> dict[str, Any]:
         return self._result(self.lab.start_result_refresh, manual=True)
 
+    def retry_failed_results(self) -> dict[str, Any]:
+        return self._result(self.lab.start_result_refresh, manual=True, retry_failed_only=True)
+
     def check_result_refresh_due(self) -> dict[str, Any]:
         """Local due check; network work starts only for an eligible date."""
         return self._result(self.lab.start_result_refresh, manual=False)
@@ -670,7 +673,18 @@ def launch_desktop(*, smoke_output: Path | None = None) -> int:
             'job_id': 'fixture-recovery', 'batch_id': 'fixture-original-batch',
             'status': 'partial_failure', 'started_at_et': '2026-09-10T08:00:00-04:00',
             'variant_progress': {'team/main': 'failed'}, 'message': 'fixture unfinished call',
-            'research_progress': [{'variant_key': 'team/main', 'symbol': symbol,
+            'research_progress': [{
+                'variant_key': 'team/main', 'stage': 'tasks_planned',
+                'symbols': ['AAPL', 'MSFT'], 'tasks': [
+                    {'task_id': 'report:AAPL:price_volume', 'symbol': 'AAPL', 'domain': 'price_volume'},
+                    {'task_id': 'report:MSFT:price_volume', 'symbol': 'MSFT', 'domain': 'price_volume'},
+                    {'task_id': 'decision'},
+                ],
+            }, {'variant_key': 'team/main', 'symbol': 'MSFT', 'domain': 'price_volume',
+                'stage': 'report_validated', 'status': 'validated',
+                'report': {'thesis': '示例已保存报告；不是实际市场分析。',
+                           'antithesis': '示例反方说明。', 'unknowns': [], 'invalidation': []},
+            }] + [{'variant_key': 'team/main', 'symbol': symbol,
                 'domain': 'price_volume', 'stage': 'failure', 'status': 'failed',
                 'occurred_at_et': '2026-09-10T08:01:00-04:00'} for symbol in ('AAPL', 'MSFT')],
         }]

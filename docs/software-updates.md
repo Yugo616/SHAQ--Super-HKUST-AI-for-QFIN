@@ -4,7 +4,7 @@ Application updates and research-method updates are separate. **0.7.0 is the fir
 
 ## Platform downloads and acceptance
 
-Primary 0.7.2 downloads: [Windows](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.2-windows), [Apple Silicon / Intel Mac](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.2-macos). Each is available only once its matching packages, checksums and acceptance records appear. Publication requires separate native acceptance for each architecture from the same frozen source, including the actual public Windows 0.7.1 and Mac 0.7.0 upgrade paths. Legacy fallback downloads, not 0.7.2:
+Primary 0.7.3 downloads: [Windows](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.3-windows), [Apple Silicon / Intel Mac](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.3-macos). Each is available only once its matching packages, checksums and acceptance records appear. Publication requires separate native acceptance for each architecture from the same frozen source, including the actual public Windows 0.7.1 and Mac 0.7.0 upgrade paths. Legacy fallback downloads, not 0.7.3:
 
 - [0.7.1 Windows 10/11 x64 release page](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.1-windows)
 - [0.7.0 macOS 15+ release page, separate Apple Silicon and Intel packages](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.0-macos)
@@ -35,7 +35,13 @@ Manual route: **Check → Download → Update and Restart**. Downloading alone d
 
 The dialog shows current/target version, last check and last successful update when recorded. An update is successful only after the target version has launched and passed native GUI health confirmation. Download completion, a launched installer or a background process alone is not success. If replacement or target startup fails, reopen or reinstall the target full package without deleting user data. Do not assume the old executable remains usable.
 
-## Reliability controls in 0.7.2
+## Reliability controls in 0.7.3
+
+This patch separates completed methods from failed methods in the same batch. Failed-method checkpoints must still match their original frozen inputs and output contract. Invalid synthesis citations receive a specific error and returned rejected reports are preserved outside successful caches. Genuine transient data failures have a bounded retry; **Retry failed items** (`重试失败项`) refreshes only failed price tasks, without calling the model again. Account history and prediction rules remain unchanged.
+
+The main progress view now shows a real task-count bar per method. Expand a method, then a stock/domain to read a completed report. It does not expose long technical timelines or invent model reasoning. The result view shows method balances and per-stock prediction, open, close and open-to-close change; accounting calculations remain stored but duplicate cost and one-share comparison panels are no longer displayed. Background refresh preserves the position and selection the user is currently reading.
+
+中文：同批中失败的方法不再遮住成功的方法；暂时性行情错误有界重试，也可点「重试失败项」。进度按版本显示真实完成数量，展开股票和领域查看已保存分析。结果只展示版本余额、股票方向及开收涨跌，不显示重复的成本和一股对照面板。额度耗尽或引用不合格仍明确提示，不能通过反复重试掩盖。
 
 In **Connection Settings → Advanced call settings** (`连接设置 → 高级调用设置`), the default total deadline is 600 seconds per model call and transient retry count is 1. Authentication and schema failures are not automatically retried. These are execution controls, not a new model identity or method. The provider collection worker has its own bounded lifetime and closes its owned resources; it does not substitute sources or alter official prices.
 

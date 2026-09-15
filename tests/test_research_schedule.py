@@ -3,6 +3,7 @@ import subprocess
 import sys
 import time
 import tempfile
+import threading
 import unittest
 import uuid
 from pathlib import Path
@@ -15,6 +16,89 @@ from shaq_daily_oracle.background_process import background_process_options
 
 
 class ResearchScheduleTests(unittest.TestCase):
+    def test_due_forecast_starts_before_historical_price_refresh(self):
+        calls = []
+        class Lab:
+            def refresh_labels_if_due(self):
+                calls.append('refresh')
+                return {'status': 'running', 'operation_id': 'owned'}
+            def wait_result_refresh(self, operation_id, timeout=180):
+                calls.append(('wait', timeout))
+                return {'status': 'complete', 'operation_id': operation_id}
+            def start_batch(self, **kwargs):
+                calls.append('forecast')
+                return {'job_id': 'forecast', 'status': 'queued'}
+            def job_statuses(self):
+                return [{'job_id': 'forecast', 'status': 'complete'}]
+        with tempfile.TemporaryDirectory() as directory:
+            paths = SimpleNamespace(research_root=Path(directory))
+            with patch('shaq_daily_oracle.lab_service.LabService', return_value=Lab()), \
+                 patch.object(schedule, 'schedule_status', return_value={
+                     'enabled': True, 'start_et': '08:35', 'selections': [], 'model_profile_id': 'fixture'}), \
+                 patch.object(schedule, 'due_status', return_value='due'):
+                self.assertEqual(schedule.run_research_worker(paths), 0)
+        self.assertEqual(calls[0], 'forecast')
+        self.assertIn(('wait', None), calls)
+
+    def test_disabled_worker_drains_owned_refresh_before_exit(self):
+        from shaq_daily_oracle.lab_service import LabService
+        from test_result_refresh import ResultRefreshTests
+        for enabled, due in [(False, 'closed')]:
+            with self.subTest(enabled=enabled, due=due), tempfile.TemporaryDirectory() as directory:
+                service = ResultRefreshTests().service(Path(directory))
+                entered, release, waited, finished = (threading.Event() for _ in range(4))
+                observed = {}
+                def labels(**kwargs):
+                    entered.set()
+                    release.wait(3)
+                    return {'refreshed_batches': ['LAB-good'], 'failures': []}
+                real_wait = service.wait_result_refresh
+                def short_wait(operation_id, timeout=180):
+                    # Compress the old 180-second join to zero. A correctly
+                    # draining scheduler passes None instead of the UI timeout.
+                    observed['timeout'] = timeout
+                    waited.set()
+                    return real_wait(operation_id, timeout=None if timeout is None else 0)
+                service.wait_result_refresh = short_wait
+                outcome = []
+                def worker():
+                    try:
+                        outcome.append(schedule.run_research_worker(service.paths))
+                    finally:
+                        finished.set()
+                with patch('shaq_daily_oracle.lab_service.LabService', return_value=service), \
+                     patch('shaq_daily_oracle.lab_service.refresh_research_labels', side_effect=labels), \
+                     patch.object(LabService, '_refresh_minute_accounts', return_value={
+                         'refreshed_dates': [], 'failures': []}), \
+                     patch.object(schedule, 'schedule_status', return_value={'enabled': enabled, 'start_et': '08:35'}), \
+                     patch.object(schedule, 'due_status', return_value=due):
+                    thread = threading.Thread(target=worker)
+                    thread.start()
+                    try:
+                        self.assertTrue(entered.wait(1))
+                        self.assertTrue(waited.wait(1))
+                        self.assertIsNone(observed['timeout'])
+                        self.assertFalse(finished.is_set())
+                        self.assertEqual(service.result_refresh_status()['status'], 'running')
+                    finally:
+                        release.set()
+                        thread.join(3)
+                        if getattr(service, '_owned_result_refresh', None):
+                            service._owned_result_refresh[1].join(2)
+                    self.assertEqual(outcome, [0])
+                    self.assertEqual(service.result_refresh_status()['status'], 'complete')
+
+    def test_waiting_for_premarket_start_does_not_hold_schedule_lock_for_prices(self):
+        calls = []
+        lab = SimpleNamespace(refresh_labels_if_due=lambda: calls.append('price refresh') or {'status': 'not_due'})
+        with tempfile.TemporaryDirectory() as directory:
+            paths = SimpleNamespace(research_root=Path(directory))
+            with patch('shaq_daily_oracle.lab_service.LabService', return_value=lab), \
+                 patch.object(schedule, 'schedule_status', return_value={'enabled': True, 'start_et': '08:35'}), \
+                 patch.object(schedule, 'due_status', return_value='waiting'):
+                self.assertEqual(schedule.run_research_worker(paths), 0)
+        self.assertEqual(calls, [])
+
     def test_windows_registers_current_user_worker_without_password_or_broker(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
