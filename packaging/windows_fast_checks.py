@@ -43,6 +43,10 @@ def main():
     import os
     os.environ['PYTHONPATH'] = os.pathsep.join((str(root / 'src'), str(root / 'tests')))
     suite = unittest.defaultTestLoader.loadTestsFromNames(TESTS)
+    # Repeated concurrent status reads exercise Windows receipt replacement.
+    for _ in range(100):
+        suite.addTests(unittest.defaultTestLoader.loadTestsFromName(
+            'test_result_recovery.ResultRecoveryTests.test_all_price_requests_failed_is_failed_not_completed'))
     return 0 if unittest.TextTestRunner(verbosity=2).run(suite).wasSuccessful() else 1
 
 

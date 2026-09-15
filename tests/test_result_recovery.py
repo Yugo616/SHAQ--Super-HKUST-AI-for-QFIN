@@ -71,7 +71,7 @@ class ResultRecoveryTests(unittest.TestCase):
                 result = self.wait_status(service, {'complete','failed','partial_failure'})
             self.assertEqual(result['status'], 'failed')
             self.assertEqual(result['success_count'], 0)
-            self.assertEqual(result['failure_count'], 1)
+            self.assertEqual(result['failure_count'], 1, result)
 
     def test_transient_failure_schedules_one_retry_and_permanent_failure_does_not(self):
         with tempfile.TemporaryDirectory() as name:
