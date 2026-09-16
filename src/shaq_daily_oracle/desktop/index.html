@@ -45,8 +45,8 @@
             <button class="connection-choice" id="show-api-form" type="button"><b>连接 API</b><span>官方 API 或兼容中转站</span></button>
           </div><p id="model-status" class="inline-status" role="status"></p>
           <form id="local-model-form" class="form-grid hidden">
-            <label class="wide">分析模型<input name="model" list="local-model-options" placeholder="选择列表中的型号，或填写明确型号" required autocomplete="off"></label>
-            <datalist id="local-model-options"></datalist>
+            <label>可选型号<select id="local-model-options"><option value="">请先读取型号</option></select></label>
+            <label>使用型号<input name="model" placeholder="从左侧选择，也可直接填写" required autocomplete="off"></label>
             <p class="wide">保存后用于后续手动及自动运行。可随时回来切换；正在运行的批次不受影响。</p>
             <button id="refresh-local-models" type="button" class="secondary">刷新可选模型</button>
             <button type="submit" class="primary">测试所选模型并保存</button>
@@ -65,8 +65,8 @@
           <input name="profile_id" value="api-model" type="hidden">
           <input name="base_url" value="https://api.openai.com/v1" type="hidden">
           <label>模型服务商<select name="protocol"><option value="openai-responses">OpenAI API</option><option value="anthropic-messages">Anthropic API</option><option value="openai-chat-completions">兼容中转服务</option></select></label>
-          <label>分析模型<input name="model" list="api-model-options" placeholder="读取列表后选择，或填写服务商提供的型号" required></label>
-          <datalist id="api-model-options"></datalist>
+          <label>可选型号<select id="api-model-options"><option value="">请先读取型号</option></select></label>
+          <label class="wide">使用型号<input name="model" placeholder="选择型号，或直接填写服务商提供的型号" required></label>
           <label class="wide hidden" id="relay-url-field">中转站 URL<input name="relay_base_url" placeholder="https://example.com/v1"></label>
           <label class="wide hidden" id="relay-context-field">中转站上下文长度<input name="maximum_context_tokens" type="number" min="16000" value="128000"></label>
           <label class="wide">API Key<input name="secret" type="password" autocomplete="new-password" placeholder="同一连接已保存密钥时可留空"></label>

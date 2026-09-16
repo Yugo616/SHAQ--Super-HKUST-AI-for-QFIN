@@ -14,7 +14,7 @@ SHAQ 把六个专业研究领域、反方审查和无需券商的虚拟账户放
 
 ## 下载软件
 
-下表为 **0.7.5** 主下载入口。只有对应平台页面出现匹配的安装包、校验值和验收记录后，该平台版本才可用；附件缺失时，不要把源码页面当作发布证明，请使用下方明确标注的上一版入口。
+下表为 **0.7.6** 主下载入口。只有对应平台页面出现匹配的安装包、校验值和验收记录后，该平台版本才可用；附件缺失时，不要把源码页面当作发布证明，请使用下方明确标注的上一版入口。
 
 在「连接设置」选择 Codex／Claude／API，再选择明确的分析模型；随时可回来切换。保存成功后，后续手动和自动运行使用新选择，正在运行的批次不变。本机模型列表由对应工具提供，API 支持时可读取列表，否则手动填型号。旧的默认型号连接需要选择一次，程序不代选。读取列表不调用分析模型；测试连接会产生一次小型模型调用。
 
@@ -24,9 +24,9 @@ SHAQ 把六个专业研究领域、反方审查和无需券商的虚拟账户放
 
 | 你的电脑 | 下载入口 |
 |---|---|
-| Windows 10/11，x64 | [Windows 0.7.5 安装程序](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.5-windows) |
-| M 系列 Mac，macOS 15 或以上 | [Apple Silicon 0.7.5 DMG](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.5-macos) |
-| Intel Mac，macOS 15 或以上 | [Intel 0.7.5 DMG](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.5-macos) |
+| Windows 10/11，x64 | [Windows 0.7.6 安装程序](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.6-windows) |
+| M 系列 Mac，macOS 15 或以上 | [Apple Silicon 0.7.6 DMG](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.6-macos) |
+| Intel Mac，macOS 15 或以上 | [Intel 0.7.6 DMG](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.6-macos) |
 
 上一版：[Windows 0.7.4](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.4-windows)、[macOS 0.7.4](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.4-macos)。
 

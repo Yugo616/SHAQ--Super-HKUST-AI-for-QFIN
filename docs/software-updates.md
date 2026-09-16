@@ -1,5 +1,9 @@
 # Software updates
 
+## 0.7.6: native model dropdown
+
+The model catalog now uses a native dropdown instead of browser-dependent input suggestions. Choose a returned model or type an explicit identifier, then test and save. This fixes the missing suggestion popup in the Mac desktop window. Provider discovery, saved model policy, predictions and account rules are unchanged from 0.7.5.
+
 ## 0.7.5: choose and retain an explicit analysis model
 
 - Open **Connection Settings** at any time, choose Codex, Claude Code or API, then choose a model. Local choices come from the installed tool's metadata interface, not a baked-in model list. If a tool or gateway cannot list models, enter a concrete identifier and test it. Reading a list does not run inference; **Test and save** does.
@@ -21,7 +25,7 @@ Application updates and research-method updates are separate. **0.7.0 is the fir
 
 ## Platform downloads and acceptance
 
-Primary 0.7.5 downloads: [Windows](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.5-windows), [Apple Silicon / Intel Mac](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.5-macos). Each is available only once its matching packages, checksums and acceptance records appear. Publication requires separate native acceptance for each architecture from the same frozen source, including an upgrade from the matching public base recorded in its acceptance report. Previous downloads:
+Primary 0.7.6 downloads: [Windows](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.6-windows), [Apple Silicon / Intel Mac](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.6-macos). Each is available only once its matching packages, checksums and acceptance records appear. Publication requires separate native acceptance for each architecture from the same frozen source, including an upgrade from the matching public base recorded in its acceptance report. Previous downloads:
 
 - [0.7.4 Windows release page](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.4-windows)
 - [0.7.4 macOS release page](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.4-macos)

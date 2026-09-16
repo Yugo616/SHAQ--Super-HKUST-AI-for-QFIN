@@ -8,6 +8,30 @@ ROOT = Path(__file__).parents[1]
 
 
 class WorkbenchControlsTests(unittest.TestCase):
+    def test_model_choices_use_native_selects_not_webkit_datalists(self):
+        from html.parser import HTMLParser
+        elements = {}
+        class Controls(HTMLParser):
+            def handle_starttag(self, tag, attrs):
+                attributes = dict(attrs)
+                if attributes.get('id') in {'local-model-options', 'api-model-options'}:
+                    elements[attributes['id']] = tag
+        Controls().feed((ROOT / 'src/shaq_daily_oracle/desktop/index.html').read_text())
+        self.assertEqual(elements, {'local-model-options': 'select', 'api-model-options': 'select'})
+
+    def test_native_model_choice_sets_explicit_field_without_saving(self):
+        result = self.node('connections.js', '''
+const nodes={};globalThis.q=s=>nodes[s]||=({dataset:{},elements:{model:{value:''}},classList:{add(){},remove(){}}});
+globalThis.qa=()=>[];globalThis.state={data:{settings:{}}};
+const fields=Object.fromEntries(['protocol','model','secret','base_url','relay_base_url','auth_style'].map(k=>[k,{value:''}]));
+q('#model-form').elements=fields;globalThis.api=()=>{throw Error('must not call model or save')};
+bindModelConnections();
+q('#local-model-options').value='codex-choice';q('#local-model-options').onchange();
+q('#api-model-options').value='api-choice';q('#api-model-options').onchange();
+console.log(JSON.stringify({local:q('#local-model-form').elements.model.value,api:fields.model.value}));
+''')
+        self.assertEqual(result, {'local': 'codex-choice', 'api': 'api-choice'})
+
     def test_api_prefill_synchronizes_drafts_and_preserves_reopened_fields(self):
         result = self.node('connections.js', '''
 const fields=Object.fromEntries(['profile_id','protocol','model','secret','base_url','relay_base_url','auth_style','output_mode','maximum_context_tokens'].map(k=>[k,{value:''}]));

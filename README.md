@@ -14,7 +14,7 @@ SHAQ brings six specialist research domains, adversarial review and a brokerless
 
 ## Download
 
-The primary downloads below target **0.7.5**. A platform is available only when its page contains the matching installer, checksum and acceptance record. If those assets are absent, do not treat this source page as a release announcement; use the clearly labelled previous release below.
+The primary downloads below target **0.7.6**. A platform is available only when its page contains the matching installer, checksum and acceptance record. If those assets are absent, do not treat this source page as a release announcement; use the clearly labelled previous release below.
 
 Choose your connection, then an explicit model in **Connection Settings**. Change it there at any time: a successful save applies to subsequent manual and scheduled runs, not an in-progress batch. Local model lists come from Codex/Claude Code; APIs can list models when supported or accept an explicit identifier. Older default-model connections require selection once. No model is silently chosen for you.
 
@@ -24,9 +24,9 @@ In 0.7.3, model calls have a configurable 600-second total deadline and one tran
 
 | Your computer | Download |
 |---|---|
-| Windows 10/11, x64 | [Windows 0.7.5 installer](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.5-windows) |
-| Mac with Apple Silicon (M series), macOS 15+ | [Apple Silicon 0.7.5 DMG](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.5-macos) |
-| Intel Mac, macOS 15+ | [Intel 0.7.5 DMG](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.5-macos) |
+| Windows 10/11, x64 | [Windows 0.7.6 installer](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.6-windows) |
+| Mac with Apple Silicon (M series), macOS 15+ | [Apple Silicon 0.7.6 DMG](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.6-macos) |
+| Intel Mac, macOS 15+ | [Intel 0.7.6 DMG](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.6-macos) |
 
 Previous managed release: [Windows 0.7.4](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.4-windows), [macOS 0.7.4](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.4-macos).
 

@@ -808,8 +808,15 @@ def launch_desktop(*, smoke_output: Path | None = None) -> int:
                 time.sleep(.1)
             else:
                 raise RuntimeError('Native model selector did not load')
-            window.evaluate_js("document.querySelector('#local-model-form').elements.model.value='fixture-model'; "
-                               "document.querySelector('#local-model-form').requestSubmit()")
+            if not window.evaluate_js("document.querySelector('#local-model-options').tagName === 'SELECT' && "
+                                      "[...document.querySelector('#local-model-options').options].some(x=>x.value==='fixture-model')"):
+                raise RuntimeError('Native model choices are not a visible select')
+            window.evaluate_js("document.querySelector('#local-model-options').value='fixture-model'; "
+                               "document.querySelector('#local-model-options').dispatchEvent(new Event('change'))")
+            if window.evaluate_js("document.querySelector('#local-model-form').elements.model.value") != 'fixture-model':
+                raise RuntimeError('Native model selection did not populate requested model')
+            result['native_model_choice'] = True
+            window.evaluate_js("document.querySelector('#local-model-form').requestSubmit()")
             deadline = time.monotonic() + 6
             while time.monotonic() < deadline:
                 if window.evaluate_js("document.querySelector('#model-status').textContent.includes('fixture 401') && "

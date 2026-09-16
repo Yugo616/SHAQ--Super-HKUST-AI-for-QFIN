@@ -142,7 +142,7 @@ async function connectLocalModel(protocol) {
   try {
     const value=await api('list_local_models',protocol);
     if(request!==localModelCatalogRequest)return;
-    q('#local-model-options').innerHTML=(value.models||[]).map(m=>`<option value="${esc(m.id)}">${esc(m.label)}</option>`).join('');
+    q('#local-model-options').innerHTML='<option value="">请选择型号</option>'+(value.models||[]).map(m=>`<option value="${esc(m.id)}">${esc(m.label)}</option>`).join('');
     showConnectionState({status:'choosing',message:'请选择明确型号，再点击测试并保存。读取列表不会消耗分析用量。'});
   } catch(error) {
     if(request!==localModelCatalogRequest)return;
@@ -219,6 +219,14 @@ async function copyConnectionError() {
 
 function bindModelConnections() {
   const form=q('#model-form');
+  q('#local-model-options').onchange=()=>{
+    const choice=q('#local-model-options').value;
+    if(choice)q('#local-model-form').elements.model.value=choice;
+  };
+  q('#api-model-options').onchange=()=>{
+    const choice=q('#api-model-options').value;
+    if(choice)form.elements.model.value=choice;
+  };
   const clearApiModels=()=>{q('#api-model-options').innerHTML='';};
   const providerPreset=()=>{clearApiModels();applyProtocolPreset();};
   const apiIdentity=()=>JSON.stringify(['protocol','base_url','relay_base_url','auth_style','secret']
@@ -281,7 +289,7 @@ function bindModelConnections() {
       const value=await api('list_api_models',{profile_id:form.elements.profile_id.value,protocol,base_url,model:'catalog-only',
         auth_style:form.elements.auth_style.value},form.elements.secret.value);
       if(identity!==apiIdentity())return;
-      q('#api-model-options').innerHTML=value.models.map(m=>`<option value="${esc(m.id)}">${esc(m.label)}</option>`).join('');
+      q('#api-model-options').innerHTML='<option value="">请选择型号</option>'+value.models.map(m=>`<option value="${esc(m.id)}">${esc(m.label)}</option>`).join('');
       q('#model-status').textContent='列表已读取，请选择型号并测试保存。';
     }catch(error){if(identity===apiIdentity())q('#model-status').textContent=error.message;}
     finally{button.disabled=false;}
