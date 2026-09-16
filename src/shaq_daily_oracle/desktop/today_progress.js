@@ -29,7 +29,9 @@ const SHAQProgress = (() => {
     if(rows.some(row=>row.stage==='variant_reused'&&row.status==='complete'))for(const id of tasks.keys())completed.add(id);
     return {total:plan?tasks.size:null,complete:completed.size,tasks:[...tasks.values()],rows};
   }
-  function compactResearchHtml(progress){
+  function compactResearchHtml(progress, executionState){
+    const ended=!['queued','running'].includes(executionState);
+    const unfinished=executionState==='complete'?'报告未记录':'未完成';
     const reports=new Map(progress.rows.filter(row=>row.stage==='report_validated').map(row=>[`${row.symbol}:${row.domain}`,row]));
     const tasks=progress.tasks.filter(task=>task.symbol&&task.domain);
     if(!tasks.length)for(const row of reports.values())tasks.push({symbol:row.symbol,domain:row.domain});
@@ -39,11 +41,11 @@ const SHAQProgress = (() => {
       const id=`${symbol}:${task.domain}`;
       if(report)return `<details data-view-key="${esc(id)}" data-research-section="${esc(id)}"><summary>${esc(domainName(task.domain))} · ${row.status==='no_data'?'无合格资料':'已完成'}</summary><p><b>主要结论：</b>${esc(report.thesis||'—')}</p><p><b>反方：</b>${esc(report.antithesis||'—')}</p><p><b>未知：</b>${esc((report.unknowns||[]).join('；')||'未列明')}</p><p><b>失效条件：</b>${esc((report.invalidation||[]).join('；')||'未列明')}</p></details>`;
       const latest=progress.rows.filter(event=>event.domain===task.domain&&(event.symbol===symbol||(event.symbols||[]).includes(symbol))).at(-1);
-      return `<p>${esc(domainName(task.domain))} · ${latest?.status==='failed'?'失败':latest?'进行中':'等待'}</p>`;
+      return `<p>${esc(domainName(task.domain))} · ${latest?.status==='failed'?'失败':ended?unfinished:latest?'进行中':'等待'}</p>`;
     }).join('')}</div></section>`).join('');
     const final=progress.tasks.filter(task=>!task.symbol).map(task=>{
       const done=progress.rows.some(row=>(task.task_id==='decision'?row.stage==='decision_complete':row.stage===task.task_id)&&row.status==='complete');
-      return `<span>${esc(domainName(task.task_id==='synthesis'?'decision':task.task_id))} · ${done?'已完成':'等待'}</span>`;
+      return `<span>${esc(domainName(task.task_id==='synthesis'?'decision':task.task_id))} · ${done?'已完成':ended?unfinished:'等待'}</span>`;
     }).join(' · ');
     return html+(final?`<p>${final}</p>`:'')||'<p>尚无已保存的分析报告。</p>';
   }
@@ -82,19 +84,27 @@ const SHAQProgress = (() => {
       const item = versions.find(v => v.author === author && (v.version_id === id || (v.aliases || []).includes(id)));
       return item?.method_name || item?.label || key;
     };
-    const status = value => ({queued:'等待开始',running:'分析中',complete:'已完成',partial_failure:'部分失败',failed:'失败'}[value] || value);
+    const status = value => ({queued:'等待开始',running:'分析中',complete:'已完成',partial_failure:'部分失败',failed:'失败',stopped:'已停止',cancelled:'已取消',incomplete:'未完成'}[value] || value);
     return rows.map(job => {
       const date = job.started_at_et ? new Date(job.started_at_et) : null;
       const time = date && Number.isFinite(date.getTime()) ? date.toLocaleTimeString('zh-CN',{hour12:false}) : '等待启动';
       const previousDay=etDay(job.started_at_et)&&etDay(job.started_at_et)!==etDay(now);
       const carry = previousDay ? ` · 历史未完成（${etDay(job.started_at_et)}）` : '';
       const versionsHtml = Object.entries(job.variant_progress || {}).map(([key,value])=>{
+        // Terminal job state wins over stale in-flight display events. A completed
+        // sibling stays complete even when the batch ends with another failure.
+        const executionState=!active(job)&&['queued','running'].includes(value)?'incomplete':value;
         const progress=taskProgress(job.research_progress,key);
         const failure=job.variant_errors?.[key]||progress.rows.filter(row=>row.status==='failed').at(-1)||{};
         const reason=value==='failed'?`<p class="status bad">${esc(String(failure.message||failure.error||'分析未完成，可恢复原批次').replace(/\s+/g,' ').slice(0,120))}</p>`:'';
-        const bar=progress.total===null?'<progress aria-label="任务总量未记录"></progress>':`<progress max="${Math.max(1,progress.total)}" value="${progress.complete}" aria-label="${esc(names(key))}运行进度"></progress>`;
-        const text=progress.total===null?'任务总量未记录':`${progress.complete} / ${progress.total} 项`;
-        return `<details class="research-progress variant-progress" data-view-key="${esc(key)}" data-progress-variant="${esc(key)}"><summary><span>${esc(names(key))} · ${esc(status(value))}</span>${bar}<small>${text}</small></summary>${reason}${compactResearchHtml(progress)}</details>`;
+        const completed=executionState==='complete';
+        const running=job.status==='running'&&executionState==='running';
+        const text=completed?'已完成':progress.total===null?(running?'分析中，暂未记录任务总量':status(executionState)):`${progress.complete} / ${progress.total} 项`;
+        // A progress element without value animates indefinitely in native webviews.
+        // Use it only for genuinely running work, never for missing historical totals.
+        const values=completed?'max="1" value="1"':progress.total===null?(running?'':'max="1" value="0"'):`max="${Math.max(1,progress.total)}" value="${progress.complete}"`;
+        const bar=`<progress ${values} aria-label="${esc(names(key))}：${esc(text)}"></progress>`;
+        return `<details class="research-progress variant-progress" data-view-key="${esc(key)}" data-progress-variant="${esc(key)}"><summary><span>${esc(names(key))} · ${esc(status(executionState))}</span>${bar}<small>${text}</small></summary>${reason}${compactResearchHtml(progress,executionState)}</details>`;
       }).join('');
       return `<article class="progress-batch" data-progress-job="${esc(job.job_id)}"><header><span>${esc(previousDay?carry.slice(3):'本次运行')}</span><b>${esc(status(job.status))}</b></header>${versionsHtml}<div class="progress-actions">${job.batch_id ? `<button class="text-button" data-progress-result="${esc(job.batch_id)}">查看结果</button>` : ''}${retryVersions(job).length && !active(job) ? `<button class="secondary" data-progress-retry="${esc(job.job_id)}">${job.batch_id?'恢复原批次（仅补失败调用）':'选择失败版本重试'}</button>` : ''}</div></article>`;
     }).join('');

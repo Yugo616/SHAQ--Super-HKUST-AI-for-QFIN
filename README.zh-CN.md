@@ -14,15 +14,19 @@ SHAQ 把六个专业研究领域、反方审查和无需券商的虚拟账户放
 
 ## 下载软件
 
-下表为 **0.7.3** 主下载入口。只有对应平台页面出现匹配的安装包、校验值和验收记录后，该平台版本才可用；附件缺失时，不要把源码页面当作发布证明，请使用下方明确标注的旧版备用入口。
+下表为 **0.7.4** 主下载入口。只有对应平台页面出现匹配的安装包、校验值和验收记录后，该平台版本才可用；附件缺失时，不要把源码页面当作发布证明，请使用下方明确标注的上一版入口。
+
+0.7.4 在每日结果中说明是否计入余额及原因，支持按日期补取缺失分钟行情，完成后的进度条不再滚动。回放详情仅显示有记录的型号，不展示内部占位名。不改变预测方法或账户规则。
 
 0.7.3 默认每次模型调用总时限为 600 秒，临时故障重试 1 次，可在「连接设置 → 高级调用设置」调整。「恢复原批次」沿用同一份冻结数据，只补未完成调用；迟到恢复仍是研究，不能变成准时正式成绩。Windows 与 Mac 均使用系统自动研究调度；刷新保留进度展开项和选择，隔离采集进程释放自身资源。不改变模型身份、方法、费用、余额或历史记录。详见[更新说明](docs/software-updates.md)。
 
 | 你的电脑 | 下载入口 |
 |---|---|
-| Windows 10/11，x64 | [Windows 0.7.3 安装程序](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.3-windows) |
-| M 系列 Mac，macOS 15 或以上 | [Apple Silicon 0.7.3 DMG](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.3-macos) |
-| Intel Mac，macOS 15 或以上 | [Intel 0.7.3 DMG](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.3-macos) |
+| Windows 10/11，x64 | [Windows 0.7.4 安装程序](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.4-windows) |
+| M 系列 Mac，macOS 15 或以上 | [Apple Silicon 0.7.4 DMG](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.4-macos) |
+| Intel Mac，macOS 15 或以上 | [Intel 0.7.4 DMG](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.4-macos) |
+
+上一版：[Windows 0.7.3](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.3-windows)、[macOS 0.7.3](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.3-macos)。
 
 普通用户只下载 **`.exe` 或 `.dmg`**。其余文件供自动更新、校验和第三方许可使用，不必逐个下载。不需要另外安装 Python、Git、富途或开通券商账户；Windows 安装程序会检查 WebView2。当前为内部测试发布，尚无商业签名或公证；首次打开遇到系统来源提示时，请核对下载页与校验值。
 

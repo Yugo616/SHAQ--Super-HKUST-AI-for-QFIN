@@ -14,6 +14,30 @@ from shaq_daily_oracle.lab_service import LabService, ET
 class ResultRecoveryTests(unittest.TestCase):
     service = test_result_refresh.ResultRefreshTests.service
     wait_status = test_result_refresh.ResultRefreshTests.wait_status
+
+    def test_targeted_minute_retry_does_not_refresh_labels_or_other_dates(self):
+        with tempfile.TemporaryDirectory() as name:
+            service = self.service(Path(name))
+            self.prior(service)
+            calls = []
+            def minutes(*args, **kwargs):
+                calls.append(kwargs['eligible_dates'])
+                return {'refreshed_dates':['2026-09-11'], 'failures':[]}
+            with patch('shaq_daily_oracle.lab_service.refresh_research_labels', side_effect=AssertionError('daily labels must not run')), \
+                 patch.object(LabService, '_refresh_minute_accounts', side_effect=minutes):
+                service.start_result_refresh(manual=True, minute_only_date='2026-09-11')
+                service._owned_result_refresh[1].join(3)
+            result = service.result_refresh_status()
+            self.assertEqual(calls, [{'2026-09-11'}])
+            self.assertEqual(result['result']['minute_settlement']['failures'], [])
+            self.assertEqual(result['result']['failures'][0]['batch_id'], 'LAB-failed')
+
+    def test_targeted_minute_retry_rejects_invalid_dates_before_starting(self):
+        with tempfile.TemporaryDirectory() as name:
+            service = self.service(Path(name))
+            with self.assertRaises(ValueError):
+                service.start_result_refresh(manual=True, minute_only_date='../bad')
+            self.assertFalse(service._result_refresh_receipt.exists())
     def test_one_provider_outage_does_not_send_five_identical_refresh_requests(self):
         from shaq_daily_oracle import lab_service
         from shaq_daily_oracle.data_providers import DataProfile, DataProviderError

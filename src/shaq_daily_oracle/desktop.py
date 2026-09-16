@@ -143,6 +143,9 @@ class DesktopBridge:
     def retry_failed_results(self) -> dict[str, Any]:
         return self._result(self.lab.start_result_refresh, manual=True, retry_failed_only=True)
 
+    def retry_missing_minutes(self, trade_date: str) -> dict[str, Any]:
+        return self._result(self.lab.start_result_refresh, manual=True, minute_only_date=trade_date)
+
     def check_result_refresh_due(self) -> dict[str, Any]:
         """Local due check; network work starts only for an eligible date."""
         return self._result(self.lab.start_result_refresh, manual=False)

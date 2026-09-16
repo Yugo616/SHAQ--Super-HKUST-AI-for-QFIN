@@ -113,6 +113,33 @@ const SHAQAccounts = (() => {
   const noEntryData = row => row?.status === 'unavailable' && !(row.trades || []).some(trade => trade.quantity > 0);
   const amount = (row, key) => usd(noEntryData(row) ? null : row?.[key]);
 
+  function modelCaption(calls=[],fallback='') {
+    const actual=value=>typeof value==='string' && value.trim() && !/^(subscription-default|default|unknown|未记录模型|已记录模型)$/i.test(value.trim());
+    const names=[...new Set(calls.map(call=>call.response_model).filter(actual))];
+    return names.length?names.join(' / '):actual(fallback)?fallback:'';
+  }
+
+  function balanceStatus(row,source={}) {
+    if(!row)return source.status==='engineering_failure'?'分析失败，未计入余额':'等待账户结算，尚未计入余额';
+    if(row.scope==='duplicate'||row.status==='duplicate')return '重复运行，不重复入账';
+    const excluded=row.scope==='late'?'仅研究回放，完成超过截止时间，未计入余额':row.scope==='practice'?'练习回放，未计入余额':'';
+    if(['unavailable','incomplete'].includes(row.status)){
+      const missing=(row.trades||[]).filter(t=>['unavailable_entry','open_incomplete'].includes(t.status)).map(t=>{
+        const entry=t.status==='unavailable_entry',stamp=t[entry?'entry_reference_at_et':'exit_reference_at_et']||row[entry?'entry_reference_at_et':'exit_reference_at_et'];
+        const clock=String(stamp||'').match(/T(\d{2}:\d{2})/)?.[1];
+        return `${t.symbol} 缺少${clock?clock+' ET ':''}${entry?'开仓':'退出'}行情`;
+      });
+      return `未结算｜${missing.join('；')||'目标分钟行情不完整'}${excluded?'；'+excluded:'，尚未计入余额'}`;
+    }
+    if(row.status==='blocked_previous')return '未计入余额，等待前一日补齐行情';
+    if(row.status==='error')return '结算失败，未计入余额';
+    if(excluded)return excluded;
+    if(row.status==='empty')return '空榜，无交易，余额不变';
+    if(['final','provisional'].includes(row.status)&&Number.isFinite(row.account_balance))return `${row.status==='provisional'?'初步结算':'已复核'}，已计入余额`;
+    if(['final','provisional'].includes(row.status))return '回放已结算，未计入当前余额';
+    return '等待行情与结算，尚未计入余额';
+  }
+
   function dayHtml(row) {
     if (!row) return '<p>尚无账户回放。</p>';
     const intro = `<div class="section-head"><div><h3>收盘后模拟回放</h3><p>${e(scopeName(row.scope))}</p></div><span class="status ${row.status === 'final' || row.status === 'empty' ? 'ok' : row.status === 'error' || row.status === 'incomplete' ? 'bad' : ''}">${e(statusName(row.status))}</span></div>
@@ -154,7 +181,7 @@ const SHAQAccounts = (() => {
     const x=point=>dates.length===1?462.5:85+dates.indexOf(point.date)/(dates.length-1)*755;
     const y=point=>150-(point.equity-lo)/(hi-lo)*125;
     const axis=dates.length===1?`<text x="462.5" y="185" text-anchor="middle">${e(dates[0])}</text>`:`<text x="85" y="185">${e(dates[0])}</text><text x="840" y="185" text-anchor="end">${e(dates.at(-1))}</text>`;
-    const legend=`<div class="balance-legend">${accounts.map((account,index)=>`<span><i style="background:${colors[index%colors.length]}"></i>${e(account.method_name||account.label||'未标明版本')}${account.model?` · ${e(account.model)}`:''}</span>`).join('')}</div>`;
+    const legend=`<div class="balance-legend">${accounts.map((account,index)=>`<span><i style="background:${colors[index%colors.length]}"></i>${e(account.method_name||account.label||'未标明版本')}</span>`).join('')}</div>`;
     return `<h3>收盘净值</h3>${legend}<svg class="pnl-chart" viewBox="0 0 900 220" role="img" aria-label="各账户收盘净值；纵轴余额（USD），横轴日期（交易日）"><text x="0" y="12" font-size="12">余额（USD）</text><text x="0" y="30">${usd(hi)}</text><text x="0" y="150">${usd(lo)}</text>${accounts.map((account,index)=>`<polyline fill="none" stroke="${colors[index%colors.length]}" stroke-width="2" points="${(account.curve||[]).map(point=>`${x(point)},${y(point)}`).join(' ')}"/>${(account.curve||[]).map(point=>`<circle cx="${x(point)}" cy="${y(point)}" r="3" fill="${colors[index%colors.length]}"><title>${e(account.method_name || account.label)} ${e(point.date)} ${usd(point.equity)}</title></circle>`).join('')}`).join('')}${axis}<text x="450" y="211" text-anchor="middle" font-size="12">日期（交易日）</text></svg>`;
   }
 
@@ -202,15 +229,17 @@ const SHAQAccounts = (() => {
   function compactOverviewHtml(data,versions=[],filters={}){
     const accounts=(data.accounts||[]).filter(account=>(!filters.version||historyIdentity(account,versions).filter_key===filters.version)&&(!filters.model||account.model===filters.model)).map(account=>({...account,method_name:methodMeta(account,versions).method_name,curve:(account.curve||[]).filter(point=>(!filters.from||point.date>=filters.from)&&(!filters.to||point.date<=filters.to))}));
     const cards=accounts.map(account=>{
-      const rows=(data.results||[]).filter(row=>row.scope==='forward'&&(account.series_key?row.series_key===account.series_key:row.variant_key===account.variant_key)).sort((a,b)=>String(b.trade_date).localeCompare(String(a.trade_date)));
-      const latest=rows[0];
-      return `<article class="balance-card" data-view-key="${e(account.series_key||account.variant_key||account.label)}"><h3>${method(account,versions)}</h3><small>${e(account.model||'未记录模型')}</small><p>当前余额 <b>${usd(account.equity)}</b></p><p>${e(latest?.trade_date||'当日')} 净盈亏 <b>${amount(latest,'net_pnl')}</b></p></article>`;
+      const rows=(data.results||[]).filter(row=>account.account_id?row.account_id===account.account_id:(account.series_key?row.series_key===account.series_key:row.variant_key===account.variant_key)).sort((a,b)=>String(b.trade_date).localeCompare(String(a.trade_date)));
+      const counted=rows.filter(row=>['historical','forward'].includes(row.scope)&&['final','provisional','empty'].includes(row.status)&&Number.isFinite(row.account_balance));
+      const latest=counted[0],notCounted=rows.some(row=>!counted.includes(row)&&(!latest||row.trade_date>=latest.trade_date));
+      const status=latest?`已累计至 ${latest.trade_date}${notCounted?'；后续记录未计入，原因见每日结果':''}`:'尚无已计入的交易结果';
+      return `<article class="balance-card" data-view-key="${e(account.account_id||account.series_key||account.variant_key||account.label)}"><h3>${method(account,versions)}</h3><small>${e(status)}</small><p>当前余额 <b>${usd(account.equity)}</b></p><p>${e(latest?.trade_date||'已计入日')} 净盈亏 <b>${amount(latest,'net_pnl')}</b></p></article>`;
     }).join('');
     return `<h2>版本余额</h2><div class="balance-cards">${cards||'<p>尚无可用余额。</p>'}</div>${plot(accounts)}`;
   }
 
   return {dayHtml, overviewHtml, compactOverviewHtml, plot, rulesText, usd, scopeName, statusName,
-    methodMeta, historyIdentity, normalizeSelections, escape:e};
+    methodMeta, historyIdentity, normalizeSelections, balanceStatus, modelCaption, escape:e};
 })();
 
 // The compact desktop does not mount the legacy detailed-account renderers.

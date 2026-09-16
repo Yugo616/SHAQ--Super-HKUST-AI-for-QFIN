@@ -32,9 +32,9 @@ class AccountViewTests(unittest.TestCase):
     def test_compact_overview_shows_net_balances_without_duplicate_daily_cost_tables(self):
         html = self.render('compactOverviewHtml', {
             'rules':{'initial_cash':10000},
-            'accounts':[{'label':'甲方法','equity':10008,'opening_simulation_balance':10000,
+            'accounts':[{'account_id':'a','label':'甲方法','equity':10008,'opening_simulation_balance':10000,
                          'curve':[{'date':'2026-09-15','equity':10008}]}],
-            'results':[{'trade_date':'2026-09-15','scope':'forward','net_pnl':8,'fees':1,'slippage_cost':1}],
+            'results':[{'account_id':'a','account_balance':10008,'status':'final','trade_date':'2026-09-15','scope':'forward','net_pnl':8,'fees':1,'slippage_cost':1}],
         })
         self.assertIn('$10,008.00', html)
         self.assertIn('$8.00', html)

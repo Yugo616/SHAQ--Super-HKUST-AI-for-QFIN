@@ -122,6 +122,10 @@ function pageSnapshot(data,page){
   return JSON.stringify([data.settings,data.versions,data.drafts,data.data_status]);
 }
 function renderRefreshControls(status){
+  if(typeof document!=='undefined')document.querySelectorAll('[data-retry-minute-date]').forEach(control=>{
+    control.disabled=['running','already_running'].includes(status.status);
+    control.textContent=control.disabled?'正在更新行情…':'补取缺失行情';
+  });
   let button=q('#retry-failed-results');
   if(!button){button=document.createElement('button');button.id='retry-failed-results';button.className='secondary';button.textContent='重试失败项';q('#refresh-button').insertAdjacentElement('afterend',button);}
   button.hidden=!(Number(status.failure_count)>0||['failed','partial_failure'].includes(status.status));

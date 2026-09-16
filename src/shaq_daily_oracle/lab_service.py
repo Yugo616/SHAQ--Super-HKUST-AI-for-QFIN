@@ -236,7 +236,7 @@ class LabService:
 
     @guarded_method
     def start_result_refresh(self, *, manual: bool = False, eligible_dates=None,
-                             retry_failed_only: bool = False) -> dict[str, Any]:
+                             retry_failed_only: bool = False, minute_only_date=None) -> dict[str, Any]:
         """Start one credential-free price/result refresh across app instances."""
         now = datetime.now(ET)
         prior = self.result_refresh_status()
@@ -248,6 +248,14 @@ class LabService:
             if prior.get('automatic_retry_count', 0) < RESULT_AUTOMATIC_RETRIES:
                 retry_failed_only = automatic_retry = True
         retry_targets = None
+        if minute_only_date is not None:
+            # Date selection is settlement-only, never a new prediction run.
+            datetime.strptime(minute_only_date, '%Y-%m-%d')
+            if not manual or retry_failed_only:
+                raise ValueError('Targeted minute retrieval requires a manual request')
+            retry_targets = {'batches': [], 'dates': [minute_only_date],
+                             'daily_dates': [], 'all_batches': False, 'all_dates': False,
+                             'prior_result': prior.get('result', {}), 'stages': []}
         if retry_failed_only:
             from .data_retry import is_transient_diagnostic
             previous = prior.get('result', {})
@@ -316,6 +324,7 @@ class LabService:
             "attempted_at": now.isoformat(), "manual": manual,
             "eligible_dates": eligible_dates,
             "retry_failed_only": retry_failed_only,
+            "minute_only_date": minute_only_date,
             "retry_targets": retry_targets,
             "automatic_retry_count": prior.get('automatic_retry_count', 0) + 1 if automatic_retry else 0,
         }

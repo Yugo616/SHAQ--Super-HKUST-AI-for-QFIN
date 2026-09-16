@@ -5,6 +5,38 @@ from pathlib import Path
 
 
 class TodayProgressTests(unittest.TestCase):
+    def test_terminal_legacy_progress_never_uses_loading_animation(self):
+        self.run_js(r'''
+const assert=require('node:assert/strict');
+const render=(status,value,events=[])=>ui.progressHtml([{job_id:'j',started_at_et:'2026-09-15T08:00:00-04:00',
+ status,variant_progress:{v:value},research_progress:events}],[],'2026-09-15T08:30:00-04:00');
+const bar=html=>html.match(/<progress\b[^>]*>/)?.[0];
+const completed=render('complete','complete');
+assert.match(bar(completed),/max="1" value="1"/,'completed legacy work must be a static full bar');
+assert.doesNotMatch(completed,/任务总量未记录/,'finished work should show completion, not an unresolved loading label');
+for(const state of ['failed','partial_failure','cancelled','stopped']){
+ assert.match(bar(render(state,'running')),/value="0"/,'a stopped job cannot animate a stale running child');
+ assert.doesNotMatch(render(state,'running'),/分析中|进行中/);
+}
+assert.match(bar(render('running','complete')),/value="1"/,'one completed variant stops while its sibling runs');
+assert.match(bar(render('running','failed')),/value="0"/);
+assert.match(bar(render('queued','queued')),/value="0"/,'queued work has not started');
+assert.doesNotMatch(bar(render('running','running')),/value=/,'only genuinely running work without a plan is indeterminate');
+''')
+
+    def test_terminal_status_overrides_incomplete_display_events_without_fake_counts(self):
+        self.run_js(r'''
+const assert=require('node:assert/strict');
+const events=[{stage:'tasks_planned',variant_key:'v',tasks:[{task_id:'report:AAA:market',symbol:'AAA',domain:'market'},{task_id:'decision'}]},
+ {stage:'model_started',variant_key:'v',symbol:'AAA',domain:'market',status:'running'}];
+const render=status=>ui.progressHtml([{job_id:'j',started_at_et:'2026-09-15T08:00:00-04:00',status,
+ variant_progress:{v:status==='complete'?'complete':'running'},research_progress:events}],[],'2026-09-15T08:30:00-04:00');
+assert.match(render('complete'),/<progress[^>]*max="1" value="1"/);
+assert.doesNotMatch(render('complete'),/2 \/ 2 项|进行中|等待/,'do not fabricate task events or leave active child labels');
+assert.doesNotMatch(render('failed'),/进行中|等待/,'failed parent stops unfinished domain labels');
+assert.match(render('failed'),/<progress[^>]*max="2" value="0"/);
+''')
+
     def test_failed_version_has_short_actionable_reason_without_raw_tail(self):
         self.run_js(r'''
 const assert=require('node:assert/strict');

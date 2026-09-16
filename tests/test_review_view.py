@@ -123,7 +123,7 @@ console.log(JSON.stringify({analysis:nodes['#candidate-analysis'].innerHTML,afte
         self.assertNotIn('简短复盘', value['after'])
 
     def test_details_compare_frozen_records_without_installed_version_lookup(self):
-        source = (ROOT / 'src/shaq_daily_oracle/desktop/review.js').read_text(encoding='utf-8')
+        source = (ROOT / 'src/shaq_daily_oracle/desktop/accounts.js').read_text(encoding='utf-8') + '\n' + (ROOT / 'src/shaq_daily_oracle/desktop/review.js').read_text(encoding='utf-8')
         harness = '''
 const window={showCandidate(){}};const document={};
 let renderBatch=()=>{},renderHistory=()=>{},called=[];
