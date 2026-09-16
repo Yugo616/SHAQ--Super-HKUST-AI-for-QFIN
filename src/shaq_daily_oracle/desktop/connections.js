@@ -166,9 +166,27 @@ async function saveLocalModel() {
     input_price_per_million:null,output_price_per_million:null,...saved,model};
   if(await connectionController().test(profile,'')) {
     localModelDrafts.set(protocol,model);
-    await load(false);
-    showConnectionState({status:'connected',message:`已保存 ${model}，后续手动和自动运行使用此型号。`});
+    if(await refreshSavedModel(profile))
+      showConnectionState({status:'connected',message:`已保存 ${model}，后续手动和自动运行使用此型号。`});
   }
+}
+
+let savedModelRefreshRequest=0;
+async function refreshSavedModel(profile) {
+  const request=++savedModelRefreshRequest;
+  await load(false);
+  if(request!==savedModelRefreshRequest)return false;
+  // Explicit saves supersede a preserved old selector, but not time/version drafts.
+  const saved=typeof state==='undefined'?[]:(state.data?.settings?.model_profiles||[]);
+  const profiles=[...saved.filter(p=>p.profile_id!==profile.profile_id),profile];
+  for(const selector of ['#run-profile','#auto-model']) {
+    const select=q(selector);
+    if(select?.tagName!=='SELECT')continue;
+    select.innerHTML=profiles.map(p=>`<option value="${esc(p.profile_id)}">${esc(p.model)} · ${esc(p.profile_id)}</option>`).join('');
+    select.value=profile.profile_id;
+  }
+  if(typeof estimate==='function')estimate();
+  return true;
 }
 
 async function loginLocalModel() {
@@ -300,7 +318,7 @@ function bindModelConnections() {
       output_price_per_million:optional(profile.output_price_per_million)});
     if(await connectionController().test(profile,secret)) {
       SHAQConnections.clearSubmittedSecret(form,providerDrafts,submission);
-      await load(false);q('#setup').classList.remove('hidden');
+      if(await refreshSavedModel(profile))q('#setup').classList.remove('hidden');
     }
   };
 }

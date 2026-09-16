@@ -275,6 +275,38 @@ console.log(JSON.stringify({initially,before,calls}));
         self.assertEqual(result['calls'][-1][0], 'save_lab_model_profile')
         self.assertEqual(result['calls'][-1][1]['model'], 'small-live')
 
+    def test_saved_local_model_updates_visible_manual_and_schedule_selectors(self):
+        result = self.node('connections.js', '''
+(async()=>{
+const nodes={};globalThis.q=s=>nodes[s]||={textContent:'',innerHTML:'',dataset:{},
+ classList:{toggle(){},add(){},remove(){}},elements:{model:{value:''}}};
+globalThis.qa=()=>[];globalThis.esc=x=>x;
+globalThis.state={data:{settings:{model_profiles:[{profile_id:'old',protocol:'codex-cli',model:'old-model'}]}}};
+q('#run-profile').tagName='SELECT';q('#auto-model').tagName='SELECT';q('#auto-time').value='08:25';
+globalThis.load=async()=>{q('#run-profile').value='old';q('#auto-model').value='old';};
+globalThis.api=async(name,profile)=>{
+ if(name==='save_lab_model_profile')state.data.settings.model_profiles.push(profile);
+ return {models:[{id:'new-model',label:'New Model'}]};};
+await connectLocalModel('claude-code');q('#local-model-form').elements.model.value='new-model';
+await saveLocalModel();
+console.log(JSON.stringify({manual:q('#run-profile').value,automatic:q('#auto-model').value,time:q('#auto-time').value}));
+})();''')
+        self.assertEqual(result, {'manual':'my-claude','automatic':'my-claude','time':'08:25'})
+
+    def test_old_save_refresh_cannot_restore_model_over_a_newer_save(self):
+        result = self.node('connections.js', '''
+(async()=>{
+const nodes={};globalThis.q=s=>nodes[s]||={tagName:'SELECT',value:'old'};
+globalThis.esc=x=>x;globalThis.state={data:{settings:{model_profiles:[]}}};
+const releases=[];globalThis.load=()=>new Promise(resolve=>releases.push(resolve));
+const a=refreshSavedModel({profile_id:'a',model:'A'});
+const b=refreshSavedModel({profile_id:'b',model:'B'});
+releases[1](true);const latest=await b;
+releases[0](undefined);const old=await a;
+console.log(JSON.stringify({manual:q('#run-profile').value,automatic:q('#auto-model').value,latest,old}));
+})();''')
+        self.assertEqual(result, {'manual':'b','automatic':'b','latest':True,'old':False})
+
     def test_cancelled_local_login_does_not_retry_or_switch_provider(self):
         result = self.node('connections.js', '''
 (async()=>{
