@@ -44,6 +44,13 @@
             <button class="connection-choice" id="connect-claude" type="button"><b>连接 Claude Code</b><span>使用此电脑已安装并登录的 Claude Code</span></button>
             <button class="connection-choice" id="show-api-form" type="button"><b>连接 API</b><span>官方 API 或兼容中转站</span></button>
           </div><p id="model-status" class="inline-status" role="status"></p>
+          <form id="local-model-form" class="form-grid hidden">
+            <label class="wide">分析模型<input name="model" list="local-model-options" placeholder="选择列表中的型号，或填写明确型号" required autocomplete="off"></label>
+            <datalist id="local-model-options"></datalist>
+            <p class="wide">保存后用于后续手动及自动运行。可随时回来切换；正在运行的批次不受影响。</p>
+            <button id="refresh-local-models" type="button" class="secondary">刷新可选模型</button>
+            <button type="submit" class="primary">测试所选模型并保存</button>
+          </form>
           <details class="model-advanced"><summary>高级调用设置（本机模型及 API）</summary>
             <form id="execution-policy-form" class="form-grid compact-form">
               <label>每次调用超时（秒）<input name="timeout_seconds" type="number" min="1" value="600" required></label>
@@ -58,10 +65,12 @@
           <input name="profile_id" value="api-model" type="hidden">
           <input name="base_url" value="https://api.openai.com/v1" type="hidden">
           <label>模型服务商<select name="protocol"><option value="openai-responses">OpenAI API</option><option value="anthropic-messages">Anthropic API</option><option value="openai-chat-completions">兼容中转服务</option></select></label>
-          <label>模型名称<input name="model" placeholder="例如 gpt-5-mini" required></label>
+          <label>分析模型<input name="model" list="api-model-options" placeholder="读取列表后选择，或填写服务商提供的型号" required></label>
+          <datalist id="api-model-options"></datalist>
           <label class="wide hidden" id="relay-url-field">中转站 URL<input name="relay_base_url" placeholder="https://example.com/v1"></label>
           <label class="wide hidden" id="relay-context-field">中转站上下文长度<input name="maximum_context_tokens" type="number" min="16000" value="128000"></label>
-          <label class="wide">API Key<input name="secret" type="password" autocomplete="new-password" placeholder="只保存在本机系统凭据库" required></label>
+          <label class="wide">API Key<input name="secret" type="password" autocomplete="new-password" placeholder="同一连接已保存密钥时可留空"></label>
+          <button id="refresh-api-models" class="secondary wide" type="button">读取此接口的可选模型</button>
           <details class="wide model-advanced"><summary>高级设置（通常不用修改）</summary><div class="form-grid compact-form">
             <label>输出校验<select name="output_mode"><option value="strict">服务商保证格式</option><option value="local_validated">本机严格检查</option></select></label>
             <label>认证方式<select name="auth_style"><option value="bearer">Bearer</option><option value="x-api-key">x-api-key</option></select></label>

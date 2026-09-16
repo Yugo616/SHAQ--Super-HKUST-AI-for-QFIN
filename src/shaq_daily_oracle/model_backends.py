@@ -438,6 +438,7 @@ def _codex_cli_call(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Use the user's existing Codex login; evidence lives only in a temporary workspace."""
 
+    require_explicit_model(profile)
     executable = _local_cli(profile)
     with tempfile.TemporaryDirectory(prefix="shaq-codex-packet-") as temporary:
         root = Path(temporary)
@@ -469,7 +470,8 @@ def _codex_cli_call(
     return parsed, {
         "backend": "codex-cli",
         "response_id": "local-subscription",
-        "response_model": profile.model,
+        "requested_model": profile.model,
+        "response_model": "",
         "usage": None,
         "request_policy": {
             "ephemeral": True, "sandbox": "read-only", "user_config": False,
@@ -485,6 +487,7 @@ def _claude_code_call(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Use Claude Code's existing local subscription, with no agent tools enabled."""
 
+    require_explicit_model(profile)
     executable = _local_cli(profile)
     arguments = [
         "-p", "--output-format", "json", "--json-schema",
@@ -511,7 +514,10 @@ def _claude_code_call(
     return parsed, {
         "backend": "claude-code",
         "response_id": str(envelope.get("session_id", "local-subscription")),
-        "response_model": profile.model,
+        "requested_model": profile.model,
+        "response_model": (next(iter(envelope['modelUsage']))
+                           if isinstance(envelope.get('modelUsage'), dict) and len(envelope['modelUsage']) == 1
+                           else str(envelope.get('model') or '')),
         "usage": envelope.get("usage") if isinstance(envelope.get("usage"), dict) else None,
         "request_policy": {
             "permission_mode": "plan", "tools": [], "json_schema": True,
@@ -519,6 +525,12 @@ def _claude_code_call(
         },
         "schema_enforcement": "cli-json-schema",
     }
+
+
+def require_explicit_model(profile: ModelProfile) -> None:
+    if profile.model.strip().lower() in {'subscription-default', 'default', ''}:
+        raise ModelBackendError('请打开连接设置，选择明确的分析模型并保存；不会自动使用默认型号。',
+                                diagnostic={'kind': 'model_selection'})
 
 
 def _model_identity_matches(requested: str, returned: str) -> bool:
@@ -894,8 +906,10 @@ def call_structured(
     }
     try:
         returned_model = str(provider_audit.get("response_model", "")).strip()
+        local_claude_alias = (profile.protocol == 'claude-code' and
+                             _model_identity_matches('claude-' + profile.model, returned_model))
         if (returned_model and profile.model != "subscription-default"
-                and not _model_identity_matches(profile.model, returned_model)):
+                and not _model_identity_matches(profile.model, returned_model) and not local_claude_alias):
             raise ModelBackendError("model endpoint returned a different model than configured")
         parsed = _validate_result(parsed, schema)
     except ModelBackendError as exc:

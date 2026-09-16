@@ -174,6 +174,16 @@ class DesktopBridge:
             self.lab.save_model_profile, profile, secret=secret, probe=probe
         )
 
+    def list_local_models(self, protocol: str) -> dict[str, Any]:
+        from .model_catalog import local_model_catalog
+        return self._result(local_model_catalog, protocol)
+
+    def list_api_models(self, profile: dict[str, Any], secret: str) -> dict[str, Any]:
+        from .model_catalog import api_model_catalog
+        def discover():
+            return api_model_catalog(profile, self.lab.connection_secret(profile, secret))
+        return self._result(discover)
+
     def begin_local_model_login(self, protocol: str) -> dict[str, Any]:
         def login() -> dict[str, str]:
             from .model_backends import (
@@ -640,6 +650,8 @@ def _bind_gui_smoke_fixture(bridge, fixture_state, fixture_detail):
     bridge.refresh_prices_and_results = MethodType(fixture_refresh_api, bridge)
     bridge.compare_research_runs = MethodType(fixture_compare_api, bridge)
     bridge.save_lab_model_profile = MethodType(fixture_model_api, bridge)
+    bridge.list_local_models = MethodType(lambda self, protocol: {'ok': True, 'value': {
+        'protocol': protocol, 'models': [{'id': 'fixture-model', 'label': 'Fixture model'}]}}, bridge)
     bridge.check_software_update = MethodType(fixture_update_api, bridge)
     bridge.open_method_transfer = MethodType(fixture_transfer_api, bridge)
     bridge.transfer_methods = MethodType(fixture_transfer_write_api, bridge)
@@ -789,6 +801,15 @@ def launch_desktop(*, smoke_output: Path | None = None) -> int:
             window.evaluate_js("document.querySelector('#comparison-modal').close(); "
                                "document.querySelector('#connections-button').click(); "
                                "document.querySelector('#connect-claude').click()")
+            deadline = time.monotonic() + 6
+            while time.monotonic() < deadline:
+                if window.evaluate_js("document.querySelector('#model-status').dataset.status === 'choosing'"):
+                    break
+                time.sleep(.1)
+            else:
+                raise RuntimeError('Native model selector did not load')
+            window.evaluate_js("document.querySelector('#local-model-form').elements.model.value='fixture-model'; "
+                               "document.querySelector('#local-model-form').requestSubmit()")
             deadline = time.monotonic() + 6
             while time.monotonic() < deadline:
                 if window.evaluate_js("document.querySelector('#model-status').textContent.includes('fixture 401') && "

@@ -388,7 +388,7 @@ class ModelCompatibilityTests(unittest.TestCase):
 
         profile = ModelProfile(
             profile_id="claude", protocol="claude-code", base_url="",
-            model="subscription-default",
+            model="claude-fixture",
         )
         launcher = str(PureWindowsPath('C:/') / 'Users' / '李 小明' /
                        'AppData' / 'Roaming' / 'npm' / 'claude.cmd')
@@ -409,7 +409,7 @@ class ModelCompatibilityTests(unittest.TestCase):
 
         profile = ModelProfile(
             profile_id="claude", protocol="claude-code", base_url="",
-            model="subscription-default",
+            model="claude-fixture",
         )
         with patch.object(sys, "platform", "win32"), patch.object(
             model_backends, "_local_cli", return_value=r"C:\temp\claude.ps1"
@@ -425,7 +425,7 @@ class ModelCompatibilityTests(unittest.TestCase):
 
         profile = ModelProfile(
             profile_id="claude", protocol="claude-code", base_url="",
-            model="subscription-default",
+            model="claude-fixture",
         )
         auth = subprocess.CompletedProcess(
             args=[], returncode=0,
@@ -465,7 +465,7 @@ class ModelCompatibilityTests(unittest.TestCase):
 
         profile = ModelProfile(
             profile_id="claude", protocol="claude-code", base_url="",
-            model="subscription-default",
+            model="claude-fixture",
         )
         completed = subprocess.CompletedProcess(
             args=[], returncode=0,

@@ -1,5 +1,14 @@
 # Software updates
 
+## 0.7.5: choose and retain an explicit analysis model
+
+- Open **Connection Settings** at any time, choose Codex, Claude Code or API, then choose a model. Local choices come from the installed tool's metadata interface, not a baked-in model list. If a tool or gateway cannot list models, enter a concrete identifier and test it. Reading a list does not run inference; **Test and save** does.
+- Successful saves apply to future manual and scheduled runs without enabling automation. Running batches and frozen records keep their original profile. A failed connection test keeps the working configuration. API keys can be reused only for the same protocol, URL and authentication style.
+- Legacy `subscription-default` connections require one explicit selection before a new run. Calls always pass the selected local model. The requested identifier is not presented as provider-confirmed; Claude's returned model metadata is retained when available. No historical model identity is invented.
+- 0.7.4 is already public and remains immutable. This patch contains its balance-status, minute-retry and terminal-progress fixes. Methods, fees, sizing and past predictions are unchanged. No private model account is used by automated release tests.
+
+References: [Codex model/list](https://developers.openai.com/codex/app-server/), [Claude Code model configuration](https://code.claude.com/docs/en/model-config), [Claude SDK metadata handshake](https://github.com/anthropics/claude-agent-sdk-python/blob/main/src/claude_agent_sdk/_internal/query.py).
+
 ## 0.7.4: explain balances and recover missing settlement data
 
 - Daily results explain whether a record contributed to the balance, is waiting for minute data, or is a late research replay. A completed direction label does not imply a completed account settlement.
@@ -12,7 +21,10 @@ Application updates and research-method updates are separate. **0.7.0 is the fir
 
 ## Platform downloads and acceptance
 
-Primary 0.7.4 downloads: [Windows](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.4-windows), [Apple Silicon / Intel Mac](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.4-macos). Each is available only once its matching packages, checksums and acceptance records appear. Publication requires separate native acceptance for each architecture from the same frozen source, including an upgrade from the matching public base recorded in its acceptance report. Previous downloads:
+Primary 0.7.5 downloads: [Windows](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.5-windows), [Apple Silicon / Intel Mac](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.5-macos). Each is available only once its matching packages, checksums and acceptance records appear. Publication requires separate native acceptance for each architecture from the same frozen source, including an upgrade from the matching public base recorded in its acceptance report. Previous downloads:
+
+- [0.7.4 Windows release page](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.4-windows)
+- [0.7.4 macOS release page](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.4-macos)
 
 - [0.7.3 Windows release page](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.3-windows)
 - [0.7.3 macOS release page](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.3-macos)

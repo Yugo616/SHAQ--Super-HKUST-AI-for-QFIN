@@ -116,20 +116,59 @@ function showConnectionState(value) {
 
 let modelConnectionController;
 let lastConnectionProtocol;
+let lastLocalAction='catalog';
 function connectionController() {
   if(!modelConnectionController)modelConnectionController=SHAQConnections.controller(
     (profile,secret,test)=>api('save_lab_model_profile',profile,secret,test),showConnectionState);
   return modelConnectionController;
 }
 
+const localModelDrafts=new Map();
+let localModelCatalogRequest=0;
 async function connectLocalModel(protocol) {
+  lastLocalAction='catalog';
   lastConnectionProtocol=protocol;
-  const profile={profile_id:protocol==='codex-cli'?'my-codex':'my-claude',protocol,
-    base_url:'',model:'subscription-default',auth_style:'bearer',output_mode:'strict',
+  const form=q('#local-model-form');
+  if(form.dataset.protocol)localModelDrafts.set(form.dataset.protocol,form.elements.model.value);
+  const profiles=state.data?.settings?.model_profiles||[];
+  const saved=profiles.find(p=>p.protocol===protocol&&p.profile_id===state.data?.settings?.active_model_profile_id)||profiles.find(p=>p.protocol===protocol);
+  form.dataset.protocol=protocol;
+  form.dataset.profileId=saved?.profile_id||(protocol==='codex-cli'?'my-codex':'my-claude');
+  form.elements.model.value=localModelDrafts.get(protocol)??(saved?.model==='subscription-default'?'':saved?.model||'');
+  form.classList.remove('hidden');q('#model-form').classList.add('hidden');
+  q('#local-model-options').innerHTML='';
+  const request=++localModelCatalogRequest;
+  showConnectionState({status:'testing',message:'正在读取可选模型（不发起分析调用）…'});
+  try {
+    const value=await api('list_local_models',protocol);
+    if(request!==localModelCatalogRequest)return;
+    q('#local-model-options').innerHTML=(value.models||[]).map(m=>`<option value="${esc(m.id)}">${esc(m.label)}</option>`).join('');
+    showConnectionState({status:'choosing',message:'请选择明确型号，再点击测试并保存。读取列表不会消耗分析用量。'});
+  } catch(error) {
+    if(request!==localModelCatalogRequest)return;
+    showConnectionState({status:'failed',diagnostic:error?.diagnostic,
+      message:SHAQConnections.diagnosticMessage(error?.diagnostic,error?.message)});
+  }
+}
+
+async function saveLocalModel() {
+  lastLocalAction='save';
+  const form=q('#local-model-form'),protocol=form.dataset.protocol,model=form.elements.model.value.trim();
+  if(!['codex-cli','claude-code'].includes(protocol)||!model||['default','subscription-default'].includes(model.toLowerCase())) {
+    showConnectionState({status:'choosing',message:'请先选择明确的分析模型，不会自动使用默认型号。'});return;
+  }
+  lastConnectionProtocol=protocol;
+  const saved=(state.data?.settings?.model_profiles||[]).find(p=>p.profile_id===form.dataset.profileId);
+  const profile={profile_id:form.dataset.profileId||(protocol==='codex-cli'?'my-codex':'my-claude'),protocol,
+    base_url:'',model,auth_style:'bearer',output_mode:'strict',
     timeout_seconds:180,maximum_output_tokens:12000,maximum_context_tokens:128000,
     max_concurrency:2,rate_limit_per_minute:30,reasoning_effort:'high',
-    input_price_per_million:null,output_price_per_million:null};
-  if(await connectionController().test(profile,''))await load(false);
+    input_price_per_million:null,output_price_per_million:null,...saved,model};
+  if(await connectionController().test(profile,'')) {
+    localModelDrafts.set(protocol,model);
+    await load(false);
+    showConnectionState({status:'connected',message:`已保存 ${model}，后续手动和自动运行使用此型号。`});
+  }
 }
 
 async function loginLocalModel() {
@@ -162,6 +201,14 @@ async function copyConnectionError() {
 
 function bindModelConnections() {
   const form=q('#model-form');
+  const clearApiModels=()=>{q('#api-model-options').innerHTML='';};
+  const providerPreset=()=>{clearApiModels();applyProtocolPreset();};
+  const apiIdentity=()=>JSON.stringify(['protocol','base_url','relay_base_url','auth_style','secret']
+    .map(key=>form.elements[key]?.value||''));
+  form.oninput=event=>{
+    if(['protocol','base_url','relay_base_url','auth_style','secret'].includes(event.target?.name))clearApiModels();
+  };
+  form.onchange=form.oninput;
   const executionForm=q('#execution-policy-form');
   if(executionForm?.elements?.timeout_seconds){
     const policy=state.data?.settings?.model_execution_policy||{};
@@ -181,12 +228,50 @@ function bindModelConnections() {
   }
   q('#connect-codex').onclick=()=>connectLocalModel('codex-cli');
   q('#connect-claude').onclick=()=>connectLocalModel('claude-code');
+  q('#local-model-form').onsubmit=event=>{event.preventDefault();saveLocalModel();};
+  q('#refresh-local-models').onclick=()=>connectLocalModel(q('#local-model-form').dataset.protocol);
   q('#login-model').onclick=loginLocalModel;
   q('#show-api-form').onclick=()=>{
-    form.classList.remove('hidden');applyProtocolPreset();
+    localModelCatalogRequest++;
+    q('#local-model-form').classList.add('hidden');
+    let restored;
+    if(!form.dataset.prefilled) {
+      const settings=state.data?.settings||{};
+      const profiles=(settings.model_profiles||[]).filter(p=>!['codex-cli','claude-code'].includes(p.protocol));
+      const saved=profiles.find(p=>p.profile_id===settings.active_model_profile_id)||profiles[0];
+      if(saved) {
+        restored=saved;
+        for(const key of ['profile_id','protocol','model','auth_style','output_mode','maximum_context_tokens','max_concurrency','rate_limit_per_minute']) {
+          if(form.elements[key])form.elements[key].value=saved[key]??'';
+        }
+        form.elements.relay_base_url.value=saved.base_url||'';
+      }
+      providerPreset();
+      if(restored)for(const key of ['auth_style','output_mode'])form.elements[key].value=restored[key];
+      SHAQConnections.bindProviderDrafts(form,providerPreset);
+      form.dataset.prefilled='true';
+    }
+    form.classList.remove('hidden');
+  };
+  q('#refresh-api-models').onclick=async()=>{
+    const protocol=form.elements.protocol.value;
+    const base_url=protocol==='openai-chat-completions'?form.elements.relay_base_url.value.trim():form.elements.base_url.value;
+    const button=q('#refresh-api-models');button.disabled=true;
+    const identity=apiIdentity();
+    q('#api-model-options').innerHTML='';
+    try {
+      const value=await api('list_api_models',{profile_id:form.elements.profile_id.value,protocol,base_url,model:'catalog-only',
+        auth_style:form.elements.auth_style.value},form.elements.secret.value);
+      if(identity!==apiIdentity())return;
+      q('#api-model-options').innerHTML=value.models.map(m=>`<option value="${esc(m.id)}">${esc(m.label)}</option>`).join('');
+      q('#model-status').textContent='列表已读取，请选择型号并测试保存。';
+    }catch(error){if(identity===apiIdentity())q('#model-status').textContent=error.message;}
+    finally{button.disabled=false;}
   };
   q('#retry-model').onclick=()=>{
-    if(['codex-cli','claude-code'].includes(lastConnectionProtocol))connectLocalModel(lastConnectionProtocol);
+    if(['codex-cli','claude-code'].includes(lastConnectionProtocol)) {
+      if(lastLocalAction==='save')saveLocalModel();else connectLocalModel(lastConnectionProtocol);
+    }
     else form.requestSubmit();
   };
   q('#edit-model').onclick=()=>{
@@ -198,7 +283,7 @@ function bindModelConnections() {
     try {await api('open_model_installation',button.dataset.installModel);}
     catch(error){notice(error.message,true);}
   });
-  const providerDrafts=SHAQConnections.bindProviderDrafts(form,applyProtocolPreset);
+  const providerDrafts=SHAQConnections.bindProviderDrafts(form,providerPreset);
   form.onsubmit=async event=>{
     event.preventDefault();
     const profile=Object.fromEntries(new FormData(form).entries()),secret=profile.secret;

@@ -24,7 +24,7 @@ from .app_paths import AppPaths
 from .update_admission import guarded_method, start_guarded_thread
 from .data_providers import DataProfile, DataProviderError, YFinanceProvider, load_versioned_universe
 from .hashing import sha256_payload
-from .model_backends import ModelProfile, probe_model_profile, uses_local_subscription
+from .model_backends import ModelProfile, probe_model_profile, uses_local_subscription, require_explicit_model
 from .research_batch import (
     ResearchBatchRunner,
     VariantSelection,
@@ -623,15 +623,36 @@ class LabService:
             "items": rows,
         }
 
+    def connection_secret(self, profile: dict[str, Any], secret: str) -> str:
+        parsed = ModelProfile.from_dict(profile)
+        if uses_local_subscription(parsed):
+            return ''
+        if secret.strip():
+            return secret
+        previous = next((p for p in self.settings.load().get('model_profiles', [])
+                         if p.get('profile_id') == parsed.profile_id), None)
+        if previous and all(previous.get(k) == profile.get(k) for k in ('protocol', 'base_url', 'auth_style')):
+            return self.settings.get_model_secret(parsed.profile_id) or ''
+        return ''
+
     def save_model_profile(
         self, profile: dict[str, Any], *, secret: str, probe: bool = True
     ) -> dict[str, Any]:
         parsed = ModelProfile.from_dict(profile)
+        effective_secret = self.connection_secret(profile, secret)
+        if not uses_local_subscription(parsed) and not effective_secret.strip():
+            raise LabServiceError('请为此 API 连接填写 Key；更换服务地址不会沿用其他连接的密钥。')
         if probe:
-            probe_model_profile(profile=parsed, secret=secret)
-        return self.settings.save_model_profile(
-            profile, secret=None if uses_local_subscription(parsed) else secret
+            probe_model_profile(profile=parsed, secret=effective_secret)
+        result = self.settings.save_model_profile(
+            profile, secret=None if uses_local_subscription(parsed) else effective_secret
         )
+        schedule_path = self.paths.research_root / 'schedule.json'
+        if schedule_path.exists():
+            schedule = json.loads(schedule_path.read_text(encoding='utf-8'))
+            schedule['model_profile_id'] = parsed.profile_id
+            _atomic_json(schedule_path, schedule)
+        return result
 
     def save_setup(self, submitted: dict[str, Any]) -> dict[str, Any]:
         sanitized = dict(submitted)
@@ -1011,6 +1032,7 @@ class LabService:
         self._require_today_available()
         variants = self._resolve_variants(selections)
         profile = self.settings.model_profile(model_profile_id or None)
+        require_explicit_model(profile)
         secret = "" if uses_local_subscription(profile) else (self.settings.get_model_secret(profile.profile_id) or "")
         if not secret and not uses_local_subscription(profile):
             raise LabServiceError("selected model credential is unavailable")

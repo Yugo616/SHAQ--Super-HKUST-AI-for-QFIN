@@ -8,6 +8,23 @@ ROOT = Path(__file__).parents[1]
 
 
 class WorkbenchControlsTests(unittest.TestCase):
+    def test_api_prefill_synchronizes_drafts_and_preserves_reopened_fields(self):
+        result = self.node('connections.js', '''
+const fields=Object.fromEntries(['profile_id','protocol','model','secret','base_url','relay_base_url','auth_style','output_mode','maximum_context_tokens'].map(k=>[k,{value:''}]));
+fields.protocol.value='openai-responses';fields.base_url.value='https://api.openai.com/v1';
+const form={elements:fields,dataset:{},classList:{remove(){},add(){}}};
+const nodes={'#model-form':form};
+globalThis.q=s=>nodes[s]||=({dataset:{},classList:{remove(){},add(){},toggle(){}},innerHTML:''});
+globalThis.qa=()=>[];
+globalThis.state={data:{settings:{active_model_profile_id:'relay',model_profiles:[{profile_id:'relay',protocol:'openai-chat-completions',model:'relay-model',base_url:'https://relay.example/v1',auth_style:'x-api-key',output_mode:'local_validated'}]}}};
+globalThis.applyProtocolPreset=()=>{fields.auth_style.value='bearer';fields.output_mode.value='strict';fields.base_url.value=fields.protocol.value==='openai-responses'?'https://api.openai.com/v1':fields.relay_base_url.value;};
+bindModelConnections();q('#show-api-form').onclick();fields.secret.value='relay-secret';
+q('#show-api-form').onclick();const reopened=fields.auth_style.value;
+q('#api-model-options').innerHTML='old-models';fields.protocol.value='openai-responses';fields.protocol.onchange();
+console.log(JSON.stringify({reopened,model:fields.model.value,secret:fields.secret.value,url:fields.base_url.value,options:q('#api-model-options').innerHTML}));
+''')
+        self.assertEqual(result, {'reopened': 'x-api-key', 'model': '', 'secret': '', 'url': 'https://api.openai.com/v1', 'options': ''})
+
     def node(self, source, body):
         path = ROOT / 'src/shaq_daily_oracle/desktop' / source
         return json.loads(subprocess.check_output(
@@ -220,16 +237,43 @@ globalThis.api=async(name,...args)=>{calls.push([name,...args]);if(name==='save_
  const error=new Error('尚未登录');error.diagnostic={kind:'authentication',login_protocol:'codex-cli'};throw error;
 }return {ok:true}};
 globalThis.load=async()=>{};
-await connectLocalModel('codex-cli');const before=calls.map(x=>x[0]);
+globalThis.state={data:{settings:{model_profiles:[]}}};
+nodes['#local-model-form']={dataset:{protocol:'codex-cli'},classList:{toggle(){},add(){},remove(){}},elements:{model:{value:'chosen-model'}}};
+nodes['#local-model-options']={innerHTML:''};
+nodes['#model-form']={classList:{add(){}}};
+globalThis.esc=x=>x;
+await saveLocalModel();const before=calls.map(x=>x[0]);
 const protocol=nodes['#login-model'].dataset.protocol;
 await loginLocalModel();
 console.log(JSON.stringify({before,after:calls.map(x=>x[0]),protocol}));
 })();''')
         self.assertEqual(result['before'], ['save_lab_model_profile'])
         self.assertEqual(result['after'], [
-            'save_lab_model_profile', 'begin_local_model_login', 'save_lab_model_profile'
+            'save_lab_model_profile', 'begin_local_model_login', 'list_local_models'
         ])
         self.assertEqual(result['protocol'], 'codex-cli')
+
+    def test_model_picker_does_not_infer_or_save_until_user_selects(self):
+        result = self.node('connections.js', '''
+(async()=>{
+const nodes={};globalThis.q=s=>nodes[s]||={textContent:'',innerHTML:'',dataset:{},
+ classList:{toggle(){},add(){},remove(){}},elements:{model:{value:''}}};
+globalThis.qa=()=>[];globalThis.esc=x=>x;
+globalThis.state={data:{settings:{model_profiles:[]}}};globalThis.load=async()=>{};
+const calls=[];globalThis.api=async(name,...args)=>{calls.push([name,...args]);
+ return {models:[{id:'small-live',label:'Small Live'},{id:'big-live',label:'Big Live'}]}};
+await connectLocalModel('codex-cli');
+const initially=q('#local-model-form').elements.model.value;
+await saveLocalModel();
+const before=calls.map(x=>x[0]);
+q('#local-model-form').elements.model.value='small-live';
+await saveLocalModel();
+console.log(JSON.stringify({initially,before,calls}));
+})();''')
+        self.assertEqual(result['initially'], '')
+        self.assertEqual(result['before'], ['list_local_models'])
+        self.assertEqual(result['calls'][-1][0], 'save_lab_model_profile')
+        self.assertEqual(result['calls'][-1][1]['model'], 'small-live')
 
     def test_cancelled_local_login_does_not_retry_or_switch_provider(self):
         result = self.node('connections.js', '''
