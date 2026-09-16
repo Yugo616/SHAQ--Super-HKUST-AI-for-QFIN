@@ -35,7 +35,7 @@ from .research_dashboard import ResearchDashboardIndex
 from .research_labels import refresh_research_labels
 from .research_progress import ResearchProgressLog
 from .research_settings import ResearchSettingsStore
-from .settings import _atomic_json as _settings_atomic_json
+from .settings import _atomic_json as _settings_atomic_json, read_refresh_receipt
 from .skill_versions import (
     GitHubRepositoryConfig,
     GitHubSkillClient,
@@ -230,7 +230,7 @@ class LabService:
 
     def result_refresh_status(self) -> dict[str, Any]:
         try:
-            return json.loads(self._result_refresh_receipt.read_text(encoding="utf-8"))
+            return read_refresh_receipt(self._result_refresh_receipt)
         except (FileNotFoundError, json.JSONDecodeError):
             return {"status": "idle", "operation_id": "", "result": {}}
 

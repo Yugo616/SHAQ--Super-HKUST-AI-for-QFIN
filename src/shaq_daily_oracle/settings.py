@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import errno
 import os
 import sys
 import tempfile
@@ -20,6 +21,18 @@ OPENAI_KEY_NAME = "openai-api-key"
 # Windows readers briefly deny destination replacement. Keep the old document
 # intact and retry only this OS error, for at most 310 ms in total.
 WINDOWS_REPLACE_RETRY_DELAYS = (0.01, 0.02, 0.04, 0.08, 0.16)
+
+
+def read_refresh_receipt(path: Path) -> dict[str, Any]:
+    """Read a mutable status document across Windows atomic publication."""
+    for attempt in range(len(WINDOWS_REPLACE_RETRY_DELAYS) + 1):
+        try:
+            return json.loads(path.read_text(encoding='utf-8'))
+        except PermissionError as exc:
+            if (sys.platform != 'win32' or exc.errno != errno.EACCES
+                    or attempt == len(WINDOWS_REPLACE_RETRY_DELAYS)):
+                raise
+            time.sleep(WINDOWS_REPLACE_RETRY_DELAYS[attempt])
 
 
 def default_settings() -> dict[str, Any]:

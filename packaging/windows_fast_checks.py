@@ -16,6 +16,7 @@ TESTS = (
     'test_model_recovery.ExecutionRecoveryTests.test_timeout_terminates_only_own_process_tree',
     'test_model_recovery.ExecutionRecoveryTests.test_compact_tables_roundtrip_missing_null_and_all_ohlc',
     'test_model_compatibility',
+    'test_model_selection',
     'test_cli_discovery',
     'test_research_schedule',
     'test_collection_failure_state.CollectionFailureStateTests.test_child_collection_error_is_persisted_and_owned_job_lock_released',

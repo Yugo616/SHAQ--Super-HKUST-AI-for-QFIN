@@ -15,6 +15,25 @@ class ResultRecoveryTests(unittest.TestCase):
     service = test_result_refresh.ResultRefreshTests.service
     wait_status = test_result_refresh.ResultRefreshTests.wait_status
 
+    def test_windows_refresh_read_retries_publication_denial_without_fake_idle(self):
+        import errno
+        with tempfile.TemporaryDirectory() as name:
+            service = self.service(Path(name))
+            denial = PermissionError(errno.EACCES, 'publication window')
+            with patch('shaq_daily_oracle.settings.sys.platform', 'win32'), patch('shaq_daily_oracle.settings.time.sleep'), patch.object(Path, 'read_text', side_effect=[denial, '{"status":"complete"}']) as read:
+                self.assertEqual(service.result_refresh_status()['status'], 'complete')
+                self.assertEqual(read.call_count, 2)
+
+    def test_refresh_read_permanent_denial_is_bounded_not_success_or_idle(self):
+        import errno
+        from shaq_daily_oracle.settings import WINDOWS_REPLACE_RETRY_DELAYS
+        with tempfile.TemporaryDirectory() as name:
+            service = self.service(Path(name))
+            with patch('shaq_daily_oracle.settings.sys.platform', 'win32'), patch('shaq_daily_oracle.settings.time.sleep'), patch.object(Path, 'read_text', side_effect=PermissionError(errno.EACCES, 'denied')) as read:
+                with self.assertRaises(PermissionError):
+                    service.result_refresh_status()
+                self.assertEqual(read.call_count, len(WINDOWS_REPLACE_RETRY_DELAYS)+1)
+
     def test_targeted_minute_retry_does_not_refresh_labels_or_other_dates(self):
         with tempfile.TemporaryDirectory() as name:
             service = self.service(Path(name))
