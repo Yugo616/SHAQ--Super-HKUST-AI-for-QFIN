@@ -55,7 +55,7 @@ class ModelSelectionTests(unittest.TestCase):
             commands.append(command)
             Path(command[command.index('--output-last-message') + 1]).write_text('{"status":"ready"}')
             return subprocess.CompletedProcess(command, 0, '', '')
-        with patch.object(backends, '_local_cli', return_value='/codex'), patch.object(backends, 'run_model_process', side_effect=run):
+        with patch.object(backends, '_local_cli', return_value='/codex.exe'), patch.object(backends, 'run_model_process', side_effect=run):
             _, audit = backends._codex_cli_call(profile=profile, prompt='test', schema={})
         self.assertEqual(commands[0][commands[0].index('--model') + 1], 'chosen-model')
         self.assertEqual(audit.get('requested_model'), 'chosen-model')
@@ -69,7 +69,7 @@ class ModelSelectionTests(unittest.TestCase):
                 'structured_output': {'status': 'ready'},
                 'modelUsage': {'chosen-model-20260916': {'inputTokens': 5}}
             }), '')
-        with patch.object(backends, '_local_cli', return_value='/claude'), patch.object(backends, 'run_model_process', side_effect=run):
+        with patch.object(backends, '_local_cli', return_value='/claude.exe'), patch.object(backends, 'run_model_process', side_effect=run):
             _, audit = backends._claude_code_call(profile=profile, prompt='test', schema={})
         self.assertEqual(audit['response_model'], 'chosen-model-20260916')
 

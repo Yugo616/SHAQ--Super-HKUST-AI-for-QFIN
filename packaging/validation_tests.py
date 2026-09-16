@@ -30,13 +30,16 @@ def main():
     parser=argparse.ArgumentParser()
     parser.add_argument('--application',type=Path,required=True)
     parser.add_argument('--output',type=Path,required=True)
+    parser.add_argument('--lightweight',action='store_true')
     args=parser.parse_args()
     validation=Path(__file__).resolve().parents[1]
     files=verify_runtime(args.application.resolve(),validation)
     # Import the verified byte-identical copy so path-sensitive fixture checks
     # stay rooted in their isolated validation tree, never user storage.
     environment=dict(os.environ, PYTHONPATH=os.pathsep.join((str(validation/'src'),str(validation/'tests'))))
-    result=subprocess.run([sys.executable,'-m','unittest','discover','-s','tests','-v'],
+    command=([sys.executable,str(validation/'packaging/windows_fast_checks.py')]
+             if args.lightweight else [sys.executable,'-m','unittest','discover','-s','tests','-v'])
+    result=subprocess.run(command,
                           cwd=validation,env=environment)
     receipt={'status':'passed' if result.returncode==0 else 'failed',
              'application_sha':os.environ.get('SHAQ_LAYOUT_APPLICATION_SHA'),

@@ -220,7 +220,11 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}/src
         run: |
           New-Item -ItemType Directory -Force -Path dist/diagnostic | Out-Null
-          python packaging/windows_fast_checks.py 2>&1 | Tee-Object -FilePath dist/diagnostic/windows-fast-compatibility.log
+          if ($env:SHAQ_EXTERNAL_PACKAGING) {
+            python "$env:SHAQ_EXTERNAL_PACKAGING/validation_tests.py" --application "$PWD" --lightweight --output dist/diagnostic/fast-validation-tests.json 2>&1 | Tee-Object -FilePath dist/diagnostic/windows-fast-compatibility.log
+          } else {
+            python packaging/windows_fast_checks.py 2>&1 | Tee-Object -FilePath dist/diagnostic/windows-fast-compatibility.log
+          }
           $testExit = $LASTEXITCODE
           if ($testExit -ne 0) { exit $testExit }
       - name: Inspect Inno and provision verified Microsoft WebView2 only if missing
