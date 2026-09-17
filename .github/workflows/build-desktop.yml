@@ -1,377 +1,44 @@
-name: Build SHAQ Daily Oracle Lab
+name: Stage already accepted SHAQ installers
 on:
   workflow_dispatch:
     inputs:
-      target:
-        description: Complete acceptance for Windows, macOS, or all platforms at this commit
-        type: choice
-        options: [windows, windows-check, windows-layout, windows-validated, macos, macos-arm64, macos-intel, all]
-        default: windows
-      application_ref:
-        description: Exact application commit for Windows layout or validated Windows release route
+      application_sha:
+        required: true
         type: string
-      native_run_id:
-        description: Official native workflow run providing optional verified dependency wheels
+      version:
+        required: true
         type: string
-      native_artifact_id:
-        description: Official Windows artifact ID from that run
+      windows_run:
+        required: true
         type: string
-  push:
-    tags-ignore:
-      - "**"
-    paths:
-      - ".github/workflows/build-desktop.yml"
-      - "packaging/**"
-      - "src/**"
-      - "tests/**"
-      - "bundled_versions/**"
-      - "config/**"
-      - "skills/**"
-      - "decision/**"
-      - "pyproject.toml"
-      - ".gitattributes"
+      arm_run:
+        required: true
+        type: string
+      intel_run:
+        required: true
+        type: string
 permissions:
-  contents: read
+  contents: write
+  actions: read
 jobs:
-  windows-research-check:
-    if: inputs.target == 'windows-check'
-    runs-on: windows-latest
-    timeout-minutes: 10
+  stage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
     env:
-      PYTHONUTF8: '1'
-      PYTHONPATH: src
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.13'
-      - name: Install locked lightweight reliability dependencies without QuickJS or Zipline
-        run: python -m pip install --constraint packaging/requirements.lock.txt httpx openai jsonschema filelock platformdirs pyyaml pandas-market-calendars packaging
-      - name: Validate scheduler, workers, cache recovery and receipt publication
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path dist/diagnostic | Out-Null
-          python packaging/windows_fast_checks.py 2>&1 | Tee-Object -FilePath dist/diagnostic/windows-fast-compatibility.log
-          exit $LASTEXITCODE
-      - name: Retain fast gate diagnostics even on failure
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: SHAQ-Windows-fast-check
-          path: dist/diagnostic/**
-  windows-layout-diagnostic:
-    if: inputs.target == 'windows-layout'
-    runs-on: windows-latest
-    timeout-minutes: 15
-    permissions:
-      contents: read
-      actions: read
-    env:
-      PYTHONUTF8: '1'
       GH_TOKEN: ${{ github.token }}
-      APPLICATION_REF: ${{ inputs.application_ref }}
-      NATIVE_RUN_ID: ${{ inputs.native_run_id }}
-      NATIVE_ARTIFACT_ID: ${{ inputs.native_artifact_id }}
+      SHAQ_APPLICATION_SHA: ${{ inputs.application_sha }}
+      SHAQ_RELEASE_VERSION: ${{ inputs.version }}
+      WINDOWS_RUN: ${{ inputs.windows_run }}
+      ARM_RUN: ${{ inputs.arm_run }}
+      INTEL_RUN: ${{ inputs.intel_run }}
     steps:
       - uses: actions/checkout@v4
-      - name: Require explicit diagnostic source identities
-        shell: pwsh
-        run: |
-          if ($env:APPLICATION_REF -notmatch '^[a-fA-F0-9]{40}$' -or $env:NATIVE_RUN_ID -notmatch '^\d+$' -or $env:NATIVE_ARTIFACT_ID -notmatch '^\d+$') { throw 'Explicit full application SHA and official run/artifact IDs are required' }
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.application_ref }}
+          ref: ${{ inputs.application_sha }}
           path: application
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Provision ephemeral Windows runner display from supported native modes
-        run: python packaging/windows_ci_display.py --minimum-width 1520 --minimum-height 900 --output dist/diagnostic/display-preflight.json
-      - name: Read official artifact and workflow provenance
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path dist/diagnostic | Out-Null
-          gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:NATIVE_RUN_ID" > dist/diagnostic/native-run.json
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          gh api "repos/$env:GITHUB_REPOSITORY/actions/artifacts/$env:NATIVE_ARTIFACT_ID" > dist/diagnostic/native-artifact.json
-          exit $LASTEXITCODE
-      - uses: actions/download-artifact@v4
-        with:
-          artifact-ids: ${{ inputs.native_artifact_id }}
-          run-id: ${{ inputs.native_run_id }}
-          github-token: ${{ github.token }}
-          path: ${{ runner.temp }}/native-layout-dependencies
-          merge-multiple: true
-      - name: Verify reused native wheels and install locked dependencies
-        shell: pwsh
-        run: |
-          python packaging/windows_layout_dependencies.py --application "$PWD/application" --artifact-root "$env:RUNNER_TEMP/native-layout-dependencies" --run-metadata dist/diagnostic/native-run.json --artifact-metadata dist/diagnostic/native-artifact.json --run-id $env:NATIVE_RUN_ID --artifact-id $env:NATIVE_ARTIFACT_ID --output dist/diagnostic/dependency-reuse.json 2>&1 | Tee-Object -FilePath dist/diagnostic/dependency-reuse.log
-          exit $LASTEXITCODE
-      - name: Run external geometry harness against unchanged application source
-        shell: pwsh
-        run: |
-          $validationRoot = "$PWD"
-          $env:PYTHONPATH = "$PWD/application/src"
-          $env:SHAQ_LAYOUT_APPLICATION_SHA = (git -C application rev-parse HEAD)
-          $env:SHAQ_LAYOUT_VALIDATION_SHA = $env:GITHUB_SHA
-          Set-Location application
-          python "$validationRoot/tests/native_layout_check.py" --output "$validationRoot/dist/diagnostic/desktop-layout.json" 2>&1 | Tee-Object -FilePath "$validationRoot/dist/diagnostic/desktop-layout.log"
-          $layoutExit = $LASTEXITCODE
-          if (git status --porcelain) { throw 'Diagnostic modified the frozen application checkout' }
-          exit $layoutExit
-      - name: Retain geometry and dependency provenance even on failure
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: SHAQ-Windows-layout-diagnostic
-          path: dist/diagnostic/**
-  native:
-    if: inputs.target != 'windows-check' && inputs.target != 'windows-layout'
-    permissions:
-      contents: read
-      actions: read
-    env:
-      PYTHONUTF8: '1'
-      GH_TOKEN: ${{ github.token }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include: ${{ fromJSON((inputs.target == 'windows' || inputs.target == 'windows-validated') && '[{"runner":"windows-latest","platform":"Windows-x64"}]' || inputs.target == 'macos-arm64' && '[{"runner":"macos-15","platform":"macOS-Apple-Silicon","arch":"arm64"}]' || inputs.target == 'macos-intel' && '[{"runner":"macos-15-intel","platform":"macOS-Intel","arch":"x86_64"}]' || inputs.target == 'macos' && '[{"runner":"macos-15","platform":"macOS-Apple-Silicon","arch":"arm64"},{"runner":"macos-15-intel","platform":"macOS-Intel","arch":"x86_64"}]' || '[{"runner":"windows-latest","platform":"Windows-x64"},{"runner":"macos-15","platform":"macOS-Apple-Silicon","arch":"arm64"},{"runner":"macos-15-intel","platform":"macOS-Intel","arch":"x86_64"}]') }}
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.sha }}
-      - name: Stage immutable external layout harness outside application checkout
-        if: inputs.target == 'windows-validated'
-        shell: pwsh
-        env:
-          APPLICATION_REF: ${{ inputs.application_ref }}
-          NATIVE_RUN_ID: ${{ inputs.native_run_id }}
-          NATIVE_ARTIFACT_ID: ${{ inputs.native_artifact_id }}
-        run: |
-          if ($env:APPLICATION_REF -notmatch '^[a-fA-F0-9]{40}$') { throw 'Validated Windows route requires an explicit full application SHA' }
-          if (($env:NATIVE_RUN_ID -or $env:NATIVE_ARTIFACT_ID) -and ($env:NATIVE_RUN_ID -notmatch '^\d+$' -or $env:NATIVE_ARTIFACT_ID -notmatch '^\d+$')) { throw 'Dependency reuse requires both official numeric run and artifact IDs' }
-          $validationSha = (git rev-parse HEAD).Trim()
-          if ($validationSha -ne $env:GITHUB_SHA) { throw 'Validation checkout identity mismatch' }
-          $harnessRoot = Join-Path $env:RUNNER_TEMP 'shaq-external-layout'
-          New-Item -ItemType Directory -Force -Path $harnessRoot | Out-Null
-          $archive = Join-Path $env:RUNNER_TEMP 'shaq-external-layout.tar'
-          git archive --format=tar --output=$archive $validationSha
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          tar -xf $archive -C $harnessRoot
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          "SHAQ_LAYOUT_VALIDATION_SHA=$validationSha" | Out-File -FilePath $env:GITHUB_ENV -Append
-          "SHAQ_EXTERNAL_LAYOUT_HARNESS=$harnessRoot/tests/native_layout_check.py" | Out-File -FilePath $env:GITHUB_ENV -Append
-          "SHAQ_EXTERNAL_DISPLAY_PREFLIGHT=$harnessRoot/packaging/windows_ci_display.py" | Out-File -FilePath $env:GITHUB_ENV -Append
-          "SHAQ_EXTERNAL_PACKAGING=$harnessRoot/packaging" | Out-File -FilePath $env:GITHUB_ENV -Append
-      - uses: actions/checkout@v4
-        if: inputs.target == 'windows-validated'
-        with:
-          ref: ${{ inputs.application_ref }}
-      - name: Verify frozen application checkout and record both identities
-        if: inputs.target == 'windows-validated'
-        shell: pwsh
-        env:
-          APPLICATION_REF: ${{ inputs.application_ref }}
-        run: |
-          $applicationSha = (git rev-parse HEAD).Trim()
-          if ($applicationSha -ne $env:APPLICATION_REF -or (git status --porcelain)) { throw 'Application must be the exact clean requested commit' }
-          "SHAQ_LAYOUT_APPLICATION_SHA=$applicationSha" | Out-File -FilePath $env:GITHUB_ENV -Append
-          New-Item -ItemType Directory -Force -Path dist/diagnostic | Out-Null
-          $geometry = Join-Path (Split-Path $env:SHAQ_EXTERNAL_LAYOUT_HARNESS) 'native_geometry.py'
-          $extraHashes = @{}
-          Get-ChildItem "$env:SHAQ_EXTERNAL_PACKAGING/*.py" | ForEach-Object { $extraHashes[$_.Name] = (Get-FileHash $_.FullName -Algorithm SHA256).Hash }
-          @{application_sha=$applicationSha;validation_sha=$env:SHAQ_LAYOUT_VALIDATION_SHA;layout_sha256=(Get-FileHash $env:SHAQ_EXTERNAL_LAYOUT_HARNESS -Algorithm SHA256).Hash;geometry_sha256=(Get-FileHash $geometry -Algorithm SHA256).Hash;display_preflight_sha256=(Get-FileHash $env:SHAQ_EXTERNAL_DISPLAY_PREFLIGHT -Algorithm SHA256).Hash;external_packaging_sha256=$extraHashes} | ConvertTo-Json | Out-File -Encoding utf8 dist/diagnostic/external-layout-source.json
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.13'
-      - name: Provision Windows display before native compilation
-        if: runner.os == 'Windows'
-        shell: pwsh
-        env:
-          DISPLAY_PREFLIGHT: ${{ inputs.target == 'windows-validated' && env.SHAQ_EXTERNAL_DISPLAY_PREFLIGHT || 'packaging/windows_ci_display.py' }}
-        run: |
-          python $env:DISPLAY_PREFLIGHT --minimum-width 1520 --minimum-height 900 --output dist/diagnostic/display-preflight.json
-          exit $LASTEXITCODE
-      - name: Read pinned native updater toolchain
-        id: native-config
-        shell: bash
-        run: python -c 'import json; c=json.load(open("packaging/updater-toolchain.json")); print("dotnet="+c["dotnet_sdk_version"]); print("velopack="+c["velopack_version"]); print("candidate="+c["candidate_version"])' >> "$GITHUB_OUTPUT"
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: ${{ steps.native-config.outputs.dotnet }}
-      - name: Install pinned native updater tool
-        run: dotnet tool install --global vpk --version ${{ steps.native-config.outputs.velopack }}
-      - name: Validate source privacy and eight Skills before building
-        id: source-check
-        run: python scripts/validate_release.py
-      - name: Install pinned lightweight Windows compatibility dependencies
-        if: runner.os == 'Windows'
-        run: python -m pip install --constraint packaging/requirements.lock.txt httpx==0.28.1 packaging==26.3 platformdirs==4.11.8 openai jsonschema filelock pyyaml pandas-market-calendars
-      - name: Run lightweight Windows compatibility tests before native compilation
-        if: runner.os == 'Windows'
-        shell: pwsh
-        env:
-          PYTHONPATH: ${{ github.workspace }}/src
-        run: |
-          New-Item -ItemType Directory -Force -Path dist/diagnostic | Out-Null
-          if ($env:SHAQ_EXTERNAL_PACKAGING) {
-            python "$env:SHAQ_EXTERNAL_PACKAGING/validation_tests.py" --application "$PWD" --lightweight --output dist/diagnostic/fast-validation-tests.json 2>&1 | Tee-Object -FilePath dist/diagnostic/windows-fast-compatibility.log
-          } else {
-            python packaging/windows_fast_checks.py 2>&1 | Tee-Object -FilePath dist/diagnostic/windows-fast-compatibility.log
-          }
-          $testExit = $LASTEXITCODE
-          if ($testExit -ne 0) { exit $testExit }
-      - name: Inspect Inno and provision verified Microsoft WebView2 only if missing
-        if: runner.os == 'Windows'
-        run: python packaging/windows_delivery.py --preflight-only
-      - uses: ilammy/msvc-dev-cmd@v1
-        if: runner.os == 'Windows'
-        with:
-          arch: x64
-      - uses: msys2/setup-msys2@v2
-        id: msys2
-        if: runner.os == 'Windows'
-        with:
-          install: mingw-w64-x86_64-gcc
-          update: false
-      - name: Enable MinGW-W64 for the upstream QuickJS CPython 3.13 source build
-        if: runner.os == 'Windows'
-        shell: pwsh
-        env:
-          MSYS2_LOCATION: ${{ steps.msys2.outputs.msys2-location }}
-        run: |
-          $prefix = Join-Path $env:MSYS2_LOCATION 'mingw64'
-          "SHAQ_MINGW_PREFIX=$prefix" | Out-File -FilePath $env:GITHUB_ENV -Append
-      - name: Verify actual macOS architecture
-        if: runner.os == 'macOS'
-        run: test "$(uname -m)" = "${{ matrix.arch }}"
-      - name: Build native no-LZO dependencies then install locked application
-        if: inputs.target != 'windows-validated' || inputs.native_artifact_id == ''
-        run: python packaging/build_native.py
-      - name: Read official completed native dependency provenance
-        if: inputs.target == 'windows-validated' && inputs.native_artifact_id != ''
-        shell: pwsh
-        env:
-          NATIVE_RUN_ID: ${{ inputs.native_run_id }}
-          NATIVE_ARTIFACT_ID: ${{ inputs.native_artifact_id }}
-        run: |
-          gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:NATIVE_RUN_ID" > dist/diagnostic/native-run.json
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          gh api "repos/$env:GITHUB_REPOSITORY/actions/artifacts/$env:NATIVE_ARTIFACT_ID" > dist/diagnostic/native-artifact.json
-          exit $LASTEXITCODE
-      - uses: actions/download-artifact@v4
-        if: inputs.target == 'windows-validated' && inputs.native_artifact_id != ''
-        with:
-          artifact-ids: ${{ inputs.native_artifact_id }}
-          run-id: ${{ inputs.native_run_id }}
-          github-token: ${{ github.token }}
-          path: ${{ runner.temp }}/native-release-dependencies
-          merge-multiple: true
-      - name: Verify and restore native dependencies with complete distribution provenance
-        if: inputs.target == 'windows-validated' && inputs.native_artifact_id != ''
-        shell: pwsh
-        env:
-          NATIVE_RUN_ID: ${{ inputs.native_run_id }}
-          NATIVE_ARTIFACT_ID: ${{ inputs.native_artifact_id }}
-        run: |
-          python "$env:SHAQ_EXTERNAL_PACKAGING/windows_release_dependencies.py" --application "$PWD" --artifact-root "$env:RUNNER_TEMP/native-release-dependencies" --run-metadata dist/diagnostic/native-run.json --artifact-metadata dist/diagnostic/native-artifact.json --run-id $env:NATIVE_RUN_ID --artifact-id $env:NATIVE_ARTIFACT_ID --output dist/diagnostic/release-dependency-reuse.json
-          exit $LASTEXITCODE
-      - name: Validate all application tests
-        if: inputs.target != 'windows-validated'
-        run: python -m unittest discover -s tests -v
-      - name: Validate reviewed tests against identical frozen application runtime
-        if: inputs.target == 'windows-validated'
-        shell: pwsh
-        run: |
-          python "$env:SHAQ_EXTERNAL_PACKAGING/validation_tests.py" --application "$PWD" --output "$PWD/dist/diagnostic/validation-tests.json"
-          exit $LASTEXITCODE
-      - name: Check native desktop layout at normal and narrow widths
-        if: inputs.target != 'windows-validated'
-        run: python tests/native_layout_check.py --output dist/diagnostic/desktop-layout.json
-      - name: Check frozen application with reviewed external native layout harness
-        if: inputs.target == 'windows-validated'
-        shell: pwsh
-        env:
-          PYTHONPATH: ${{ github.workspace }}/src
-        run: |
-          python $env:SHAQ_EXTERNAL_LAYOUT_HARNESS --output dist/diagnostic/desktop-layout.json 2>&1 | Tee-Object -FilePath dist/diagnostic/desktop-layout.log
-          $layoutExit = $LASTEXITCODE
-          if ((git rev-parse HEAD).Trim() -ne $env:SHAQ_LAYOUT_APPLICATION_SHA -or (git status --porcelain)) { throw 'Layout validation changed frozen application source' }
-          exit $layoutExit
-      - name: Full installed native delta update and replay acceptance
-        if: inputs.target != 'windows-validated'
-        run: python packaging/installed_update_acceptance.py
-      - name: Full installed frozen-app acceptance with bounded pre-apply setup recovery
-        if: inputs.target == 'windows-validated'
-        shell: pwsh
-        env:
-          PYTHONPATH: ${{ github.workspace }}/src
-        run: |
-          python "$env:SHAQ_EXTERNAL_PACKAGING/installed_update_acceptance.py" --application "$PWD" --recover-initial-admission
-          $acceptanceExit = $LASTEXITCODE
-          if ((git rev-parse HEAD).Trim() -ne $env:SHAQ_LAYOUT_APPLICATION_SHA -or (git status --porcelain)) { throw 'Installed validation changed frozen application source' }
-          exit $acceptanceExit
-      - name: Collect complete Windows delivery acceptance, then fail on any unsuccessful stage
-        if: ${{ success() && runner.os == 'Windows' && steps.source-check.outcome == 'success' }}
-        shell: pwsh
-        env:
-          SHAQ_BUILD_VERSION: ${{ steps.native-config.outputs.candidate }}
-          SHAQ_BUILD_GITHUB_TOKEN: ${{ github.token }}
-          SHAQ_REUSE_CANDIDATE: ${{ github.workspace }}/dist/candidate/SHAQ Daily Oracle Lab
-        run: .\packaging\build_windows.ps1
-      - name: Build macOS disk image
-        if: runner.os == 'macOS'
-        env:
-          SHAQ_BUILD_VERSION: ${{ steps.native-config.outputs.candidate }}
-          SHAQ_BUILD_GITHUB_TOKEN: ${{ github.token }}
-          SHAQ_REUSE_CANDIDATE: ${{ github.workspace }}/dist/candidate/SHAQ Daily Oracle Lab.app
-        run: zsh packaging/build_macos.sh
-      - name: Install from DMG, settle both methods, reopen and inspect native window
-        if: runner.os == 'macOS'
-        run: |
-          MOUNT_POINT="$RUNNER_TEMP/shaq-dmg"
-          INSTALL_ROOT="$RUNNER_TEMP/shaq-applications"
-          mkdir -p "$MOUNT_POINT" "$INSTALL_ROOT"
-          hdiutil attach -nobrowse -mountpoint "$MOUNT_POINT" "dist/SHAQ-Daily-Oracle-Lab-${{ matrix.platform }}.dmg"
-          ditto "$MOUNT_POINT/SHAQ Daily Oracle Lab.app" "$INSTALL_ROOT/SHAQ Daily Oracle Lab.app"
-          hdiutil detach "$MOUNT_POINT"
-          "$INSTALL_ROOT/SHAQ Daily Oracle Lab.app/Contents/MacOS/SHAQ Daily Oracle Lab" --smoke --smoke-output "$PWD/dist/installed-smoke.json"
-          python packaging/worker_protocol_acceptance.py "$INSTALL_ROOT/SHAQ Daily Oracle Lab.app/Contents/MacOS/SHAQ Daily Oracle Lab" --output dist/installed-worker-protocol.json
-          python -c 'import subprocess,sys; subprocess.run(sys.argv[1:],check=True,timeout=60)' "$INSTALL_ROOT/SHAQ Daily Oracle Lab.app/Contents/MacOS/SHAQ Daily Oracle Lab" --gui-smoke "$PWD/dist/installed-gui.json"
-          codesign --verify --deep --strict "$INSTALL_ROOT/SHAQ Daily Oracle Lab.app"
-          python packaging/audit_payload.py "$INSTALL_ROOT/SHAQ Daily Oracle Lab.app" --output dist/installed-native-audit.json
-          find "$INSTALL_ROOT/SHAQ Daily Oracle Lab.app" -depth -delete
-          test ! -e "$INSTALL_ROOT/SHAQ Daily Oracle Lab.app"
-      - name: Apply final Mac delta from verified actually published disk image
-        if: runner.os == 'macOS'
-        env:
-          SHAQ_BUILD_GITHUB_TOKEN: ${{ github.token }}
-        run: python packaging/public_base_update_acceptance.py --feed dist/update-feed --target-version ${{ steps.native-config.outputs.candidate }} --output dist/public-base-update.json
-      - name: Retain installers, checksums, provenance, native sources and acceptance evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: SHAQ-Daily-Oracle-Lab-${{ matrix.platform }}
-          path: |
-            dist/*.dmg
-            dist/*Setup.exe
-            dist/*.sha256
-            dist/*.json
-            dist/public-base-update*.log
-            dist/native/*.json
-            dist/diagnostic/**
-            dist/update-feed/**
-            dist/installed-update/**
-            build/third-party/**
-            build/license-sources/*.tar.gz
-            build/native-dependencies/sources/*.tar.gz
-            build/native-dependencies/wheel-sha256.json
-            build/native-dependencies/mingw-toolchain.json
-            build/native-dependencies/hdf5-diagnostic-map.json
-            build/native-dependencies/wheels/*.whl
+      - name: Verify native job provenance and stage existing packages without rebuilding
+        run: python packaging/publish_accepted_drafts.py
