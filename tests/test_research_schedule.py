@@ -169,6 +169,7 @@ class ResearchScheduleTests(unittest.TestCase):
             destination.parent.mkdir(parents=True)
             destination.write_bytes(b'existing service definition')
             with patch.object(schedule.sys, 'platform', 'darwin'), \
+                 patch.object(schedule.os, 'getuid', return_value=501, create=True), \
                  patch.object(Path, 'home', return_value=root), \
                  patch.object(schedule.subprocess, 'run', return_value=subprocess.CompletedProcess([],0,b'',b'')) as external:
                 for start in ('08:30','08:35'):
