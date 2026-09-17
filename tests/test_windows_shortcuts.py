@@ -43,4 +43,4 @@ class WindowsShortcutTests(unittest.TestCase):
             self.assertEqual((links/'Other.lnk').read_bytes(),before)
             from shaq_daily_oracle.windows_shortcuts import _shell_link
             actual=_shell_link(links/'Example Lab.lnk')
-            self.assertEqual(Path(actual),exe)
+            self.assertTrue(Path(actual).samefile(exe))

@@ -12,6 +12,8 @@ import uuid
 def _shell_link(path: Path, target: Path | None = None) -> str:
     """Read or update a .lnk without resolving it or executing its target."""
     ole = ctypes.OleDLL('ole32')
+    ole.CoUninitialize.argtypes = []
+    ole.CoUninitialize.restype = None
     pointer = ctypes.c_void_p
     guid_type = ctypes.c_ubyte * 16
 
