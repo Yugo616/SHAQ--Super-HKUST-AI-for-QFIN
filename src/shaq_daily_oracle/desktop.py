@@ -732,7 +732,7 @@ def launch_desktop(*, smoke_output: Path | None = None) -> int:
                 if not window.evaluate_js(f"Boolean(document.querySelector('#{page_name}.active').textContent.trim())"):
                     raise RuntimeError(f'Native page failed to render: {page_name}')
                 result['pages'].append(page_name)
-            window.evaluate_js("document.querySelector('#history tr[data-batch]').click()")
+            window.evaluate_js("document.querySelector('#history tr[data-result-symbol]').click()")
             replay_deadline = time.monotonic() + 5
             while time.monotonic() < replay_deadline:
                 if window.evaluate_js("Boolean(document.querySelector('#replay-modal').open && document.querySelector('#candidate-analysis')?.textContent.includes('AAPL'))"):
@@ -774,7 +774,7 @@ def launch_desktop(*, smoke_output: Path | None = None) -> int:
                     "document.querySelector('#candidate-analysis')?.textContent.includes('MSFT')"))
             window.evaluate_js("document.querySelector('#replay-close').click()")
             closed = not window.evaluate_js("document.querySelector('#replay-modal').open")
-            window.evaluate_js("document.querySelector('#history tr[data-batch]').click()")
+            window.evaluate_js("document.querySelector('#history tr[data-result-symbol]').click()")
             reopen_deadline = time.monotonic() + 5
             while time.monotonic() < reopen_deadline:
                 reopened = bool(window.evaluate_js(
