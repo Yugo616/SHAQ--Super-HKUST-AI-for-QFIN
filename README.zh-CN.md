@@ -14,7 +14,7 @@ SHAQ 把六个专业研究领域、反方审查和无需券商的虚拟账户放
 
 ## 下载软件
 
-下表为 **0.7.7** 主下载入口。只有对应平台页面出现匹配的安装包、校验值和验收记录后，该平台版本才可用；附件缺失时，不要把源码页面当作发布证明，请使用下方明确标注的上一版入口。
+下表为 **Windows 0.7.71 / macOS 0.7.7** 主下载入口。只有对应平台页面出现匹配的安装包、校验值和验收记录后，该平台版本才可用；附件缺失时，不要把源码页面当作发布证明，请使用下方明确标注的上一版入口。
 
 本次整理每日结果：整组勾选、逐股盈亏、连续余额图及真实模型名。研究记录采用08:50前冻结证据、常规盘开盘前完成分析的规则；原预测和时间戳保留。详见[时间与回放规则](docs/research-timing.md)。
 
@@ -26,7 +26,7 @@ SHAQ 把六个专业研究领域、反方审查和无需券商的虚拟账户放
 
 | 你的电脑 | 下载入口 |
 |---|---|
-| Windows 10/11，x64 | [Windows 0.7.7 安装程序](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.7-windows) |
+| Windows 10/11，x64 | [Windows 0.7.71 安装程序](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.71-windows) |
 | M 系列 Mac，macOS 15 或以上 | [Apple Silicon 0.7.7 DMG](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.7-macos) |
 | Intel Mac，macOS 15 或以上 | [Intel 0.7.7 DMG](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.7-macos) |
 

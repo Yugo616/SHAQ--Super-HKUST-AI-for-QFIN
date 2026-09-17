@@ -4,9 +4,10 @@ from __future__ import annotations
 import errno
 import re
 import subprocess
+import sqlite3
 
 
-_TRANSIENT = {'timeout', 'connection_error', 'rate_limited', 'provider_unavailable'}
+_TRANSIENT = {'timeout', 'connection_error', 'rate_limited', 'provider_unavailable', 'database_busy'}
 _KINDS = _TRANSIENT | {'resource_exhausted', 'auth_error', 'no_data', 'provider_error',
                        'worker_crash', 'protocol_error'}
 _STAGES = {'startup', 'history', 'option_surface', 'ping'}
@@ -62,7 +63,11 @@ def failure_diagnostic(exc, stage):
     codes = sanitize_diagnostic({'errno': number, 'curl_code': curl_code, 'http_status': status})
     number, curl_code, status = (codes.get(key) for key in ('errno', 'curl_code', 'http_status'))
     kind = 'provider_error'
-    if number in {errno.EMFILE, errno.ENFILE}:
+    if isinstance(exc, sqlite3.OperationalError) and (
+            getattr(exc, 'sqlite_errorcode', 0) & 255 in {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED}
+            or str(exc).lower() in {'database is locked', 'database table is locked'}):
+        kind = 'database_busy'
+    elif number in {errno.EMFILE, errno.ENFILE}:
         kind = 'resource_exhausted'
     elif status in {401, 403}:
         kind = 'auth_error'

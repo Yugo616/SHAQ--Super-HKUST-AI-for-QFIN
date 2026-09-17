@@ -25,6 +25,29 @@ for(const file of scripts)vm.runInContext(fs.readFileSync(path.join(desktop,file
 
 
 class ReviewViewTests(unittest.TestCase):
+    def test_history_retains_resume_action_for_old_failed_batch(self):
+        value = self.bundle(r'''
+vm.runInContext(`state.data={versions:[],jobs:[{job_id:'old',batch_id:'LAB-old',
+ started_at_et:'2026-09-14T08:00:00-04:00',status:'partial_failure'}],
+ dashboard:{daily_results:[],virtual_accounts:{}}};renderHistory()`,ctx);
+console.log(JSON.stringify(nodes['#history'].innerHTML));
+''')
+        self.assertIn('未完成分析', value)
+        self.assertIn('data-history-resume="LAB-old"', value)
+
+    def test_pending_reconciliation_keeps_amounts_with_clear_freshness_label(self):
+        value = self.bundle(r'''
+vm.runInContext(`state.data={versions:[],jobs:[],dashboard:{daily_results:[
+ {batch_id:'b',variant_key:'team/main',trade_date:'2026-09-16',status:'empty',predictions:[]}],
+ virtual_accounts:{accounts:[],results:[{batch_id:'b',variant_key:'team/main',status:'empty',
+ net_pnl:0,account_balance:10000,reconciliation_pending:true}]}}};renderHistory()`,ctx);
+console.log(JSON.stringify(nodes['#history'].innerHTML));
+''')
+        self.assertIn('$10,000.00', value)
+        self.assertIn('$0.00', value)
+        self.assertIn('上次结算', value)
+        self.assertIn('重新核对', value)
+
     def test_history_mounts_comparison_once_per_frozen_record_not_per_stock(self):
         value = self.bundle(r'''
 const inputs=[],bars=[],calls=[];

@@ -216,9 +216,10 @@ class LabService:
                 except Exception as exc:
                     # Collection receipts already exist. Recover local account
                     # reconciliation without calling the provider again.
+                    from .data_retry import failure_diagnostic
                     result['stage_failures'] = [{
                         'stage': 'account_reconciliation', 'error_type': type(exc).__name__,
-                        'message': str(exc), 'diagnostic': getattr(exc, 'diagnostic', {}),
+                        'message': str(exc), 'diagnostic': failure_diagnostic(exc, 'account_reconciliation'),
                     }]
                 return result
         except LockTimeout:
@@ -412,9 +413,10 @@ class LabService:
             finish()
         except Exception as exc:
             clear_stage(stage)
+            from .data_retry import failure_diagnostic
             result['stage_failures'].append({
                 'stage': stage, 'error_type': type(exc).__name__, 'message': str(exc),
-                'diagnostic': getattr(exc, 'diagnostic', {}),
+                'diagnostic': failure_diagnostic(exc, stage),
                 'batch_ids': sorted(batch_ids) if batch_ids is not None else None,
                 'eligible_dates': sorted(minute_dates) if minute_dates is not None else None,
                 'daily_eligible_dates': sorted(daily_dates) if daily_dates is not None else None,

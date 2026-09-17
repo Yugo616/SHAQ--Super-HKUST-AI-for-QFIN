@@ -59,8 +59,6 @@ const SHAQProgress = (() => {
   function currentJobs(jobs, now) {
     const day = etDay(now);
     return jobs.filter(job => active(job) ||
-      (job.batch_id && ['partial_failure','failed'].includes(job.status) &&
-       !jobs.some(other=>other.batch_id===job.batch_id&&other.status==='complete')) ||
       (day && etDay(job.started_at_et) === day))
       .sort((a,b) => Number(active(b))-Number(active(a)) || (Date.parse(b.started_at_et)||0)-(Date.parse(a.started_at_et)||0));
   }

@@ -85,20 +85,21 @@ const assert=require('node:assert/strict');
 const jobs=[{job_id:'old',batch_id:'old-batch',status:'partial_failure',started_at_et:'2026-09-01T08:00:00-04:00',variant_progress:{'team/main':'failed'}},
  {job_id:'today',status:'complete',started_at_et:'2026-09-15T08:00:00-04:00',variant_progress:{'team/main':'complete'}}];
 const html=ui.progressHtml(jobs,[{author:'team',version_id:'main',method_name:'独立证据门禁版'}],'2026-09-15T09:00:00-04:00');
-assert.match(html,/历史未完成/);
+assert.doesNotMatch(html,/历史未完成|data-progress-job="old"/);
 const today=html.slice(html.indexOf('data-progress-job="today"'));
 assert.match(today,/独立证据门禁版/,'a completed batch must still name its versions');
 assert.match(today,/<progress/);
 """)
 
-    def test_failed_original_batch_remains_recoverable_after_its_trading_day(self):
+    def test_old_failed_batch_is_not_today_but_can_be_rendered_for_history(self):
         self.run_js(r"""
 const assert=require('node:assert/strict');
 const job={job_id:'old',batch_id:'LAB-old',status:'partial_failure',
  started_at_et:'2026-09-01T08:00:00-04:00',variant_progress:{'team/main':'failed'}};
 const html=ui.progressHtml([job],[],'2026-09-15T08:00:00-04:00');
-assert.match(html,/恢复原批次/);
-assert.match(html,/data-progress-retry="old"/);
+assert.doesNotMatch(html,/data-progress-retry="old"/);
+const historical=ui.progressHtml([job],[],'2026-09-01T12:00:00-04:00');
+assert.match(historical,/data-progress-retry="old"/);
 """)
     def test_workbench_render_applies_backend_guard_and_shows_reason(self):
         root = Path(__file__).resolve().parents[1] / 'src/shaq_daily_oracle/desktop'

@@ -13,6 +13,23 @@ from shaq_daily_oracle.lab_service import LabService
 
 
 class ResultRefreshTests(unittest.TestCase):
+    def test_database_lock_schedules_retry_without_repeating_daily_labels(self):
+        import sqlite3
+        with tempfile.TemporaryDirectory() as name:
+            service = self.service(Path(name))
+            with patch('shaq_daily_oracle.lab_service.refresh_research_labels', return_value={
+                    'refreshed_batches': ['LAB-saved'], 'failures': []}) as labels, \
+                    patch.object(LabService, '_refresh_minute_accounts', side_effect=[
+                        sqlite3.OperationalError('database is locked'),
+                        {'refreshed_dates': [], 'failures': []}]):
+                service.start_result_refresh(manual=True)
+                failed = self.wait_status(service, {'partial_failure'})
+                self.assertIsNotNone(failed['next_retry_at'])
+                service.start_result_refresh(manual=True, retry_failed_only=True)
+                final = self.wait_status(service, {'complete'})
+                self.assertEqual(labels.call_count, 1)
+                self.assertEqual(final['result']['refreshed_batches'], ['LAB-saved'])
+
     def service(self, root: Path) -> LabService:
         self.assertTrue(hasattr(LabService, "start_result_refresh"),
                         "Lab service needs an asynchronous result refresh operation")

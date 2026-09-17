@@ -182,7 +182,7 @@ const SHAQAccounts = (() => {
     const y=point=>190-(point.equity-lo)/(hi-lo)*155;
     const axis=dates.map((date,i)=>i===0||i===dates.length-1||i%Math.max(1,Math.ceil(dates.length/7))===0?`<text x="${x({date})}" y="219" text-anchor="middle">${e(date)}</text>`:'').join('');
     const grid=[0,.5,1].map(f=>{const price=lo+(hi-lo)*f,py=y({equity:price});return `<line x1="85" y1="${py}" x2="840" y2="${py}" stroke="#e5e7eb"/><text x="73" y="${py+4}" text-anchor="end">${usd(price)}</text>`}).join('');
-    const legend=`<div class="balance-legend">${accounts.map((account,index)=>`<span><i style="background:${colors[index%colors.length]}"></i>${e(account.method_name||account.label||'未标明版本')}</span>`).join('')}</div>`;
+    const legend=`<div class="balance-legend">${accounts.map((account,index)=>`<span><i style="background:${colors[index%colors.length]}"></i>${e(account.method_name||account.label||'未标明版本')}${account.curve?.length===1?'（仅有一天结算记录）':''}</span>`).join('')}</div>`;
     return `<h3>余额变化</h3>${legend}<svg class="pnl-chart" viewBox="0 0 900 250" role="img" aria-label="各版本余额变化（收盘净值）；纵轴美元余额，横轴交易日期"><text x="85" y="16">余额（美元）</text>${grid}${accounts.map((account,index)=>`<polyline fill="none" stroke="${colors[index%colors.length]}" stroke-width="2.5" points="${(account.curve||[]).map(point=>`${x(point)},${y(point)}`).join(' ')}"/>${(account.curve||[]).map(point=>`<circle cx="${x(point)}" cy="${y(point)}" r="4" fill="${colors[index%colors.length]}"><title>${e(account.method_name || account.label)} ${e(point.date)} ${usd(point.equity)}</title></circle>`).join('')}`).join('')}${axis}<text x="450" y="246" text-anchor="middle">日期（交易日）</text></svg>`;
   }
 

@@ -14,7 +14,7 @@ SHAQ brings six specialist research domains, adversarial review and a brokerless
 
 ## Download
 
-The primary downloads below target **0.7.7**. A platform is available only when its page contains the matching installer, checksum and acceptance record. If those assets are absent, do not treat this source page as a release announcement; use the clearly labelled previous release below.
+The primary downloads below target **Windows 0.7.71 / macOS 0.7.7**. A platform is available only when its page contains the matching installer, checksum and acceptance record. If those assets are absent, do not treat this source page as a release announcement; use the clearly labelled previous release below.
 
 This update groups daily selections, separates per-stock P&L from daily totals, connects counted balance history and displays recorded model names. Research evidence must be frozen by 08:50 ET and inference finished before the regular session opens; original forecasts and timestamps remain intact. See the [timing and replay policy](docs/research-timing.md).
 
@@ -26,7 +26,7 @@ In 0.7.3, model calls have a configurable 600-second total deadline and one tran
 
 | Your computer | Download |
 |---|---|
-| Windows 10/11, x64 | [Windows 0.7.7 installer](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.7-windows) |
+| Windows 10/11, x64 | [Windows 0.7.71 installer](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.71-windows) |
 | Mac with Apple Silicon (M series), macOS 15+ | [Apple Silicon 0.7.7 DMG](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.7-macos) |
 | Intel Mac, macOS 15+ | [Intel 0.7.7 DMG](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.7-macos) |
 

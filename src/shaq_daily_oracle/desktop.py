@@ -5,6 +5,7 @@ import json
 import os
 import socket
 import sys
+import subprocess
 import tempfile
 import webbrowser
 from contextlib import nullcontext
@@ -658,6 +659,15 @@ def _bind_gui_smoke_fixture(bridge, fixture_state, fixture_detail):
 
 
 def launch_desktop(*, smoke_output: Path | None = None) -> int:
+    if sys.platform == 'win32' and getattr(sys, 'frozen', False) and smoke_output is None:
+        # Upgrade from an installer created under another user must not leave
+        # broken links. No new shortcuts or user-data files are created here.
+        try:
+            from .windows_shortcuts import repair_shortcuts
+            repair_shortcuts(Path(sys.executable))
+        except (OSError, ValueError, subprocess.SubprocessError):
+            import logging
+            logging.getLogger(__name__).warning('Could not repair application shortcuts')
     try:
         import webview  # type: ignore
     except ImportError as exc:

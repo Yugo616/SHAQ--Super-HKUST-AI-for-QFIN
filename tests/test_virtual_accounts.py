@@ -9,6 +9,25 @@ from pathlib import Path
 
 
 class VirtualAccountTests(unittest.TestCase):
+    def test_refresh_pending_preserves_last_settlement_without_mutating_files(self):
+        api = self.api()
+        for empty in (False, True):
+            with self.subTest(empty=empty), tempfile.TemporaryDirectory() as tmp:
+                store = api.AccountStore(Path(tmp))
+                store.activate(api.AccountRules(), '2026-09-09T07:00:00-04:00')
+                row = self.row(**({'predictions': []} if empty else {}))
+                saved = store.refresh([row])
+                before = {str(p): p.read_bytes() for p in Path(tmp).rglob('*.json')}
+                changed = dict(row, label='Renamed method')
+                view = store.view([changed])
+                self.assertTrue(view['reconciliation_pending'])
+                result = view['results'][0]
+                self.assertTrue(result['reconciliation_pending'])
+                for field in ('net_pnl', 'account_balance', 'trades', 'orders', 'status'):
+                    self.assertEqual(result[field], saved['results'][0][field])
+                self.assertEqual(view['accounts'], saved['accounts'])
+                self.assertEqual(before, {str(p): p.read_bytes() for p in Path(tmp).rglob('*.json')})
+
     def api(self):
         self.assertIsNotNone(importlib.util.find_spec('shaq_daily_oracle.virtual_accounts'),
                              'A real local broker replay is required, not the one-share ledger')

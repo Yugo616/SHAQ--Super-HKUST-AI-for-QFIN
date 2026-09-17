@@ -5,6 +5,12 @@ import subprocess
 
 
 class AccountViewTests(unittest.TestCase):
+    def test_single_balance_point_is_explained_not_invented_history(self):
+        html = self.render('plot', [{'method_name':'Example', 'curve':[
+            {'date':'2026-09-16', 'equity':10054.57}]}])
+        self.assertIn('仅有一天结算记录', html)
+        self.assertEqual(html.count('<circle'), 1)
+
     def test_single_date_chart_has_one_centered_date_and_named_color_legend(self):
         from html.parser import HTMLParser
         class Chart(HTMLParser):

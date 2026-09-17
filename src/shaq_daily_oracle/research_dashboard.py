@@ -199,68 +199,69 @@ class ResearchDashboardIndex:
 
     def rebuild(self) -> None:
         self.batches_root.mkdir(parents=True, exist_ok=True)
+        batches, variants, predictions = [], [], []
+        # Hashing evidence may take seconds. Do it before acquiring SQLite's
+        # write transaction so simultaneous refreshes do not block each other.
+        for root in sorted(self.batches_root.glob("LAB-*")):
+            manifest = _read(root / "batch_manifest.json", {})
+            status = _read(root / "batch_status.json", {})
+            if not manifest or manifest.get("batch_id") != root.name:
+                continue
+            evidence_hash = str(manifest.get("batch_identity", {}).get("evidence_hash", ""))
+            source_valid = False
+            candidate_count = 0
+            cutoff_status = "unknown"
+            try:
+                detail = self.batch_detail(root.name)
+                source_valid = True
+                candidate_count = len(detail["evidence"].get("candidates", []))
+                cutoff_status = str(detail["evidence"].get("cutoff_status", "unknown"))
+            except (ResearchDashboardError, ResearchBatchError, OSError, json.JSONDecodeError):
+                source_valid = False
+            completed = status.get("completed_variants", [])
+            failed = status.get("failed_variants", {})
+            batches.append(
+                (
+                    root.name, root.name[4:14], cutoff_status, evidence_hash,
+                    candidate_count, len(completed), len(failed), 1 if source_valid else 0,
+                ),
+            )
+            if not source_valid:
+                continue
+            try:
+                labels = _verified_labels(root / "labels.json").get("labels", {})
+            except ResearchDashboardError:
+                labels = {}
+            for path in sorted((root / "variants").glob("*/variant_result.json")):
+                try:
+                    result = _verified_variant(path)
+                except ResearchDashboardError:
+                    continue
+                variant = result["variant"]
+                key = f"{variant['author']}/{variant['version_id']}"
+                variants.append(
+                    (
+                        root.name, key, variant["label"], result["variant_result_sha256"],
+                        len(result.get("predictions", [])),
+                    ),
+                )
+                for prediction in result.get("predictions", []):
+                    symbol = prediction["symbol"]
+                    label = labels.get(symbol, {})
+                    actual = label.get("actual_direction") if label.get("status") in {
+                        "provisional", "final"
+                    } else None
+                    correct = None
+                    if actual in {"bullish", "bearish", "neutral"}:
+                        correct = 1 if actual == prediction["direction"] else 0
+                    predictions.append((root.name, key, symbol, prediction["direction"], actual, correct))
         with closing(self._connect()) as connection:
             connection.execute("DELETE FROM research_predictions")
             connection.execute("DELETE FROM research_variants")
             connection.execute("DELETE FROM research_batches")
-            for root in sorted(self.batches_root.glob("LAB-*")):
-                manifest = _read(root / "batch_manifest.json", {})
-                status = _read(root / "batch_status.json", {})
-                if not manifest or manifest.get("batch_id") != root.name:
-                    continue
-                evidence_hash = str(manifest.get("batch_identity", {}).get("evidence_hash", ""))
-                source_valid = False
-                candidate_count = 0
-                cutoff_status = "unknown"
-                try:
-                    detail = self.batch_detail(root.name)
-                    source_valid = True
-                    candidate_count = len(detail["evidence"].get("candidates", []))
-                    cutoff_status = str(detail["evidence"].get("cutoff_status", "unknown"))
-                except (ResearchDashboardError, ResearchBatchError, OSError, json.JSONDecodeError):
-                    source_valid = False
-                completed = status.get("completed_variants", [])
-                failed = status.get("failed_variants", {})
-                connection.execute(
-                    "INSERT INTO research_batches VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                    (
-                        root.name, root.name[4:14], cutoff_status, evidence_hash,
-                        candidate_count, len(completed), len(failed), 1 if source_valid else 0,
-                    ),
-                )
-                if not source_valid:
-                    continue
-                try:
-                    labels = _verified_labels(root / "labels.json").get("labels", {})
-                except ResearchDashboardError:
-                    labels = {}
-                for path in sorted((root / "variants").glob("*/variant_result.json")):
-                    try:
-                        result = _verified_variant(path)
-                    except ResearchDashboardError:
-                        continue
-                    variant = result["variant"]
-                    key = f"{variant['author']}/{variant['version_id']}"
-                    connection.execute(
-                        "INSERT INTO research_variants VALUES (?, ?, ?, ?, ?)",
-                        (
-                            root.name, key, variant["label"], result["variant_result_sha256"],
-                            len(result.get("predictions", [])),
-                        ),
-                    )
-                    for prediction in result.get("predictions", []):
-                        symbol = prediction["symbol"]
-                        label = labels.get(symbol, {})
-                        actual = label.get("actual_direction") if label.get("status") in {
-                            "provisional", "final"
-                        } else None
-                        correct = None
-                        if actual in {"bullish", "bearish", "neutral"}:
-                            correct = 1 if actual == prediction["direction"] else 0
-                        connection.execute(
-                            "INSERT INTO research_predictions VALUES (?, ?, ?, ?, ?, ?)",
-                            (root.name, key, symbol, prediction["direction"], actual, correct),
-                        )
+            connection.executemany("INSERT INTO research_batches VALUES (?, ?, ?, ?, ?, ?, ?, ?)", batches)
+            connection.executemany("INSERT INTO research_variants VALUES (?, ?, ?, ?, ?)", variants)
+            connection.executemany("INSERT INTO research_predictions VALUES (?, ?, ?, ?, ?, ?)", predictions)
             connection.commit()
 
     def _find_evidence(self, evidence_hash: str) -> Path | None:

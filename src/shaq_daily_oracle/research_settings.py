@@ -292,6 +292,8 @@ class ResearchSettingsStore:
                 candidate for candidate in settings.get("model_profiles", [])
                 if candidate.get("profile_id") == profile_id
             )
+            if str(row.get('model') or '').strip().lower() in {'', 'default', 'subscription-default'}:
+                return False
             profile = ModelProfile.from_dict(row)
         except (SettingsError, StopIteration):
             return False

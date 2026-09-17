@@ -1,5 +1,19 @@
 # Software updates
 
+## 0.7.71: Windows settlement recovery
+
+Windows-only installer/update release; macOS remains on 0.7.7. Retain the last
+saved settlement while observations are rechecked, shorten index write
+transactions, and retry transient database locks. Old failed runs stay
+recoverable in history instead of appearing as today's progress. Unresolved
+default model profiles require explicit selection. Existing Windows application
+shortcuts are repaired against the running installation, not a saved username.
+
+Predictions, account rules and method packages are unchanged. Build provenance
+is included in the installed `third-party/manifest.json` resource (under the
+PyInstaller resource directory); it contains the source commit and dependency
+identity, not personal run data.
+
 ## 0.7.7: grouped results and continuous balances
 
 - Select a whole date/version run once; stock rows show their own net result, while the group header shows the day's total and balance. The balance chart includes compatible, counted historical and forward records without resizing old trades.

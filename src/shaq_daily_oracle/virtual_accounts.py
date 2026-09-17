@@ -447,8 +447,15 @@ class AccountStore:
                     activated_at=policy.get('activated_at'), engine=ENGINE_ID,
                     engine_version=ENGINE_VERSION, policy_id=POLICY_ID, legacy=self.read_legacy()))
         pending = []
+        previous = {(r['batch_id'], r['variant_key']): r for r in result['results']}
         for row in rows:
             if cached.get('row_hashes', {}).get(self._row_key(row)) == sha256_payload(row):
+                continue
+            saved = previous.get((row['batch_id'], row['variant_key']))
+            if saved and saved.get('status') in {'final', 'provisional', 'empty', 'incomplete'}:
+                # A new observation invalidates freshness, not the last settlement.
+                # Keep its entire revision together until reconciliation succeeds.
+                pending.append(dict(saved, reconciliation_pending=True))
                 continue
             scope = ('late' if _late(row) else 'practice' if row.get('source_eligible') is not True else 'historical'
                      if _completion(row) is None or not policy or
