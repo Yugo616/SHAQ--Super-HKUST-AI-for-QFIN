@@ -26,7 +26,7 @@ def _finite(value):
     return isinstance(value, (float, int)) and not isinstance(value, bool) and math.isfinite(value)
 
 
-def target_bars(trade_date, records, symbols):
+def target_bars(trade_date, records, symbols, *, entry_times=None):
     session = market_session(date.fromisoformat(trade_date))
     if session is None:
         raise ValueError('Minute settlement requires a trading session')
@@ -36,6 +36,10 @@ def target_bars(trade_date, records, symbols):
     for symbol in symbols:
         output[symbol] = {}
         for phase, target in targets.items():
+            if phase == 'entry' and symbol in (entry_times or {}):
+                target = _stamp(entry_times[symbol])
+                if not session.market_open < target < targets['exit'] or target.second or target.microsecond:
+                    raise ValueError('Entry exception must be a minute inside the same session')
             matches = []
             for row in records.get(symbol, []):
                 try:
@@ -82,7 +86,35 @@ class MinuteStore:
                 _atomic_json(destination, document)
         return self.snapshot(trade_date, symbols, provider=provider)
 
-    def snapshot(self, trade_date, symbols, *, provider='yfinance'):
+    def snapshot_with_entry_exception(self, trade_date, symbols, receipt, *, provider='yfinance'):
+        unsigned = {k: v for k, v in receipt.items() if k != 'exception_sha256'}
+        if sha256_payload(unsigned) != receipt.get('exception_sha256'):
+            raise ValueError('Entry exception receipt hash mismatch')
+        session = market_session(date.fromisoformat(trade_date))
+        if (receipt.get('trade_date') != trade_date or receipt.get('symbol') not in symbols
+                or not receipt.get('reason') or not receipt.get('batch_id') or not receipt.get('variant_key')
+                or not session or _stamp(receipt['original_entry_at_et']) != session.market_open + timedelta(minutes=1)):
+            raise ValueError('Entry exception does not match this session')
+        _stamp(receipt['authorized_at_et'])
+        baseline = receipt.get('baseline_observation_hashes')
+        if not isinstance(baseline, list) or not baseline:
+            raise ValueError('Entry exception requires its authorization observation baseline')
+        original = self.snapshot(trade_date, symbols, provider=provider, _observation_hashes=baseline)
+        if set(original['observation_hashes']) != set(baseline):
+            raise ValueError('Entry exception authorization observations are missing')
+        if original.get('targets', {}).get(receipt['symbol'], {}).get('entry') is not None:
+            raise ValueError('Entry exception cannot replace an available contractual minute')
+        overrides = {receipt['symbol']: receipt['entry_at_et']}
+        result = self.snapshot(trade_date, symbols, provider=provider, _entry_times=overrides)
+        target = result.get('targets', {}).get(receipt['symbol'], {}).get('entry')
+        if not target or not target['usable_volume']:
+            raise ValueError('Approved substitute minute has no valid observed price and volume')
+        result['entry_times'] = overrides
+        result['entry_exceptions'] = {receipt['symbol']: receipt}
+        result['execution_sha256'] = sha256_payload([result['targets'], receipt])
+        return result
+
+    def snapshot(self, trade_date, symbols, *, provider='yfinance', _entry_times=None, _observation_hashes=None):
         symbols = sorted(set(symbols))
         if not symbols:
             return dict(status='not_required', trade_date=trade_date, symbols=[],
@@ -95,7 +127,8 @@ class MinuteStore:
             if sha256_payload(unsigned) != path.stem or document.get('observation_sha256') != path.stem:
                 raise ValueError('Minute observation hash mismatch')
             if (document['trade_date'] == trade_date and document['provider'] == provider
-                    and set(symbols).issubset(document['symbols'])):
+                    and set(symbols).issubset(document['symbols'])
+                    and (_observation_hashes is None or path.stem in _observation_hashes)):
                 observations.append(document)
         observations.sort(key=lambda row: (_stamp(row['captured_at_et']), row['observation_sha256']))
         base = dict(provider=provider, interval='1m', price_adjustment='unadjusted',
@@ -109,7 +142,7 @@ class MinuteStore:
         evidence = {symbol: dict(entry=None, exit=None) for symbol in symbols}
         correction = False
         for observation in observations:
-            observed_targets = target_bars(trade_date, observation['records'], symbols)
+            observed_targets = target_bars(trade_date, observation['records'], symbols, entry_times=_entry_times)
             captured = observation['captured_at_et']
             captured_time = _stamp(captured).astimezone(ET)
             for symbol, phases in observed_targets.items():

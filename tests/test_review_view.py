@@ -77,9 +77,9 @@ vm.runInContext(`state.data={versions:[],dashboard:{daily_results:[
  {batch_id:'b',variant_key:'team/main',scope:'historical',status:'final',net_pnl:23.40,account_balance:10023.40}]}}};renderHistory()`,ctx);
 console.log(JSON.stringify(nodes['#history'].innerHTML));
 ''')
-        self.assertIn('版本当日净盈亏', value)
+        self.assertIn('当日合计', value)
         self.assertIn('$23.40', value)
-        self.assertIn('不计前瞻成绩', value)
+        self.assertIn('过时结果，仅供参考', value)
         self.assertNotIn('$999.00', value)
         self.assertNotIn('$4.23', value)
         self.assertNotIn('一股', value)
@@ -98,7 +98,7 @@ renderHistory()`,ctx);
 console.log(JSON.stringify(nodes['#history'].innerHTML));
 ''')
         self.assertIn('KEEP', value)
-        self.assertIn('初步', value)
+        self.assertIn('已正常运行', value)
         self.assertIn('空榜', value)
         self.assertIn('data-batch="empty"', value)
         for symbol in ['EARLIER', 'OTHER_MODEL', 'OTHER_METHOD']:

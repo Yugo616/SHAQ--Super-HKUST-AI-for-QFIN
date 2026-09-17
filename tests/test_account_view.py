@@ -110,7 +110,7 @@ class AccountViewTests(unittest.TestCase):
 
     def test_balance_chart_names_date_and_usd_axes(self):
         html = self.render('plot', [{'curve': [{'date':'2026-09-09', 'equity': 10000}]}])
-        self.assertIn('余额（USD）', html)
+        self.assertIn('余额（美元）', html)
         self.assertIn('日期（交易日）', html)
 
     def test_final_execution_keeps_confirmation_but_shows_failed_refresh_receipt(self):

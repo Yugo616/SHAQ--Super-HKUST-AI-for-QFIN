@@ -197,7 +197,7 @@ class BatchRecoveryTests(unittest.TestCase):
             def now(cls,tz=None):return cls.fromisoformat('2026-09-04T08:55:00-04:00')
         class AfterDeadline(datetime):
             @classmethod
-            def now(cls,tz=None):return cls.fromisoformat('2026-09-04T09:01:00-04:00')
+            def now(cls,tz=None):return cls.fromisoformat('2026-09-04T09:30:00-04:00')
         helper=fixtures.ResearchBatchTests()
         with tempfile.TemporaryDirectory() as name:
             root=Path(name);registry=helper.registry(root);evidence=helper.evidence(root)
@@ -216,7 +216,7 @@ class BatchRecoveryTests(unittest.TestCase):
                 done=runner.resume(batch_id=first['status']['batch_id'],evidence=evidence,profile=helper.profile(),secret='',caller=FakeModel())
             self.assertEqual(done['results']['team/main'],first['results']['team/main'])
             self.assertFalse(done['results']['alice/timeout-shadow']['score_eligible'])
-            self.assertEqual(done['results']['alice/timeout-shadow']['completed_at_et'],'2026-09-04T09:01:00-04:00')
+            self.assertEqual(done['results']['alice/timeout-shadow']['completed_at_et'],'2026-09-04T09:30:00-04:00')
 
     def test_only_failed_single_stock_group_is_recalled_and_format_is_versioned(self):
         from shaq_daily_oracle.research_batch import ResearchBatchRunner, freeze_evidence_bundle, _domain_prompt

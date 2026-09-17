@@ -11,17 +11,26 @@ const SHAQResults=(()=>{
     return {opening,closing,change,correct:actual&&['bullish','bearish','neutral'].includes(prediction.direction)?actual===prediction.direction:null};
   }
   function dailyHtml(rows,accounts=[],versions=[]){
+    const signed=value=>value==null?'—':`${value>=0?'+':'-'}${usd(Math.abs(value))}`;
     const body=rows.flatMap(row=>{
       const predictions=row.predictions?.length?row.predictions:[{}];
       const account=accounts.find(value=>value.batch_id===row.batch_id&&value.variant_key===row.variant_key);
-      return predictions.map(prediction=>{
-        const value=outcome(row.labels?.[prediction.symbol],prediction),meta=SHAQAccounts.historyIdentity(row,versions);
-        const phase=({provisional:'初步',final:'已复核',engineering_failure:'分析失败',empty:'空榜'}[row.status]||'等待结果');
-        const retry=['unavailable','incomplete','error'].includes(account?.status)?`<br><button class="text-button" data-retry-minute-date="${esc(row.trade_date)}">补取缺失行情</button>`:'';
-        return `<tr class="clickable" data-batch="${esc(row.batch_id)}" data-variant-key="${esc(row.variant_key)}" data-result-symbol="${esc(prediction.symbol||'')}"><td>${esc(row.trade_date)}</td><td>${esc(meta.method_name)}<br><small>方向${esc(phase)}｜${esc(SHAQAccounts.balanceStatus(account,row))}${row.score_eligible===false?'；不计前瞻成绩':''}</small>${retry}</td><td>${esc(prediction.symbol||'—')}</td><td>${direction(prediction.direction)}</td><td>${usd(value.opening)}</td><td>${usd(value.closing)}</td><td>${value.change===null?'—':value.change.toFixed(2)+'%'}</td><td>${value.correct===null?'—':value.correct?'正确':'错误'}</td><td>${usd(['unavailable','incomplete','error','blocked_previous'].includes(account?.status)?null:account?.net_pnl)}</td></tr>`;
-      });
+      const meta=SHAQAccounts.historyIdentity(row,versions),model=SHAQAccounts.modelCaption([],row.model);
+      const phase=row.status==='engineering_failure'?'运行失败':row.score_eligible===false?'过时结果，仅供参考':row.status==='empty'?'空榜':'已正常运行';
+      const complete=['final','provisional','empty'].includes(account?.status);
+      const total=complete?signed(account.net_pnl):'—';
+      const retry=['unavailable','incomplete','error'].includes(account?.status)?` <button class="text-button" data-retry-minute-date="${esc(row.trade_date)}">补取缺失行情</button>`:'';
+      const header=`<tr class="result-group" data-comparison-group="true" data-batch="${esc(row.batch_id)}" data-variant-key="${esc(row.variant_key)}"><td colspan="9"><div class="result-group-heading"><span class="result-group-choice"></span><b>${esc(row.trade_date)} · ${esc(meta.method_name)}</b><span>${esc(model?model+' · ':'')}${esc(phase)}</span><span class="result-group-total">当日合计 ${total} · 余额 ${usd(account?.account_balance)}</span>${retry}</div></td></tr>`;
+      return [header,...predictions.map(prediction=>{
+        const value=outcome(row.labels?.[prediction.symbol],prediction);
+        const trade=account?.trades?.find(item=>item.symbol===prediction.symbol);
+        const missing=trade?.status==='unavailable_entry'||trade?.status==='open_incomplete';
+        const pnl=trade?.status==='closed'?signed(trade.net_pnl):missing?'缺少行情':!prediction.symbol&&row.status==='empty'?'无交易':'—';
+        const exception=trade?.entry_exception?` <small>本次使用${esc(trade.entry_reference_at_et?.slice(11,16)||'替代分钟')}</small>`:'';
+        return `<tr class="clickable" data-batch="${esc(row.batch_id)}" data-variant-key="${esc(row.variant_key)}" data-result-symbol="${esc(prediction.symbol||'')}"><td></td><td></td><td>${esc(prediction.symbol||'—')}${exception}</td><td>${direction(prediction.direction)}</td><td>${usd(value.opening)}</td><td>${usd(value.closing)}</td><td>${value.change===null?'—':value.change.toFixed(2)+'%'}</td><td>${value.correct===null?'—':value.correct?'正确':'错误'}</td><td>${pnl}</td></tr>`;
+      })];
     }).join('');
-    return `<div class="account-scroll"><table class="table result-table"><thead><tr><th>日期</th><th>版本</th><th>股票</th><th>预测方向</th><th>未复权开盘</th><th>未复权收盘</th><th>开收涨跌幅</th><th>方向成绩</th><th>版本当日净盈亏</th></tr></thead><tbody>${body||'<tr><td colspan="9">尚无本地研究记录</td></tr>'}</tbody></table></div>`;
+    return `<div class="account-scroll"><table class="table result-table"><thead><tr><th></th><th></th><th>股票</th><th>预测方向</th><th>开盘价</th><th>收盘价</th><th>开收涨跌幅</th><th>对错</th><th>本股净盈亏</th></tr></thead><tbody>${body||'<tr><td colspan="9">尚无本地研究记录</td></tr>'}</tbody></table></div>`;
   }
   return {dailyHtml,outcome};
 })();
@@ -30,13 +39,13 @@ if(typeof document!=='undefined'){
   const beforeBatch=renderBatch;
   renderBatch=function(batch,key,symbol){
     beforeBatch(batch,key,symbol);
+    const selected=key&&batch.variants?.[key]?key:Object.keys(batch.variants||{})[0];
     const modelLine=q('#batch-detail .batch-head > p:not(.eyebrow)');
     if(modelLine){
-      const name=SHAQAccounts.modelCaption(batch.model_calls||[]);
-      modelLine.textContent=name?`调用记录型号：${name}`:'';
+      const name=batch.model_display?.[selected]?.name||SHAQAccounts.modelCaption(batch.model_calls||[],batch.variants?.[selected]?.model_name);
+      modelLine.textContent=name?`运行模型：${name}`:'';
       modelLine.hidden=!name;
     }
-    const selected=key&&batch.variants?.[key]?key:Object.keys(batch.variants||{})[0];
     const selector=q('#compare-version');if(!selector)return;
     selector.onchange=async()=>{
       const target=q('#version-comparison');
@@ -62,7 +71,7 @@ if(typeof document!=='undefined'){
     const identities=new Map(all.map(row=>{const meta=historyIdentity(row);return [meta.filter_key,meta.method_name]}));
     const models=[...new Set(all.map(row=>row.model||'未记录模型'))];
     const rows=all.filter(row=>(!filters.from||row.trade_date>=filters.from)&&(!filters.to||row.trade_date<=filters.to)&&(!filters.version||historyIdentity(row).filter_key===filters.version)&&(!filters.model||(row.model||'未记录模型')===filters.model));
-    q('#history').innerHTML=`<div class="history-filters"><label>开始日期<input id="history-from" type="date" value="${esc(filters.from||'')}"></label><label>结束日期<input id="history-to" type="date" value="${esc(filters.to||'')}"></label><label>版本<select id="history-version"><option value="">全部版本</option>${[...identities].map(([key,name])=>`<option value="${esc(key)}"${filters.version===key?' selected':''}>${esc(name)}</option>`).join('')}</select></label><label>模型<select id="history-model"><option value="">全部模型</option>${models.map(model=>`<option${filters.model===model?' selected':''}>${esc(model)}</option>`).join('')}</select></label></div><section class="sheet balance-overview">${SHAQAccounts.compactOverviewHtml(accounts,versions,filters)}</section><section class="sheet"><h2>每日结果</h2><p>点击股票查看当时的六领域分析与最终判断。版本当日净盈亏为整版本账户结果，不是单只股票盈亏。</p>${SHAQResults.dailyHtml(rows,accounts.results||[],versions)}</section>`;
+    q('#history').innerHTML=`<div class="history-filters"><label>开始日期<input id="history-from" type="date" value="${esc(filters.from||'')}"></label><label>结束日期<input id="history-to" type="date" value="${esc(filters.to||'')}"></label><label>版本<select id="history-version"><option value="">全部版本</option>${[...identities].map(([key,name])=>`<option value="${esc(key)}"${filters.version===key?' selected':''}>${esc(name)}</option>`).join('')}</select></label><label>模型<select id="history-model"><option value="">全部模型</option>${models.map(model=>`<option${filters.model===model?' selected':''}>${esc(model)}</option>`).join('')}</select></label></div><section class="sheet balance-overview">${SHAQAccounts.compactOverviewHtml(accounts,versions,filters)}</section><section class="sheet"><h2>每日结果</h2>${SHAQResults.dailyHtml(rows,accounts.results||[],versions)}</section>`;
     for(const [id,key] of [['history-from','from'],['history-to','to'],['history-version','version'],['history-model','model']])q('#'+id).onchange=event=>{filters[key]=event.target.value;renderHistory()};
     qa('[data-result-symbol]').forEach(row=>row.onclick=()=>loadBatch(row.dataset.batch,row.dataset.variantKey,row.dataset.resultSymbol||undefined));
     qa('[data-retry-minute-date]').forEach(button=>{

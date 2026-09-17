@@ -45,7 +45,7 @@ function addHistoryComparisonControls() {
   bar.innerHTML='<span id="comparison-selection-count"></span><button id="compare-selected" class="secondary">比较选中版本</button><button id="clear-comparison" class="text-button">清除选择</button>';
   table.before(bar);
   const update=()=>{
-    q('#comparison-selection-count').textContent=`已选 ${SHAQComparison.selections.size} 条记录`;
+    q('#comparison-selection-count').textContent=`已选 ${SHAQComparison.selections.size} 组每日版本结果`;
     q('#compare-selected').disabled=SHAQComparison.selections.size!==2;
   };
   const inputs=[];
@@ -64,8 +64,9 @@ function addHistoryComparisonControls() {
     };
     inputs.push(input);insert(input);
   };
-  for(const row of qa('#history .result-table tr[data-batch]')) {
-    addChoice({batch_id:row.dataset.batch,variant_key:row.dataset.variantKey},input=>row.children[0].prepend(input));
+  const groups=qa('#history .result-table tr[data-comparison-group]');
+  for(const row of groups.length?groups:qa('#history .result-table tr[data-batch]')) {
+    addChoice({batch_id:row.dataset.batch,variant_key:row.dataset.variantKey},input=>(row.querySelector?.('.result-group-choice')||row.children[0]).prepend(input));
   }
   for(const button of qa('#history [data-repeat-batch]')) {
     addChoice({batch_id:button.dataset.repeatBatch,variant_key:button.dataset.key},input=>button.before(input));

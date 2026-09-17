@@ -1,5 +1,13 @@
 # Software updates
 
+## 0.7.7: grouped results and continuous balances
+
+- Select a whole date/version run once; stock rows show their own net result, while the group header shows the day's total and balance. The balance chart includes compatible, counted historical and forward records without resizing old trades.
+- Show recorded response/requested model names instead of internal placeholders. Optional local historical annotations affect display only; no user's model name or account records ship with the application.
+- Research evidence must be frozen by 08:50 ET and inference completed strictly before the exchange session opens. Preserve original predictions and timestamps and store the new eligibility assessment separately. The independent broker operator schedule is unchanged. See [timing and replay policy](research-timing.md).
+- Missing minutes are not automatically replaced. Explicit, local, hash-bound historical exceptions retain their real reference minute and provenance, and do not authorize fallback for other records.
+- Build preflight verifies the managed updater runtime before packaging. The two method packages, sizing, fees and saved forecasts are unchanged.
+
 ## 0.7.6: native model dropdown
 
 The model catalog now uses a native dropdown instead of browser-dependent input suggestions. Choose a returned model or type an explicit identifier, then test and save. This fixes the missing suggestion popup in the Mac desktop window. Provider discovery, saved model policy, predictions and account rules are unchanged from 0.7.5.
@@ -25,7 +33,10 @@ Application updates and research-method updates are separate. **0.7.0 is the fir
 
 ## Platform downloads and acceptance
 
-Primary 0.7.6 downloads: [Windows](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.6-windows), [Apple Silicon / Intel Mac](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.6-macos). Each is available only once its matching packages, checksums and acceptance records appear. Publication requires separate native acceptance for each architecture from the same frozen source, including an upgrade from the matching public base recorded in its acceptance report. Previous downloads:
+Primary 0.7.7 downloads: [Windows](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.7-windows), [Apple Silicon / Intel Mac](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.7-macos). Each is available only once its matching packages, checksums and acceptance records appear. Publication requires separate native acceptance for each architecture from the same frozen source, including an upgrade from the matching public base recorded in its acceptance report. Previous downloads:
+
+- [0.7.6 Windows release page](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.6-windows)
+- [0.7.6 macOS release page](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.6-macos)
 
 - [0.7.4 Windows release page](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.4-windows)
 - [0.7.4 macOS release page](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.4-macos)

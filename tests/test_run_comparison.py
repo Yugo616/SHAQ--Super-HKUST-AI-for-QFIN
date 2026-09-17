@@ -27,6 +27,13 @@ def batch(key='team/main', *, evidence='e' * 64, model='m' * 64, rules='r' * 64)
 
 
 class RunComparisonTests(unittest.TestCase):
+    def test_one_off_execution_exception_is_not_same_trading_conditions(self):
+        left,right=batch(),batch('team/alternative')
+        right['virtual_accounts']['results'][0]['trades']=[{'symbol':'AAA','entry_exception':{'exception_sha256':'approved'}}]
+        value=run_comparison.compare_runs(left,'team/main',right,'team/alternative')
+        self.assertEqual(value['dimensions']['trading_rules']['status'],'different')
+        self.assertFalse(value['controlled_method_comparison'])
+
     def test_compares_frozen_method_contents_not_author_names_without_mutation(self):
         left, right = batch(), batch('other/renamed')
         before = copy.deepcopy((left, right))

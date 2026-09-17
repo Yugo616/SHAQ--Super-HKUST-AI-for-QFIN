@@ -56,6 +56,7 @@ class SessionInput:
     bars: Mapping[tuple[str, pd.Timestamp], Bar]
     ticket_budgets: Mapping[str, float] | None = None
     fixed_shares: Mapping[str, int] | None = None
+    entry_times: Mapping[str, pd.Timestamp] | None = None
 
 
 def execution_schedule(session, rules):
@@ -148,6 +149,9 @@ def _execute(fixture, rules, fixed_shares=None):
                 or timestamp not in minutes):
             raise ValueError("Bar timestamps must be timezone-aware and on the session minute grid")
     signals = sorted(fixture.signals, key=lambda signal: signal.symbol)
+    entries = {signal.symbol: (fixture.entry_times or {}).get(signal.symbol, entry) for signal in signals}
+    if any(stamp not in minutes or stamp >= exit_ for stamp in entries.values()):
+        raise ValueError('Per-symbol entry must be a session minute before exit')
     exchange = ExchangeInfo(rules.calendar, rules.calendar, "US")
     assets = {signal.symbol: Equity(index, symbol=signal.symbol, exchange_info=exchange)
               for index, signal in enumerate(signals, 1)}
@@ -164,11 +168,12 @@ def _execute(fixture, rules, fixed_shares=None):
         # Decision phase receives only current open; not this bar's later fields.
         blotter.set_date(minute)
         submitted = []
-        if minute == entry:
+        entering = [signal for signal in signals if entries[signal.symbol] == minute]
+        if entering:
             opens = {signal.symbol: (fixture.bars[signal.symbol, minute].open
                                      if (signal.symbol, minute) in fixture.bars else math.nan)
-                     for signal in signals}
-            for signal in signals:
+                     for signal in entering}
+            for signal in entering:
                 opening = opens[signal.symbol]
                 if not math.isfinite(opening) or opening <= 0:
                     unfilled.append({"symbol": signal.symbol, "phase": "entry", "reason": "missing_or_invalid_open"})
@@ -215,7 +220,7 @@ def _execute(fixture, rules, fixed_shares=None):
         for order_id in submitted:
             if blotter.orders[order_id].open:
                 unfilled.append({"symbol": blotter.orders[order_id].asset.symbol,
-                                 "phase": "entry" if minute == entry else "exit",
+                                 "phase": "entry" if order_id.startswith('entry:') else "exit",
                                  "reason": "missing_or_nonpositive_target_bar"})
                 blotter.cancel(order_id)
                 ledger.process_order(blotter.orders[order_id])

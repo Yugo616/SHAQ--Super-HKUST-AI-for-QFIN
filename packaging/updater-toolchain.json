@@ -3,6 +3,6 @@
   "dotnet_sdk_version": "8.0.425",
   "acceptance_bridge_version": "0.6.99",
   "acceptance_prior_version": "0.6.98",
-  "candidate_version": "0.7.6",
+  "candidate_version": "0.7.7",
   "runtimes": {"Darwin/arm64": "osx-arm64", "Darwin/x86_64": "osx-x64", "Windows/amd64": "win-x64", "Windows/x86_64": "win-x64"}
 }

@@ -246,7 +246,7 @@ class MinuteAccountIntegrationTests(unittest.TestCase):
             self.store.activate(AccountRules(commission_rate=0), '2026-09-08T07:00:00-04:00')
 
     def test_late_result_is_visible_as_late_and_cannot_consume_timely_first_result(self):
-        late = self.fixture.row('late', '2026-09-09T09:10:00-04:00', source_eligible=False,
+        late = self.fixture.row('late', '2026-09-09T09:30:00-04:00', source_eligible=False,
                                 cutoff_status='on_time')
         result = self.store.refresh([late, self.fixture.row()])
         self.assertEqual(next(r for r in result['results'] if r['batch_id']=='late')['scope'], 'late')

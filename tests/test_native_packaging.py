@@ -20,6 +20,16 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class NativePackagingTests(unittest.TestCase):
+    def test_missing_updater_stops_build_before_smoke_can_mask_it(self):
+        spec = importlib.util.spec_from_file_location('startup_build_check', ROOT/'packaging/build_desktop.py')
+        build = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(build)
+        with patch.object(build, 'import_module', side_effect=ModuleNotFoundError('velopack')):
+            with self.assertRaisesRegex(RuntimeError, 'updater runtime'):
+                build.require_updater_runtime()
+        with patch.object(build, 'import_module', return_value=SimpleNamespace(App=object)):
+            build.require_updater_runtime()
+
     def test_layout_diagnostic_never_schedules_native_compilation_job(self):
         import re
         conditions = dict(re.findall(r'^  ([\w-]+):\n    if: ([^\n]+)',

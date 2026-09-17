@@ -115,7 +115,7 @@ const SHAQAccounts = (() => {
 
   function modelCaption(calls=[],fallback='') {
     const actual=value=>typeof value==='string' && value.trim() && !/^(subscription-default|default|unknown|未记录模型|已记录模型)$/i.test(value.trim());
-    const names=[...new Set(calls.map(call=>call.response_model).filter(actual))];
+    const names=[...new Set(calls.map(call=>actual(call.response_model)?call.response_model:call.requested_model).filter(actual))];
     return names.length?names.join(' / '):actual(fallback)?fallback:'';
   }
 
@@ -174,15 +174,16 @@ const SHAQAccounts = (() => {
     const colors=['#285ba8','#35846c','#ad7833','#89559c','#737c88'];
     const points=accounts.flatMap(account => account.curve || []);
     const dates=[...new Set(points.map(point => point.date))].sort();
-    if (!points.length) return '<p>收盘净值：首个初步持续账户交易日后显示曲线。</p>';
+    if (!points.length) return '<p>暂无已结算的余额记录。</p>';
     let lo=Math.min(...points.map(point => point.equity));
     let hi=Math.max(...points.map(point => point.equity));
-    if (hi===lo) {hi+=1;lo-=1;}
+    const padding=Math.max((hi-lo)*.15,1);hi+=padding;lo-=padding;
     const x=point=>dates.length===1?462.5:85+dates.indexOf(point.date)/(dates.length-1)*755;
-    const y=point=>150-(point.equity-lo)/(hi-lo)*125;
-    const axis=dates.length===1?`<text x="462.5" y="185" text-anchor="middle">${e(dates[0])}</text>`:`<text x="85" y="185">${e(dates[0])}</text><text x="840" y="185" text-anchor="end">${e(dates.at(-1))}</text>`;
+    const y=point=>190-(point.equity-lo)/(hi-lo)*155;
+    const axis=dates.map((date,i)=>i===0||i===dates.length-1||i%Math.max(1,Math.ceil(dates.length/7))===0?`<text x="${x({date})}" y="219" text-anchor="middle">${e(date)}</text>`:'').join('');
+    const grid=[0,.5,1].map(f=>{const price=lo+(hi-lo)*f,py=y({equity:price});return `<line x1="85" y1="${py}" x2="840" y2="${py}" stroke="#e5e7eb"/><text x="73" y="${py+4}" text-anchor="end">${usd(price)}</text>`}).join('');
     const legend=`<div class="balance-legend">${accounts.map((account,index)=>`<span><i style="background:${colors[index%colors.length]}"></i>${e(account.method_name||account.label||'未标明版本')}</span>`).join('')}</div>`;
-    return `<h3>收盘净值</h3>${legend}<svg class="pnl-chart" viewBox="0 0 900 220" role="img" aria-label="各账户收盘净值；纵轴余额（USD），横轴日期（交易日）"><text x="0" y="12" font-size="12">余额（USD）</text><text x="0" y="30">${usd(hi)}</text><text x="0" y="150">${usd(lo)}</text>${accounts.map((account,index)=>`<polyline fill="none" stroke="${colors[index%colors.length]}" stroke-width="2" points="${(account.curve||[]).map(point=>`${x(point)},${y(point)}`).join(' ')}"/>${(account.curve||[]).map(point=>`<circle cx="${x(point)}" cy="${y(point)}" r="3" fill="${colors[index%colors.length]}"><title>${e(account.method_name || account.label)} ${e(point.date)} ${usd(point.equity)}</title></circle>`).join('')}`).join('')}${axis}<text x="450" y="211" text-anchor="middle" font-size="12">日期（交易日）</text></svg>`;
+    return `<h3>余额变化</h3>${legend}<svg class="pnl-chart" viewBox="0 0 900 250" role="img" aria-label="各版本余额变化（收盘净值）；纵轴美元余额，横轴交易日期"><text x="85" y="16">余额（美元）</text>${grid}${accounts.map((account,index)=>`<polyline fill="none" stroke="${colors[index%colors.length]}" stroke-width="2.5" points="${(account.curve||[]).map(point=>`${x(point)},${y(point)}`).join(' ')}"/>${(account.curve||[]).map(point=>`<circle cx="${x(point)}" cy="${y(point)}" r="4" fill="${colors[index%colors.length]}"><title>${e(account.method_name || account.label)} ${e(point.date)} ${usd(point.equity)}</title></circle>`).join('')}`).join('')}${axis}<text x="450" y="246" text-anchor="middle">日期（交易日）</text></svg>`;
   }
 
   function resultRows(rows, versions) {
@@ -227,7 +228,17 @@ const SHAQAccounts = (() => {
   }
 
   function compactOverviewHtml(data,versions=[],filters={}){
-    const accounts=(data.accounts||[]).filter(account=>(!filters.version||historyIdentity(account,versions).filter_key===filters.version)&&(!filters.model||account.model===filters.model)).map(account=>({...account,method_name:methodMeta(account,versions).method_name,curve:(account.curve||[]).filter(point=>(!filters.from||point.date>=filters.from)&&(!filters.to||point.date<=filters.to))}));
+    const linked=(data.accounts||[]).map(account=>{
+      const rows=(data.results||[]).filter(row=>account.account_id&&row.account_id===account.account_id).sort((a,b)=>String(b.trade_date).localeCompare(String(a.trade_date)));
+      const known=rows.find(row=>methodMeta(row,versions).installed);
+      return known?{...account,variant_key:known.variant_key}:account;
+    });
+    const accounts=linked.filter(account=>(!filters.version||historyIdentity(account,versions).filter_key===filters.version)&&(!filters.model||account.model===filters.model||(data.results||[]).some(row=>row.account_id===account.account_id&&row.model===filters.model))).map(account=>{
+      const counted=(data.results||[]).filter(row=>row.account_id===account.account_id&&['historical','forward'].includes(row.scope)&&['final','provisional','empty'].includes(row.status)&&Number.isFinite(row.account_balance));
+      const byDate=new Map(counted.map(row=>[row.trade_date,{date:row.trade_date,equity:row.account_balance}]));
+      const curve=(byDate.size?[...byDate.values()].sort((a,b)=>a.date.localeCompare(b.date)):account.curve||[]).filter(point=>(!filters.from||point.date>=filters.from)&&(!filters.to||point.date<=filters.to));
+      return {...account,method_name:methodMeta(account,versions).method_name,curve};
+    });
     const cards=accounts.map(account=>{
       const rows=(data.results||[]).filter(row=>account.account_id?row.account_id===account.account_id:(account.series_key?row.series_key===account.series_key:row.variant_key===account.variant_key)).sort((a,b)=>String(b.trade_date).localeCompare(String(a.trade_date)));
       const counted=rows.filter(row=>['historical','forward'].includes(row.scope)&&['final','provisional','empty'].includes(row.status)&&Number.isFinite(row.account_balance));

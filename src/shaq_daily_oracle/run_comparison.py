@@ -59,6 +59,10 @@ def _side(batch, key):
     # Current projection rules are not necessarily the historical execution rules.
     execution = {'policy_hash': rules, 'engine': account.get('engine'),
                  'engine_version': account.get('engine_version')} if rules else None
+    if execution is not None:
+        execution['entry_exceptions'] = sorted(
+            (trade.get('symbol'), sha256_payload(trade['entry_exception']))
+            for trade in account.get('trades', []) if trade.get('entry_exception'))
     return {
         'batch_id': batch.get('batch_id'), 'variant_key': key,
         'label': variant.get('variant', {}).get('label') or key,

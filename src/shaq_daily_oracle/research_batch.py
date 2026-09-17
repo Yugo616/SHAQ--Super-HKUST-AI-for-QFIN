@@ -1129,13 +1129,14 @@ def run_variant(
                  variant_key=variant_key, symbols=sorted(reports_by_symbol),
                  status="complete")
     completed_at = datetime.now(ZoneInfo("America/New_York"))
-    cutoff = datetime.fromisoformat(evidence.manifest["scheduled_cutoff_et"])
-    deadline = cutoff.replace(hour=9, minute=0, second=0, microsecond=0)
+    from .research_timing import assess_timing
+    timing = assess_timing(evidence.manifest, completed_at.isoformat())
     result_unsigned = {
         "schema_version": 1,
         "completed_at_et": completed_at.isoformat(),
         "candidate_intake": evidence.candidate_intake,
-        "score_eligible": evidence.manifest["cutoff_status"] == "on_time" and completed_at <= deadline,
+        "score_eligible": timing['eligible'],
+        "timing_assessment": timing,
         "variant": asdict(variant),
         "evidence_hash": evidence.manifest["evidence_hash"],
         "candidate_set_sha256": sha256_payload(evidence.candidate_intake),

@@ -12,10 +12,29 @@ from zoneinfo import ZoneInfo
 
 from .hashing import sha256_payload
 from .research_batch import ResearchBatchError, load_frozen_evidence
+from .research_timing import assess_timing
 
 
 class ResearchDashboardError(ValueError):
     """The disposable research index does not match its immutable source files."""
+
+
+def display_model(variant, calls, annotation=None):
+    """Display metadata only; never change frozen model/account identity."""
+    def known(value):
+        return isinstance(value, str) and value.strip().lower() not in {
+            '', 'subscription-default', 'default', 'unknown', '未记录模型', '已记录模型'}
+    keys = {item.get('cache_key') for item in variant.get('model_call_audits', [])}
+    own = [call for call in calls if call.get('cache_key') in keys]
+    for field, source in [('response_model', 'provider'), ('requested_model', 'requested')]:
+        names = list(dict.fromkeys(call[field] for call in own if known(call.get(field))))
+        if names:
+            return {'name': ' / '.join(names), 'source': source}
+    if known(variant.get('model_name')):
+        return {'name': variant['model_name'], 'source': 'requested'}
+    if annotation and annotation.get('source') == 'user_confirmation' and known(annotation.get('model')):
+        return {'name': annotation['model'], 'source': 'user_confirmation'}
+    return {'name': '', 'source': 'unknown'}
 
 
 def _read(path: Path, fallback: Any = None) -> Any:
@@ -286,6 +305,11 @@ class ResearchDashboardIndex:
         from .virtual_accounts import AccountStore
         accounts = AccountStore(self.batches_root.parent / 'virtual_accounts').view(
             self.account_rows(daily_results))
+        displayed = {(r['batch_id'], r['variant_key']): r.get('model', '') for r in daily_results}
+        for row in accounts.get('results', []):
+            name = displayed.get((row.get('batch_id'), row.get('variant_key')))
+            if name:
+                row['model'] = name
         return {
             "generated_at_et": datetime.now(ZoneInfo("America/New_York")).isoformat(),
             "batches": batches, "versions": versions, "performance": performance,
@@ -296,9 +320,28 @@ class ResearchDashboardIndex:
         """Join minute observations only at the execution/account boundary."""
         from .minute_settlements import MINUTE_NAMESPACE, MinuteStore
         store = MinuteStore(self.batches_root.parent / MINUTE_NAMESPACE)
-        return [dict(row, minute=store.snapshot(row['trade_date'],
-                    [p['symbol'] for p in row['predictions']]))
-                for row in daily_results if row.get('series_key')]
+        output = []
+        for row in daily_results:
+            if not row.get('series_key'):
+                continue
+            row = dict(row)
+            if 'model_for_account' in row:
+                row['model'] = row.pop('model_for_account')
+            symbols = [p['symbol'] for p in row['predictions']]
+            identity = [row['batch_id'], row['variant_key'], row.get('variant_result_sha256')]
+            path = self.batches_root.parent / 'entry_exceptions' / (sha256_payload(identity) + '.json')
+            if path.is_file():
+                try:
+                    receipt = _read(path)
+                    if [receipt.get('batch_id'), receipt.get('variant_key'), receipt.get('variant_result_sha256')] != identity:
+                        raise ResearchDashboardError('Entry exception is bound to another frozen result')
+                    minute = store.snapshot_with_entry_exception(row['trade_date'], symbols, receipt)
+                except (ValueError, KeyError, TypeError) as exc:
+                    minute = {'status': 'error', 'error': '单次行情例外校验失败：' + str(exc), 'records': {}}
+            else:
+                minute = store.snapshot(row['trade_date'], symbols)
+            output.append(dict(row, minute=minute))
+        return output
 
     def _daily_results(self, batches: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Build the simple, comparable research replay view from immutable files.
@@ -309,7 +352,7 @@ class ResearchDashboardIndex:
         """
         chronological = sorted(batches, key=lambda row: (str(row["trade_date"]), str(row["batch_id"])))
         from .history_methods import method_document_identity
-        details, first = {}, {}
+        details, first, timings = {}, {}, {}
         for batch in chronological:
             if not batch.get('source_valid'):
                 continue
@@ -319,7 +362,11 @@ class ResearchDashboardIndex:
                 continue
             details[batch['batch_id']] = detail
             for key, variant in detail.get('variants', {}).items():
-                if variant.get('score_eligible') is not True or detail['evidence']['cutoff_status'] != 'on_time':
+                timing = assess_timing(detail['evidence'], variant.get('completed_at_et'),
+                                       trade_date=batch['trade_date'],
+                                       original_score_eligible=variant.get('score_eligible'))
+                timings[(batch['batch_id'], key)] = timing
+                if not timing['eligible']:
                     continue
                 completed = variant.get('completed_at_et')
                 if not completed:
@@ -354,7 +401,8 @@ class ResearchDashboardIndex:
                 method_identity = method_document_identity(documents) or variant.get('variant', {}).get('version_sha256')
                 series_key = str(method_identity) + ":" + model_hash
                 session_key = (str(batch["trade_date"]), series_key)
-                source_eligible = variant.get('score_eligible') is True and detail['evidence'].get('cutoff_status') == 'on_time'
+                timing = timings[(batch['batch_id'], key)]
+                source_eligible = timing['eligible']
                 identity = (batch['trade_date'], method_identity, variant.get('model_profile_sha256'))
                 eligible = source_eligible and identity in first and first[identity][1] == batch['batch_id'] and session_key not in scored_sessions
                 if eligible:
@@ -405,10 +453,12 @@ class ResearchDashboardIndex:
                     "model_identity": variant.get('model_profile_sha256'),
                     "source_eligible": source_eligible,
                     "completed_at_et": variant.get('completed_at_et'),
-                    "publication_deadline_et": datetime.fromisoformat(batch['trade_date']).replace(hour=9, tzinfo=ZoneInfo('America/New_York')).isoformat(),
+                    "publication_deadline_et": timing['publication_deadline_et'],
+                    "timing_assessment": timing,
                     "variant_result_sha256": variant.get('variant_result_sha256'),
                     "labels": {p['symbol']: labels.get(p['symbol'], {}) for p in predictions},
-                    "model": variant.get("model_name") or next((x.get("response_model") for x in detail.get("model_calls", []) if x.get("response_model")), "未记录模型"),
+                    "model": detail.get('model_display', {}).get(key, display_model(variant, detail.get('model_calls', [])))['name'],
+                    "model_for_account": variant.get("model_name") or next((x.get("response_model") for x in detail.get("model_calls", []) if x.get("response_model")), "未记录模型"),
                     "predictions": [{key: row.get(key) for key in ('symbol', 'direction', 'risk_sizing') if key in row} for row in predictions],
                     "correct": correct, "incorrect": incorrect,
                     "daily_pnl": daily_pnl,
@@ -474,6 +524,7 @@ class ResearchDashboardIndex:
                 "prompt_sha256": call["key_document"].get("prompt_sha256"),
                 "schema_sha256": call["key_document"].get("schema_sha256"),
                 "response_model": audit.get("response_model"),
+                "requested_model": audit.get("requested_model"),
                 "provider": audit.get("provider"),
                 "started_at_et": audit.get("started_at_et"),
                 "completed_at_et": audit.get("completed_at_et"),
@@ -531,6 +582,15 @@ class ResearchDashboardIndex:
                      for key, value in variants.items()}
         comparisons = {a: {b: compare_versions(left, right, skill_snapshots[a]['documents'], skill_snapshots[b]['documents'])
                            for b, right in variants.items() if a != b} for a, left in variants.items()}
+        models = {}
+        for key, value in variants.items():
+            identity = [batch_id, key, value.get('variant_result_sha256')]
+            annotation = _read(self.batches_root.parent / 'model_annotations' / (sha256_payload(identity) + '.json'))
+            if annotation:
+                unsigned = {k:v for k,v in annotation.items() if k != 'annotation_sha256'}
+                if (annotation.get('identity') != identity or annotation.get('annotation_sha256') != sha256_payload(unsigned)):
+                    annotation = None  # Display annotations cannot invalidate a frozen prediction.
+            models[key] = display_model(value, model_calls, annotation)
         return {
             "batch_id": batch_id, "manifest": manifest, "status": status,
             "replay_summaries": summaries, "version_comparisons": comparisons,
@@ -538,6 +598,7 @@ class ResearchDashboardIndex:
                 "evidence_hash": evidence.manifest["evidence_hash"],
                 "cutoff_status": evidence.manifest["cutoff_status"],
                 "as_of_et": evidence.manifest["as_of_et"],
+                "scheduled_cutoff_et": evidence.manifest["scheduled_cutoff_et"],
                 "provider_manifest": evidence.manifest["provider_manifest"],
                 "candidates": evidence.candidate_intake["candidates"],
                 "catalog": [{
@@ -555,6 +616,7 @@ class ResearchDashboardIndex:
             "labels": labels,
             "skill_snapshots": skill_snapshots,
             "model_calls": model_calls,
+            "model_display": models,
         }
 
     def export_professor_report(self, destination: Path) -> Path:

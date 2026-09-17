@@ -101,7 +101,7 @@ def default_research_settings(package_root: Path) -> dict[str, Any]:
         "batch": {
             "maximum_parallel_model_calls": 2,
             "forecast_cutoff_et": "08:50:00",
-            "forecast_deadline_et": "09:00:00",
+            "forecast_deadline_et": "09:30:00",
         },
     }
 

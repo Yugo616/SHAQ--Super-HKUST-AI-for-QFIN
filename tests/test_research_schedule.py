@@ -161,6 +161,21 @@ class ResearchScheduleTests(unittest.TestCase):
             self.assertFalse(result['enabled'])
             external.assert_not_called()
 
+    def test_existing_mac_service_is_not_reregistered_when_time_changes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            paths = SimpleNamespace(research_root=root, package_root=root)
+            destination = root/'Library/LaunchAgents'/f'{schedule.SERVICE_LABEL}.plist'
+            destination.parent.mkdir(parents=True)
+            destination.write_bytes(b'existing service definition')
+            with patch.object(schedule.sys, 'platform', 'darwin'), \
+                 patch.object(Path, 'home', return_value=root), \
+                 patch.object(schedule.subprocess, 'run', return_value=subprocess.CompletedProcess([],0,b'',b'')) as external:
+                for start in ('08:30','08:35'):
+                    schedule.save_schedule(paths, Mock(), dict(enabled=True,start_et=start,selections=[{}],model_profile_id='local'))
+            self.assertEqual(destination.read_bytes(), b'existing service definition')
+            self.assertTrue(all(call.args[0][1]=='print' for call in external.call_args_list))
+
 
 @unittest.skipUnless(sys.platform == 'win32', 'requires native Windows process and Task Scheduler')
 class NativeWindowsResearchTests(unittest.TestCase):

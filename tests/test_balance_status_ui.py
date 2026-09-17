@@ -22,14 +22,14 @@ globalThis.cards=SHAQAccounts.compactOverviewHtml({accounts:[{account_id:'a',lab
 globalThis.unknown=SHAQResults.dailyHtml([base],[]);
 globalThis.duplicate=SHAQResults.dailyHtml([base],[{...paid,trade_date:base.trade_date,batch_id:'b',scope:'duplicate',status:'duplicate'}]);
 `,ctx);
-assert.match(ctx.missingHtml,/FDS.*09:31/);assert.match(ctx.missingHtml,/未结算/);
+assert.match(ctx.missingHtml,/FDS/);assert.match(ctx.missingHtml,/缺少行情/);
 assert.match(ctx.missingHtml,/data-retry-minute-date="2026-09-11"/);
-assert.match(ctx.lateHtml,/超.*截止|迟到/);assert.match(ctx.lateHtml,/未计入余额/);
-assert.match(ctx.paidHtml,/已计入余额/);
+assert.match(ctx.lateHtml,/过时结果，仅供参考/);
+assert.match(ctx.paidHtml,/余额 \$10,023\.40/);
 assert.match(ctx.cards,/2026-09-09/);assert.match(ctx.cards,/后续.*未计入/);
 assert.doesNotMatch(ctx.cards+ctx.missingHtml+ctx.lateHtml,/subscription-default/);
 assert.doesNotMatch(ctx.unknown,/已计入余额/);
-assert.match(ctx.duplicate,/重复.*不.*入账/);
+assert.match(ctx.duplicate,/当日合计 —/);
 assert.equal(vm.runInContext(`SHAQAccounts.modelCaption([{response_model:'subscription-default'}])`,ctx),'');
 assert.equal(vm.runInContext(`SHAQAccounts.modelCaption([{response_model:'gpt-5.4'},{response_model:'gpt-5.4'},{response_model:'claude-opus-4-6'}])`,ctx),'gpt-5.4 / claude-opus-4-6');
 assert.equal(vm.runInContext(`SHAQAccounts.modelCaption([], 'qwen3')`,ctx),'qwen3');

@@ -211,6 +211,19 @@ class VirtualAccountTests(unittest.TestCase):
             self.assertEqual(first['results'][1]['source_scope'], 'simulation_cumulative')
             self.assertEqual(store.refresh([history, pending]), first)
 
+    def test_continuity_historical_rows_show_running_balance_without_resizing(self):
+        api = self.api()
+        with tempfile.TemporaryDirectory() as tmp:
+            store = api.AccountStore(Path(tmp))
+            store.activate(api.AccountRules(), '2026-09-14T07:00:00-04:00', continuity=True)
+            first = self.row('first')
+            second = self.row('second', '2026-09-10T08:00:00-04:00', trade_date='2026-09-10')
+            result = store.refresh([first, second])
+            a,b = result['results']
+            self.assertAlmostEqual(b['account_balance'], 10000+a['net_pnl']+b['net_pnl'])
+            self.assertEqual([t['quantity'] for t in a['trades']], [t['quantity'] for t in b['trades']])
+            self.assertEqual(result['accounts'][0]['equity'], b['account_balance'])
+
     def test_risk_sizing_uses_frozen_prior_volatility_and_rejects_missing(self):
         api = self.api()
         rules = api.experimental_risk_rules(lookback=2)
@@ -380,7 +393,8 @@ class VirtualAccountTests(unittest.TestCase):
             def detail(batch):
                 variant = dict(variant={'version_sha256':'skill', 'label':'main'}, model_profile_sha256='model',
                     score_eligible=True, completed_at_et='2026-09-09T08:'+('30' if batch=='aaa-later' else '00')+':00-04:00', predictions=[])
-                return dict(evidence={'cutoff_status':'on_time'}, variants={'team/main':variant}, labels={}, status={})
+                return dict(evidence={'cutoff_status':'on_time', 'as_of_et':'2026-09-09T07:59:00-04:00',
+                                     'scheduled_cutoff_et':'2026-09-09T08:50:00-04:00'}, variants={'team/main':variant}, labels={}, status={})
             with patch.object(index, 'batch_detail', side_effect=detail):
                 rows = index._daily_results(batches)
             self.assertEqual([r['batch_id'] for r in rows if r['score_eligible']], ['zzz-first'])
@@ -399,7 +413,8 @@ class VirtualAccountTests(unittest.TestCase):
                            'model_profile_sha256':'model', 'score_eligible':True,
                            'completed_at_et':'2026-09-09T08:'+('00' if batch == 'first' else '30')+':00-04:00',
                            'predictions':[{'symbol':'AAA','direction':'bullish','risk_sizing':sizing}]}
-                return {'evidence':{'cutoff_status':'on_time'}, 'variants':{key:variant},
+                return {'evidence':{'cutoff_status':'on_time','as_of_et':'2026-09-09T07:59:00-04:00',
+                                    'scheduled_cutoff_et':'2026-09-09T08:50:00-04:00'}, 'variants':{key:variant},
                         'skill_snapshots':{key:{'documents':{'skills/daily-oracle/SKILL.md':'same'}}},
                         'labels':{'labels':{}}, 'status':{}}
             with patch.object(index, 'batch_detail', side_effect=detail):

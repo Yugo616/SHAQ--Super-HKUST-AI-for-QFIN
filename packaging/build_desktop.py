@@ -5,6 +5,7 @@ import base64
 import csv
 import hashlib
 import importlib.metadata as metadata
+from importlib import import_module
 import json
 import os
 import platform
@@ -369,6 +370,17 @@ def pack_managed(root, payload, output, version):
         normalize_setup(output, channel)
 
 
+def require_updater_runtime():
+    # Synthetic smoke mode skips updater startup; its success cannot prove this
+    # mandatory dependency exists in the actual launch path.
+    try:
+        module = import_module('velopack')
+        if not callable(getattr(module, 'App', None)):
+            raise ImportError('missing App entrypoint')
+    except ImportError as exc:
+        raise RuntimeError('Missing updater runtime; install packaging/requirements.lock.txt before building') from exc
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--output', type=Path, required=True)
@@ -390,6 +402,7 @@ def main():
         parser.error('--prepare-public-base requires --manage-existing')
     if sys.version_info[:2] != (3, 13):
         raise RuntimeError('Native release builds require CPython 3.13')
+    require_updater_runtime()
     import tables
     if tables.which_lib_version('lzo') is not None:
         raise RuntimeError('Use the no-LZO source build before packaging')

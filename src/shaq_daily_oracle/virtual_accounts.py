@@ -188,10 +188,12 @@ def replay_day(trade_date, predictions, labels, rules: AccountRules, *, cash=Non
     if not predictions:
         return result
     minute = minute or {}
+    if minute.get('status') == 'error':
+        return dict(result, status='error', error=minute.get('error', 'Minute observation failure'))
     if not minute.get('records'):
         return dict(result, status='pending', closing_cash=None, net_pnl=None, gross_pnl=None,
                     data_status=minute.get('status', 'pending'))
-    targets = target_bars(trade_date, minute['records'], symbols)
+    targets = target_bars(trade_date, minute['records'], symbols, entry_times=minute.get('entry_times'))
     bars = {}
     for symbol, phases in targets.items():
         for target in phases.values():
@@ -221,7 +223,8 @@ def replay_day(trade_date, predictions, labels, rules: AccountRules, *, cash=Non
     engine = run_session(SessionInput(trade_date, tuple(
         Signal(p['symbol'], 1 if p['direction'] == 'bullish' else -1)
         for p in predictions), bars, ticket_budgets=ticket_budgets,
-        fixed_shares=fixed_quantities),
+        fixed_shares=fixed_quantities,
+        entry_times={symbol: pd.Timestamp(stamp) for symbol, stamp in minute.get('entry_times', {}).items()}),
         Rules(initial_cash=max(0., cash), ticket_budget=rules.per_prediction_budget,
               commission=rules.commission_rate, slippage=rules.slippage_rate))
     if not engine['reconciled'] or not engine['zero_cost']['reconciled']:
@@ -262,10 +265,12 @@ def replay_day(trade_date, predictions, labels, rules: AccountRules, *, cash=Non
                                          if targets[symbol]['entry'] is not None else None),
             exit_reference_open=exit_fill['reference_open'] if exit_fill else None,
             entry_price=entry['price'] if entry else None, exit_price=exit_fill['price'] if exit_fill else None,
-            entry_reference_at_et=result['entry_reference_at_et'],
+            entry_reference_at_et=minute.get('entry_times', {}).get(symbol, result['entry_reference_at_et']),
             exit_reference_at_et=result['exit_reference_at_et'],
             gross_pnl=gross, fees=fees, slippage_cost=slippage,
             net_pnl=gross-slippage-fees if gross is not None else None))
+        if symbol in minute.get('entry_exceptions', {}):
+            result['trades'][-1]['entry_exception'] = minute['entry_exceptions'][symbol]
     status = ('incomplete' if engine['positions'] else
               'unavailable' if any(targets[s]['entry'] is None for s in symbols) else
               'final' if minute.get('status') == 'final' else 'provisional')
@@ -300,11 +305,14 @@ def _late(row):
     completion = _completion(row)
     if row.get('cutoff_status') == 'late_research_only':
         return True
-    # This is the existing research publication deadline, not an execution time.
+    # Explicit assessments take precedence; otherwise use the exchange session.
     deadline = _time(row['publication_deadline_et']) if row.get('publication_deadline_et') else None
     if deadline is None and completion:
-        deadline = datetime.combine(date.fromisoformat(row['trade_date']), datetime.min.time(), ET).replace(hour=9)
-    return bool(completion and deadline and completion > deadline)
+        session = market_session(date.fromisoformat(row['trade_date']))
+        if session is None:
+            return True
+        deadline = session.market_open
+    return bool(completion and deadline and completion >= deadline)
 
 
 class AccountStore:
@@ -569,6 +577,10 @@ class AccountStore:
                     if scope == 'historical' and replay.get('status') in ('final', 'provisional', 'empty')
                     else None
                 )
+                if scope == 'historical' and policy.get('continuity') and reference_balance is not None:
+                    reference_balance = None if funded['blocked'] else opening_equity + replay['net_pnl']
+                    if reference_balance is not None:
+                        funded['equity'] = reference_balance
                 entry['account_balance'] = reference_balance
                 entry['account_cumulative_net_pnl'] = (
                     reference_balance - rules.initial_cash if reference_balance is not None else None
