@@ -14,6 +14,16 @@ its progress without waiting for history refresh, and replaces the earlier
 attempt in today's view. Short Chinese messages explain analysis failures;
 the original diagnostic remains saved. Recovery reuses validated calls.
 
+The window discovers jobs started by the system scheduler even when no job was
+previously visible. Overall progress counts saved, validated tasks; completed
+runs stop animating. Price/account refresh errors are shown separately from
+research failures, with diagnostic details collapsed by default.
+
+An explicit, locally verified correction can link an old placeholder model
+identity to its actual model for account continuity. This does not rewrite
+frozen predictions, model-call snapshots or saved trades, and does not merge
+unrelated models merely because their display names match.
+
 Predictions, account rules and method packages are unchanged. Build provenance
 is included in the installed `third-party/manifest.json` resource (under the
 PyInstaller resource directory); it contains the source commit and dependency

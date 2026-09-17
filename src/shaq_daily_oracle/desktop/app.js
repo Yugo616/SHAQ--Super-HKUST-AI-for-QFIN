@@ -6,11 +6,15 @@ const dir=v=>({bullish:'看涨',bearish:'看跌',neutral:'中性',unavailable:'�
 function notice(text,bad=false){const n=q('#notice');n.textContent=text;n.className='notice '+(bad?'bad':'');setTimeout(()=>n.classList.add('hidden'),6500)}
 function refreshStatusText(value={}){const status=value.status||'idle',retry=value.next_retry_at?` · 将于 ${String(value.next_retry_at).slice(11,16)} 重试失败项`:'';
   const failures=[...(value.result?.failures||[]),...(value.result?.minute_settlement?.failures||[]),...(value.result?.stage_failures||[])];
-  const reason=String(value.error||failures[0]?.message||'请重试失败项').replace(/\s+/g,' ').slice(0,120);
+  const raw=String(value.error||failures[0]?.message||'请重试失败项');
+  const reason=/database.*locked|SQLITE_BUSY|SQLITE_LOCKED/i.test(raw)?'本地数据暂时被占用，已保存结果不受影响':
+    /target minutes unavailable|missing.*minute|minute.*missing/i.test(raw)?'缺少目标分钟行情，已保存结果不受影响':
+    /offline|connect|network|timeout|timed out/i.test(raw)&&!/[\u3400-\u9fff]/.test(raw)?'行情网络连接暂未完成':
+    /[\u3400-\u9fff]/.test(raw)?raw.replace(/\s+/g,' ').slice(0,120):'暂未完成，请重试；详细原因可在技术详情查看';
   if(status==='running'||status==='already_running')return '正在更新价格与成绩…';
   if(status==='complete')return '价格与成绩更新完成';
-  if(status==='partial_failure')return `部分更新失败（${Number(value.failure_count||0)} 项）：${reason}${retry}`;
-  if(status==='failed')return `更新失败：${reason}${retry}`;return ''}
+  if(status==='partial_failure')return `价格与成绩：${Number(value.failure_count||0)} 项暂未更新 · ${reason}${retry}`;
+  if(status==='failed')return `价格与成绩：${reason}${retry}`;return ''}
 function metric(label,value,note=''){return `<div class="metric"><span>${esc(label)}</span><strong>${esc(value)}</strong>${note?`<small>${esc(note)}</small>`:''}</div>`}
 function versionKey(v){return `${v.author||'team'}/${v.version_id}`}
 function selectedVersions(){return qa('.version-check:checked').map(box=>({author:box.dataset.author,version_id:box.dataset.version}))}
@@ -122,6 +126,25 @@ function pageSnapshot(data,page){
   return JSON.stringify([data.settings,data.versions,data.drafts,data.data_status]);
 }
 function renderRefreshControls(status){
+  const detail=q('#refresh-diagnostic');
+  if(detail?.classList){
+    const failed=Number(status.failure_count)>0||['failed','partial_failure'].includes(status.status);
+    detail.classList.toggle('hidden',!failed);
+    const diagnostic={scope:'result_refresh',status:status.status,operation_id:status.operation_id,
+      occurred_at:status.completed_at||status.attempted_at,next_retry_at:status.next_retry_at,
+      impact:'仅影响价格与账户更新，不改变研究结论',error_type:status.error_type,error:status.error,
+      failures:[...(status.result?.failures||[]),...(status.result?.minute_settlement?.failures||[]),...(status.result?.stage_failures||[])]};
+    q('#refresh-diagnostic-text').textContent=JSON.stringify(diagnostic,null,2);
+    q('#copy-refresh-diagnostic').onclick=async()=>{
+      const text=q('#refresh-diagnostic-text').textContent;
+      try{
+        if(navigator.clipboard?.writeText)await navigator.clipboard.writeText(text);
+        else{const field=document.createElement('textarea');field.value=text;detail.append(field);field.select();
+          const copied=document.execCommand('copy');field.remove();if(!copied)throw new Error('请展开技术详情后选中文字复制。');}
+        notice('诊断信息已复制');
+      }catch(error){notice(error.message,true)}
+    };
+  }
   if(typeof document!=='undefined')document.querySelectorAll('[data-retry-minute-date]').forEach(control=>{
     control.disabled=['running','already_running'].includes(status.status);
     control.textContent=control.disabled?'正在更新行情…':'补取缺失行情';
@@ -171,5 +194,31 @@ function preserveReadingView(root){
     root.scrollTop=top;root.scrollLeft=left;
   };
 }
+async function pollDesktopActivity(){
+  if(!state.data||pollDesktopActivity.busy)return;
+  pollDesktopActivity.busy=true;
+  try{
+    const value=await api('get_lab_activity',state.activityRevision||'');
+    if(!value.changed){
+      if(typeof SHAQProgress!=='undefined')SHAQProgress.updateClocks(state.data.jobs||[],value.observed_at);
+      return;
+    }
+    const previous=state.data.jobs||[], oldRefresh=state.data.result_refresh;
+    const pageScroll=window.scrollY||0,restore=preserveReadingView(q('#'+state.page));
+    state.activityRevision=value.revision;
+    load.request=(load.request||0)+1;
+    state.data.jobs=value.jobs;state.data.result_refresh=value.result_refresh;
+    state.data.clock={...state.data.clock,et:value.observed_at};
+    render(state.page==='run',false);restore();window.scrollTo?.(0,pageScroll);
+    // Show live work before the slower immutable-history verification.
+    const terminal=job=>!['queued','running'].includes(job.status);
+    const finished=value.jobs.some(job=>terminal(job)&&!previous.some(old=>old.job_id===job.job_id&&old.status===job.status));
+    if(finished||(['complete','partial_failure','failed'].includes(value.result_refresh.status)&&
+       JSON.stringify(oldRefresh)!==JSON.stringify(value.result_refresh)))void load(false);
+  }catch(error){
+    // Keep current reports on a transient polling failure; do not mark research failed.
+    const target=q('#activity-status');if(target)target.textContent='进度同步暂未完成，稍后自动重试。';
+  }finally{pollDesktopActivity.busy=false}
+}
 async function startDesktop(){if(await load())await api('confirm_desktop_ready')}
-qa('.nav').forEach(b=>b.onclick=()=>showPage(b.dataset.page));q('#refresh-button').onclick=async()=>{try{const value=await api('refresh_prices_and_results');state.data.result_refresh=value;render();await load(false)}catch(e){notice(e.message,true)}};window.addEventListener('pywebviewready',()=>startDesktop().catch(e=>notice(e.message,true)));setInterval(()=>{if(state.data&&((state.data.jobs||[]).some(job=>['queued','running'].includes(job.status))||['running','already_running'].includes(state.data.result_refresh?.status)))load(false)},10000);setInterval(async()=>{try{const r=await api("check_result_refresh_due");if(["running","already_running"].includes(r.status))await load(false)}catch(e){}},60*1000);
+qa('.nav').forEach(b=>b.onclick=()=>showPage(b.dataset.page));q('#refresh-button').onclick=async()=>{try{const value=await api('refresh_prices_and_results');state.data.result_refresh=value;render();await load(false)}catch(e){notice(e.message,true)}};window.addEventListener('pywebviewready',()=>startDesktop().catch(e=>notice(e.message,true)));setInterval(()=>{void pollDesktopActivity()},10000);setInterval(async()=>{try{const r=await api("check_result_refresh_due");if(["running","already_running"].includes(r.status))await load(false)}catch(e){}},60*1000);

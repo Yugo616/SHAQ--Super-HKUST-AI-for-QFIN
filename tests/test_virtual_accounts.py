@@ -9,6 +9,23 @@ from pathlib import Path
 
 
 class VirtualAccountTests(unittest.TestCase):
+    def test_confirmed_model_alias_inherits_balance_without_repricing_saved_trades(self):
+        api = self.api()
+        with tempfile.TemporaryDirectory() as tmp:
+            store=api.AccountStore(Path(tmp));store.activate(api.AccountRules(),'2026-09-09T07:00:00-04:00',continuity=True)
+            old=self.row(model_identity='old',method_identity='method')
+            first=store.refresh([old]);before=first['results'][0]
+            files={p:p.read_bytes() for p in (store.root/'settlements').glob('*.json')}
+            today=self.row('new','2026-09-10T08:00:00-04:00',trade_date='2026-09-10',predictions=[],
+                           series_key='skill:new',model_identity='new',account_model_identity='old',method_identity='method')
+            value=store.refresh([old,today])
+            self.assertEqual(len(value['accounts']),1)
+            self.assertEqual(value['results'][1]['account_balance'],before['account_balance'])
+            self.assertEqual(value['results'][0]['trades'],before['trades'])
+            self.assertTrue(all(p.read_bytes()==data for p,data in files.items()))
+            self.assertEqual(value,store.refresh([old,today]))
+            unlinked=store.refresh([old,{k:v for k,v in today.items() if k!='account_model_identity'}])
+            self.assertEqual(len(unlinked['accounts']),2)
     def test_refresh_pending_preserves_last_settlement_without_mutating_files(self):
         api = self.api()
         for empty in (False, True):

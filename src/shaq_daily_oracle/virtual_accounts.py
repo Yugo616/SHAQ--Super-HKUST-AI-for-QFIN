@@ -477,7 +477,9 @@ class AccountStore:
             ordered = sorted(rows, key=lambda r: (r['trade_date'], _completion(r) or datetime.max.replace(tzinfo=ET), r['batch_id'], r['variant_key']))
             accounts, results, selected = {}, [], set()
             for row in ordered:
-                key = (row['trade_date'], row['series_key'])
+                account_model = row.get('account_model_identity', row.get('model_identity', row.get('model')))
+                continuity_key = [row.get('method_identity', row['series_key']), account_model]
+                key = (row['trade_date'], tuple(continuity_key) if policy.get('continuity') else row['series_key'])
                 completion = _completion(row)
                 session = market_session(date.fromisoformat(row['trade_date']))
                 source_eligible = row.get('source_eligible') is True
@@ -488,14 +490,12 @@ class AccountStore:
                 if source_eligible:
                     selected.add(key)
                 scope = 'duplicate' if duplicate else 'late' if late or (row.get('source_eligible') is True and not source_eligible) else 'practice' if not source_eligible else 'historical' if _completion(row) is None or _completion(row) < _time(policy['activated_at']) else 'forward'
-                continuity_key = [row.get('method_identity', row['series_key']),
-                                  row.get('model_identity', row.get('model'))]
                 identity = sha256_payload([continuity_key if policy.get('continuity') else row['series_key'],
                                            ENGINE_ID, ENGINE_VERSION, POLICY_ID, rules_hash])
                 base = dict(batch_id=row['batch_id'], variant_key=row['variant_key'], trade_date=row['trade_date'],
                             label=row['label'], model=row.get('model'), scope=scope, source_scope=scope,
                             series_key=row['series_key'], method_identity=row.get('method_identity', row['series_key']),
-                            model_identity=row.get('model_identity', row.get('model')),
+                            model_identity=account_model,
                             account_id=identity, rules=_rules_dict(rules), policy_id=POLICY_ID, legacy=False,
                             engine=ENGINE_ID, engine_version=ENGINE_VERSION)
                 if duplicate:
@@ -511,7 +511,7 @@ class AccountStore:
                     funded = accounts.setdefault(identity, dict(account_id=identity, series_key=row['series_key'],
                         label=row['label'], model=row.get('model'), engine=ENGINE_ID, engine_version=ENGINE_VERSION,
                         policy_id=POLICY_ID, method_identity=row.get('method_identity', row['series_key']),
-                        model_identity=row.get('model_identity', row.get('model')), legacy=False, equity=opening_equity, gross_equity=opening_equity,
+                        model_identity=account_model, legacy=False, equity=opening_equity, gross_equity=opening_equity,
                         rules=_rules_dict(rules), activated_at=policy['activated_at'],
                         opening_simulation_balance=opening_equity, source_scope='simulation_cumulative' if policy.get('continuity') else 'forward',
                         peak=opening_equity, max_drawdown=0.0, fees=0.0, slippage_cost=0.0, sessions=0, curve=[], blocked=False))

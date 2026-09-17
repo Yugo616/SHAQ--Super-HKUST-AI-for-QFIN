@@ -321,6 +321,8 @@ class ResearchDashboardIndex:
         """Join minute observations only at the execution/account boundary."""
         from .minute_settlements import MINUTE_NAMESPACE, MinuteStore
         store = MinuteStore(self.batches_root.parent / MINUTE_NAMESPACE)
+        from .model_identity_links import read_model_links
+        model_links = read_model_links(self.batches_root.parent)
         output = []
         for row in daily_results:
             if not row.get('series_key'):
@@ -328,6 +330,10 @@ class ResearchDashboardIndex:
             row = dict(row)
             if 'model_for_account' in row:
                 row['model'] = row.pop('model_for_account')
+            link = model_links.get(row.get('model_identity'))
+            if link:
+                row.update(account_model_identity=link['canonical_identity'], model=link['model'],
+                           model_link_receipt_hash=link['receipt_hash'])
             symbols = [p['symbol'] for p in row['predictions']]
             identity = [row['batch_id'], row['variant_key'], row.get('variant_result_sha256')]
             path = self.batches_root.parent / 'entry_exceptions' / (sha256_payload(identity) + '.json')
@@ -584,6 +590,8 @@ class ResearchDashboardIndex:
         comparisons = {a: {b: compare_versions(left, right, skill_snapshots[a]['documents'], skill_snapshots[b]['documents'])
                            for b, right in variants.items() if a != b} for a, left in variants.items()}
         models = {}
+        from .model_identity_links import read_model_links
+        model_links = read_model_links(self.batches_root.parent)
         for key, value in variants.items():
             identity = [batch_id, key, value.get('variant_result_sha256')]
             annotation = _read(self.batches_root.parent / 'model_annotations' / (sha256_payload(identity) + '.json'))
@@ -591,6 +599,9 @@ class ResearchDashboardIndex:
                 unsigned = {k:v for k,v in annotation.items() if k != 'annotation_sha256'}
                 if (annotation.get('identity') != identity or annotation.get('annotation_sha256') != sha256_payload(unsigned)):
                     annotation = None  # Display annotations cannot invalidate a frozen prediction.
+            link = model_links.get(value.get('model_profile_sha256'))
+            if link:
+                annotation = {'model': link['model'], 'source': 'user_confirmation'}
             models[key] = display_model(value, model_calls, annotation)
         return {
             "batch_id": batch_id, "manifest": manifest, "status": status,

@@ -5,6 +5,18 @@ from pathlib import Path
 
 
 class TodayProgressTests(unittest.TestCase):
+    def test_batch_bar_uses_backend_summary_and_complete_never_animates(self):
+        self.run_js(r'''
+const assert=require('node:assert/strict');
+const job={job_id:'live',started_at_et:'2026-09-17T08:35:00-04:00',status:'running',variant_progress:{v:'running'},
+ progress_summary:{completed_tasks:72,total_tasks:101,stage:'adversary',last_event_at:'2026-09-17T08:47:00-04:00',started_at:'2026-09-17T08:35:00-04:00',variants:{v:{total_tasks:101,completed_tasks:72}}}};
+const html=ui.progressHtml([job],[],'2026-09-17T08:47:05-04:00');
+assert.match(html,/整体进度.*72 \/ 101/);assert.match(html,/反方审查/);
+assert.match(html,/最近进展.*5秒前/);assert.match(html,/已运行.*12分/);
+assert.match(html,/<progress[^>]*max="101" value="72"/);
+const done=ui.progressHtml([{...job,status:'complete',variant_progress:{v:'complete'},progress_summary:{...job.progress_summary,stage:'complete',completed_tasks:101,completed_at:'2026-09-17T08:48:00-04:00'}}],[],'2026-09-17T10:00:00-04:00');
+assert.match(done,/今日研究已完成/);assert.doesNotMatch(done,/<progress(?![^>]*value=)[^>]*>/);
+''')
     def test_resume_replaces_failed_attempt_in_current_progress(self):
         self.run_js(r'''
 const assert=require('node:assert/strict');

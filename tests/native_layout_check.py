@@ -148,6 +148,15 @@ def main():
                     raise AssertionError('Recovery duplicated the old failed progress')
                 report['resume_original_batch_action'] = True
                 report['resume_progress_visible'] = True
+                window.evaluate_js("""
+                    state.data.jobs=[];state.activityRevision='not-yet-seen';
+                    renderRun();window.fixtureDiscovered=false;
+                    pollDesktopActivity().then(()=>window.fixtureDiscovered=true);
+                """)
+                wait('window.fixtureDiscovered')
+                wait("Boolean(document.querySelector('[data-progress-job=resume-fixture-original-batch] .overall-progress'))")
+                report['external_job_discovery'] = True
+                report['backend_total_progress'] = True
                 window.evaluate_js("document.querySelector('#connections-button').click()")
                 wait("Boolean(document.querySelector('#execution-policy-form').onsubmit)")
                 if not window.evaluate_js("document.querySelector('#execution-policy-form').elements.timeout_seconds.value==='600' && "

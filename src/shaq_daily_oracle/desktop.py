@@ -115,6 +115,9 @@ class DesktopBridge:
             return value
         return self._result(state)
 
+    def get_lab_activity(self, revision: str = '') -> dict[str, Any]:
+        return self._result(self.lab.activity_status, revision)
+
     def copy_local_version(self, version_id: str, author: str) -> dict[str, Any]:
         return self._result(self.lab.copy_local_version, version_id=version_id, author=author)
 
@@ -586,7 +589,21 @@ def _bind_gui_smoke_fixture(bridge, fixture_state, fixture_detail):
     completed_transfers = set()
 
     def fixture_state_api(self):
+        from .research_progress import summarize_job
+        for row in fixture_state.get('jobs', []):
+            row['progress_summary'] = summarize_job(row)
         return {"ok": True, "value": fixture_state}
+
+    def fixture_activity_api(self, revision=''):
+        from .hashing import sha256_payload
+        fixture_state_api(self)
+        jobs = fixture_state.get('jobs', [])
+        current = sha256_payload([jobs, fixture_state.get('result_refresh', {})])
+        value = dict(changed=current != revision, revision=current,
+                     observed_at=fixture_state['clock']['et'])
+        if value['changed']:
+            value.update(jobs=jobs, result_refresh=fixture_state.get('result_refresh', {}))
+        return {'ok': True, 'value': value}
 
     def fixture_resume_api(self, batch_id):
         if batch_id != 'fixture-original-batch':
@@ -652,6 +669,7 @@ def _bind_gui_smoke_fixture(bridge, fixture_state, fixture_detail):
             'message': 'fixture transfer complete; no remote writes'}]}
 
     bridge.get_lab_state = MethodType(fixture_state_api, bridge)
+    bridge.get_lab_activity = MethodType(fixture_activity_api, bridge)
     bridge.resume_shadow_batch = MethodType(fixture_resume_api, bridge)
     bridge.get_shadow_batch = MethodType(fixture_batch_api, bridge)
     bridge.refresh_prices_and_results = MethodType(fixture_refresh_api, bridge)

@@ -69,6 +69,10 @@ input[type=checkbox],input[type=radio]{width:16px;height:16px;min-width:16px;fle
 .variant-progress>summary span{display:inline-block;min-width:220px;margin-right:12px}
 .variant-progress progress{width:180px;height:12px;vertical-align:middle;margin-right:12px;accent-color:var(--blue)}
 .variant-progress>summary small{white-space:nowrap;color:var(--muted)}
+.overall-progress{display:grid;gap:8px;padding:12px 0;border-bottom:1px solid var(--line)}
+.overall-progress label{display:grid;gap:6px}.overall-progress progress{width:100%;height:14px;accent-color:var(--blue)}
+.overall-progress small{color:var(--muted)}
+.refresh-diagnostic{font-size:13px;margin-bottom:12px}.refresh-diagnostic pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;overflow:auto}
 .progress-symbol{padding:8px 12px;border-top:1px solid var(--line)}
 .progress-symbol h4{margin:8px 0}.domain-status-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px 20px}
 .domain-status-list details,.domain-status-list p{margin:4px 0}.domain-status-list details[open]{grid-column:1/-1;background:#f8fafc;padding:12px}

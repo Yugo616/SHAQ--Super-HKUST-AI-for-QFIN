@@ -46,7 +46,11 @@ assert.equal(typeof ctx.refreshStatusText,'function','UI needs observable refres
 assert.match(ctx.refreshStatusText({status:'running'}),/正在/);
 assert.match(ctx.refreshStatusText({status:'complete',completed_at:'2026-09-09T17:00:00-04:00'}),/完成/);
 assert.match(ctx.refreshStatusText({status:'partial_failure',failure_count:2}),/2/);
-assert.match(ctx.refreshStatusText({status:'failed',error:'offline'}),/offline/);
+assert.match(ctx.refreshStatusText({status:'failed',error:'offline'}),/网络/);
+const locked=ctx.refreshStatusText({status:'failed',error:'OperationalError: database is locked',next_retry_at:'2026-09-17T16:10:00-04:00'});
+assert.match(locked,/价格与成绩.*数据.*占用/);
+assert.doesNotMatch(locked,/database|OperationalError|模型连接/);
+assert.match(ctx.refreshStatusText({status:'partial_failure',failure_count:1,result:{minute_settlement:{failures:[{message:'Refresh target minutes unavailable'}]}}}),/目标分钟行情/);
 assert.match(ctx.refreshStatusText({status:'failed',result:{failures:[{message:'行情连接超时'}]}}),/行情连接超时/);
 assert.match(ctx.refreshStatusText({status:'partial_failure',failure_count:1,result:{stage_failures:[{message:'账户核对失败'}]}}),/账户核对失败/);
 '''

@@ -231,9 +231,13 @@ class LabService:
 
     def result_refresh_status(self) -> dict[str, Any]:
         try:
-            return read_refresh_receipt(self._result_refresh_receipt)
+            value = read_refresh_receipt(self._result_refresh_receipt)
         except (FileNotFoundError, json.JSONDecodeError):
-            return {"status": "idle", "operation_id": "", "result": {}}
+            value = {"status": "idle", "operation_id": "", "result": {}}
+        return {**value, 'scope': 'result_refresh',
+                'impact': 'price_and_account_refresh_only',
+                'occurred_at': value.get('completed_at') or value.get('attempted_at'),
+                'retry_status': 'scheduled' if value.get('next_retry_at') else 'not_scheduled'}
 
     @guarded_method
     def start_result_refresh(self, *, manual: bool = False, eligible_dates=None,
@@ -461,6 +465,29 @@ class LabService:
             "jobs": self.job_statuses(),
             "result_refresh": self.result_refresh_status(),
         }
+
+    def activity_status(self, revision: str = '') -> dict[str, Any]:
+        """Discover external scheduler writes without indexing history or keys."""
+        root = self.paths.research_root
+        files = [self._result_refresh_receipt]
+        for directory in ('jobs', 'job_corrections', 'automatic_runs'):
+            files.extend((root / directory).glob('*.json'))
+        files.extend((root / 'jobs').glob('*-research.jsonl'))
+        stamps = []
+        for path in sorted(files):
+            try:
+                stat = path.stat()
+                stamps.append((path.relative_to(root).as_posix(), stat.st_mtime_ns, stat.st_size))
+            except FileNotFoundError:
+                continue
+        with self.jobs_lock:
+            memory = {key: dict(value) for key, value in self.jobs.items()}
+        current = sha256_payload({'files': stamps, 'jobs': memory})
+        value = dict(revision=current, changed=current != revision,
+                     observed_at=datetime.now(ET).isoformat())
+        if value['changed']:
+            value.update(jobs=self.job_statuses(), result_refresh=self.result_refresh_status())
+        return value
 
     def compare_methods(
         self, left: dict[str, str], right: dict[str, str]
@@ -1304,6 +1331,7 @@ class LabService:
 
     def job_statuses(self) -> list[dict[str, Any]]:
         from .job_corrections import corrected_status
+        from .research_progress import summarize_job
         stored = {}
         jobs_root = self.paths.research_root / "jobs"
         if jobs_root.is_dir():
@@ -1327,6 +1355,7 @@ class LabService:
             row["research_progress"] = ResearchProgressLog(
                 self.paths.research_root / "jobs" / f"{job_id}-research.jsonl"
             ).read()
+            row['progress_summary'] = summarize_job(row)
         return sorted(stored.values(), key=lambda row: str(row.get("started_at_et") or ""), reverse=True)
 
     def correct_interrupted_job(self, *, job_id: str, trade_date: str,

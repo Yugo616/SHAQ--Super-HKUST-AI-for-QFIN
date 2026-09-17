@@ -85,3 +85,59 @@ def safe_observe(observer: Callable[..., None] | None, **event: Any) -> Any:
         return observer(**event)
     except Exception:
         return None
+
+
+def summarize_job(job: dict[str, Any]) -> dict[str, Any]:
+    """Read-only projection of declared tasks and saved events, never a forecast."""
+    events = job.get('research_progress', [])
+    variants = {}
+    calls = {}
+    for key, status in job.get('variant_progress', {}).items():
+        rows = [row for row in events if row.get('variant_key') == key]
+        plans = [row for row in rows if row.get('stage') == 'tasks_planned']
+        tasks = {task['task_id'] for task in plans[-1].get('tasks', [])} if plans else None
+        completed = set()
+        for row in rows:
+            stage = row.get('stage')
+            task = (f"report:{row.get('symbol')}:{row.get('domain')}" if stage == 'report_validated'
+                    else 'decision' if stage == 'decision_complete'
+                    else stage if stage in {'adversary', 'synthesis'} and row.get('status') == 'complete'
+                    else None)
+            if tasks is not None and task in tasks:
+                completed.add(task)
+            if tasks is not None and stage == 'variant_reused' and row.get('status') == 'complete':
+                completed.update(tasks)
+            if row.get('call_id') and stage in {'call_requested', 'model_started', 'model_returned', 'cache_hit', 'failure', 'validation_failure'}:
+                identity = (key, row['call_id'])
+                attempt = int(row.get('attempt', 1))
+                if attempt >= calls.get(identity, (0, ''))[0]:
+                    calls[identity] = (attempt, stage)
+        variants[key] = dict(status=status, total_tasks=len(tasks) if tasks is not None else None,
+                             completed_tasks=len(completed))
+    known = bool(variants) and all(row['total_tasks'] is not None for row in variants.values())
+    state = job.get('status', 'queued')
+    stage = 'preparation'
+    for row in events:
+        event_stage = row.get('stage')
+        if event_stage in {'preparation', 'screening', 'adversary', 'synthesis', 'decision_complete'}:
+            stage = 'decision' if event_stage in {'synthesis', 'decision_complete'} else event_stage
+        elif event_stage in {'tasks_planned', 'report_validated', 'model_started'}:
+            stage = 'domain_analysis' if row.get('domain') or event_stage != 'model_started' else stage
+    if state not in {'queued', 'running'}:
+        stage = 'complete' if state == 'complete' else 'incomplete'
+    observed = max([str(row.get('occurred_at_et') or '') for row in events] +
+                   [str(job.get('completed_at_et') or job.get('started_at_et') or '')])
+    try:
+        started = datetime.fromisoformat(job.get('started_at_et', ''))
+        trade_date = started.astimezone(ET).date().isoformat() if started.tzinfo else None
+    except (TypeError, ValueError):
+        trade_date = None
+    return dict(scope='research_run', job_id=job.get('job_id'), batch_id=job.get('batch_id'),
+                trade_date=trade_date, status=state, stage=stage, variants=variants,
+                completed_tasks=sum(row['completed_tasks'] for row in variants.values()),
+                total_tasks=sum(row['total_tasks'] for row in variants.values()) if known else None,
+                completed_calls=sum(stage == 'model_returned' for _, stage in calls.values()),
+                reused_calls=sum(stage == 'cache_hit' for _, stage in calls.values()),
+                observed_calls=len(calls), total_calls=None,
+                started_at=job.get('started_at_et'), completed_at=job.get('completed_at_et'),
+                last_event_at=observed or None)
