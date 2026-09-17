@@ -77,7 +77,7 @@ def main():
                             Boolean(document.querySelector('.balance-overview')) &&
                             Boolean(document.querySelector('.result-table')) &&
                             !/一股|手续费|滑点/.test(document.querySelector('#history').textContent) &&
-                            !document.querySelector('#history details')
+                            !document.querySelector('#history .balance-overview details')
                         """):
                             raise AssertionError('Results page contains obsolete accounting clutter')
                     window.evaluate_js("document.querySelector('.nav[data-page=run]').click(); "
@@ -101,7 +101,19 @@ def main():
                     wait("Boolean(document.querySelector('.transfer-check'))")
                     measure(f'{width} method download', '#method-transfer-modal')
                     window.evaluate_js("document.querySelector('#method-transfer-close').click()")
-                window.evaluate_js("document.querySelector('.nav[data-page=run]').click()")
+                # The production view now intentionally hides old terminal jobs.
+                # Anchor this fixture's clock to its actual fixture job date,
+                # including subsequent bridge refreshes, to exercise today's UI.
+                window.evaluate_js("""
+                    window.layoutOriginalState=window.pywebview.api.get_lab_state;
+                    window.pywebview.api.get_lab_state=async()=>{
+                        const result=await window.layoutOriginalState();
+                        result.value.clock.et=result.value.jobs[0].started_at_et;
+                        return result;
+                    };
+                    state.data.clock.et=state.data.jobs[0].started_at_et;
+                    document.querySelector('.nav[data-page=run]').click();
+                """)
                 wait("Boolean(document.querySelector('[data-progress-retry]'))")
                 window.evaluate_js("""
                     document.querySelector('[data-progress-variant]').open=true;
