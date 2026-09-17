@@ -197,12 +197,16 @@ def _candidate_metrics(runtime: Path, row: dict[str, Any]) -> dict[str, Any]:
     volume = row.get("premarket_volume")
     if volume is None:
         volume = stock.get("raw_snapshot", {}).get("pre_volume")
+    volume_status = row.get("premarket_volume_status")
+    if volume_status is None:
+        volume_status = stock.get("premarket", {}).get("volume_status")
     raw = stock.get("raw_snapshot", {})
     return {
         "stock_return": stock_return,
         "sector_return": sector_return,
         "residual": residual,
         "volume": volume,
+        "volume_status": volume_status,
         "pre_low": raw.get("pre_low_price"),
         "pre_high": raw.get("pre_high_price"),
         "sector_benchmark": benchmark_symbol or "—",
@@ -291,7 +295,11 @@ def _plain_chinese(
             support = f"最近两个期限隐含的双向波动约为{moves[0][0]}%和{moves[0][1]}%；但缺少可靠方向语义，所以保持中性。"
     elif domain == "price_volume":
         parts = [f"相对{metrics['sector_benchmark']}盘前多涨/少跌{_pct(metrics.get('residual'))}"]
-        if metrics.get("volume") is not None:
+        if metrics.get("volume_status") == "provider_reported_zero":
+            parts.append("数据源的成交量字段全部返回0，不能据此确认没有成交")
+        elif metrics.get("volume_status") in {"missing", "partially_missing", "no_price_bars"}:
+            parts.append("盘前成交参与数据不完整，不能据此判断活跃程度")
+        elif metrics.get("volume") is not None:
             parts.append(f"盘前成交{_number(metrics['volume'])}股")
         if metrics.get("pre_low") is not None and metrics.get("pre_high") is not None:
             parts.append(f"盘前区间{float(metrics['pre_low']):.2f}–{float(metrics['pre_high']):.2f}")

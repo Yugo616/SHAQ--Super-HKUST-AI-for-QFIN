@@ -32,6 +32,7 @@ def call_in_worker(operation, profile, payload):
     # Explicit allowlist: no SEC identity, endpoint credentials or whole settings.
     source = {key: value for key, value in asdict(profile).items() if key in {
         'profile_id', 'universe_file', 'request_timeout_seconds', 'batch_size',
+        'maximum_option_expiries',
         'maximum_option_contracts_per_side', 'intraday_interval',
         'yahoo_request_max_retries', 'yahoo_retry_backoff_seconds'}}
     try:

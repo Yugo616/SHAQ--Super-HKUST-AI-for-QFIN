@@ -159,7 +159,26 @@ def _premarket_state(
         ):
             eligible.append((observed, row, close))
     last_price = eligible[-1][2] if eligible else None
-    volume = sum(_number(item[1].get("volume")) or 0.0 for item in eligible)
+    volumes = [_number(item[1].get("volume")) for item in eligible]
+    present_volumes = [value for value in volumes if value is not None and value >= 0]
+    positive_volume_count = sum(value > 0 for value in present_volumes)
+    zero_volume_count = sum(value == 0 for value in present_volumes)
+    missing_volume_count = len(volumes) - len(present_volumes)
+    if not eligible:
+        volume_status = "no_price_bars"
+        volume_note = "no eligible premarket price bars were collected"
+    elif missing_volume_count == len(eligible):
+        volume_status = "missing"
+        volume_note = "provider did not supply volume fields for eligible price bars"
+    elif missing_volume_count:
+        volume_status = "partially_missing"
+        volume_note = "provider supplied volume for only part of the eligible price bars"
+    elif positive_volume_count:
+        volume_status = "observed_positive"
+        volume_note = "provider reported positive volume in at least one eligible price bar"
+    else:
+        volume_status = "provider_reported_zero"
+        volume_note = "all provider volume fields were zero; this does not prove no trading occurred"
     return {
         "status": "collected" if eligible else "no_data",
         "first_observation_et": eligible[0][0].isoformat() if eligible else None,
@@ -171,7 +190,15 @@ def _premarket_state(
             if last_price is not None and previous_close not in {None, 0}
             else None
         ),
-        "observed_volume": volume,
+        "observed_volume": sum(present_volumes) if present_volumes else None,
+        "volume_status": volume_status,
+        "volume_note": volume_note,
+        "eligible_price_bar_count": len(eligible),
+        "volume_observation_count": len(present_volumes),
+        "positive_volume_bar_count": positive_volume_count,
+        "zero_volume_bar_count": zero_volume_count,
+        "missing_volume_bar_count": missing_volume_count,
+        "volume_ranking_eligible": volume_status == "observed_positive",
         "bars": [item[1] for item in eligible],
     }
 
@@ -234,8 +261,12 @@ def _candidate_rows(
             method = "t_minus_1_stock_minus_sector_absolute_residual"
         else:
             continue
+        ranking_volume = (
+            float(premarket.get("observed_volume") or 0)
+            if premarket.get("volume_ranking_eligible") is True else 0.0
+        )
         ranked.append((
-            -metric, -float(premarket.get("observed_volume") or 0), member.symbol,
+            -metric, -ranking_volume, member.symbol,
             {
                 "symbol": member.symbol,
                 "company_name": member.company_name,
@@ -245,6 +276,9 @@ def _candidate_rows(
                 "selection_method": method,
                 "selection_metric": metric,
                 "premarket_return": stock_gap,
+                "premarket_volume": premarket.get("observed_volume"),
+                "premarket_volume_status": premarket.get("volume_status"),
+                "premarket_volume_note": premarket.get("volume_note"),
                 "sector_premarket_return": sector_gap,
                 "captured_primary_event": False,
             },
@@ -321,7 +355,12 @@ def collect_research_evidence(
         raise ResearchCollectionError(f'provider_error：{reason}，未启动模型分析。',
                                       diagnostic=exc.diagnostic) from exc
     premarket_observations = {symbol: {
-        key: state[key] for key in ('status', 'first_observation_et', 'last_observation_et')
+        key: state[key] for key in (
+            'status', 'first_observation_et', 'last_observation_et',
+            'volume_status', 'eligible_price_bar_count', 'volume_observation_count',
+            'positive_volume_bar_count', 'zero_volume_bar_count',
+            'missing_volume_bar_count',
+        )
     } for symbol in stock_symbols for state in [_premarket_state(
         stock_intraday.get(symbol, []), session_date=session.session_date,
         cutoff=data_cutoff, previous_close=None)]}
@@ -507,9 +546,20 @@ def collect_research_evidence(
             option_surface = market.option_surface(symbol)
         except Exception as exc:
             option_surface = {"symbol": symbol, "status": "provider_error", "error_type": type(exc).__name__}
+        option_surface = dict(option_surface)
+        option_task_eligible = (
+            option_surface.get("status") == "collected"
+            and option_surface.get("quote_timestamp_status") == "available"
+            and option_surface.get("quote_freshness_eligible") is True
+        )
+        option_surface["derivatives_task_eligible"] = option_task_eligible
+        if option_surface.get("status") == "collected" and not option_task_eligible:
+            option_surface["derivatives_task_ineligibility_reason"] = (
+                "missing_exchange_quote_timestamp"
+            )
         option_path = f"raw/options/{symbol}.json"
         files[option_path] = _json_bytes(option_surface)
-        if option_surface.get("status") == "collected":
+        if option_task_eligible:
             records.append({
                 "evidence_id": f"ev_options_{symbol.lower()}_" + sha256_payload(option_surface)[:12],
                 "domain": "derivatives", "provider": profile.market_provider,
@@ -521,13 +571,21 @@ def collect_research_evidence(
         collection_statuses.append({
             "symbol": symbol, "domain": "derivatives",
             "status": (
-                "collected" if option_surface.get("status") == "collected"
+                "collected" if option_task_eligible
                 else ("provider_error" if option_surface.get("status") == "provider_error" else "no_data")
             ),
         })
     files["raw/provider-status.json"] = _json_bytes({
-        "capital": {"status": "unavailable", "reason": "no aggressor-and-depth provider"},
-        "option_trade_flow": {"status": "unavailable", "reason": "surface only"},
+        "capital": {
+            "status": "unavailable",
+            "reason": "requires_authorized_aggressor_and_depth_feed",
+            "detail": "price, volume, and quote proxies cannot establish active buy/sell direction plus visible depth",
+        },
+        "option_trade_flow": {
+            "status": "unavailable",
+            "reason": "surface_without_aggressor_or_open_close_semantics",
+            "detail": "chain coverage and quote quality do not identify aggressor side or opening versus closing trades",
+        },
         "metadata": {"status": metadata_status},
     })
     completed = datetime.now(ET) if observed_at is None else now

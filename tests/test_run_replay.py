@@ -10,7 +10,12 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from shaq_daily_oracle.hashing import sha256_file, sha256_payload  # noqa: E402
-from shaq_daily_oracle.replay import run_replay, verify_replay_inputs, write_run_replay  # noqa: E402
+from shaq_daily_oracle.replay import (  # noqa: E402
+    _plain_chinese,
+    run_replay,
+    verify_replay_inputs,
+    write_run_replay,
+)
 
 
 class RunReplayTests(unittest.TestCase):
@@ -121,6 +126,40 @@ class RunReplayTests(unittest.TestCase):
         self.assertEqual(manifest["status"], "passed")
         self.assertEqual(manifest["run_replay_sha256"], sha256_file(self.runtime / "run_replay.html"))
         self.assertNotIn("/Users/", page)
+
+    def test_price_volume_replay_does_not_call_provider_zero_confirmed_zero_trading(self):
+        report = next(
+            row for row in self.frozen["reports_by_symbol"]["DLTR"]
+            if row["domain"] == "price_volume"
+        )
+        plain = _plain_chinese(
+            runtime=self.runtime, report=report, candidate={"symbol": "DLTR"},
+            metrics={
+                "sector_benchmark": "XLP", "residual": -0.005,
+                "volume": 0.0, "volume_status": "provider_reported_zero",
+                "pre_low": 99.0, "pre_high": 101.0,
+            },
+            evidence_records={},
+        )
+        self.assertIn("数据源的成交量字段全部返回0", plain["support"])
+        self.assertIn("不能据此确认没有成交", plain["support"])
+        self.assertNotIn("盘前成交0股", plain["support"])
+
+    def test_price_volume_replay_keeps_observed_positive_volume(self):
+        report = next(
+            row for row in self.frozen["reports_by_symbol"]["DLTR"]
+            if row["domain"] == "price_volume"
+        )
+        plain = _plain_chinese(
+            runtime=self.runtime, report=report, candidate={"symbol": "DLTR"},
+            metrics={
+                "sector_benchmark": "XLP", "residual": -0.005,
+                "volume": 8000.0, "volume_status": "observed_positive",
+                "pre_low": 99.0, "pre_high": 101.0,
+            },
+            evidence_records={},
+        )
+        self.assertIn("盘前成交8,000股", plain["support"])
 
 
 if __name__ == "__main__":

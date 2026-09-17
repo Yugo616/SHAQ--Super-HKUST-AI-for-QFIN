@@ -51,6 +51,7 @@ class DataProfile:
     intraday_interval: str = "5m"
     maximum_candidates: int = 8
     maximum_event_characters: int = 60_000
+    maximum_option_expiries: int = 3
     maximum_option_contracts_per_side: int = 40
     yahoo_worker_timeout_seconds: int = 900
     yahoo_request_max_retries: int = 1
@@ -111,6 +112,8 @@ class DataProfile:
             raise DataProviderError("maximum_candidates must be positive")
         if self.maximum_event_characters <= 0:
             raise DataProviderError("maximum_event_characters must be positive")
+        if self.maximum_option_expiries <= 0:
+            raise DataProviderError("maximum_option_expiries must be positive")
         if self.maximum_option_contracts_per_side <= 0:
             raise DataProviderError("maximum_option_contracts_per_side must be positive")
         if self.intraday_interval not in {"1m", "2m", "5m", "15m", "30m", "60m"}:
@@ -202,6 +205,44 @@ def _serialize_index(value: Any) -> str:
     if hasattr(value, "isoformat"):
         return value.isoformat()
     return str(value)
+
+
+def _positive_number(value: Any) -> bool:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return False
+    return math.isfinite(number) and number > 0
+
+
+def _option_quality(*, source_contract_count: int, rows: list[dict[str, Any]]) -> dict[str, Any]:
+    valid_price_pairs = sum(
+        _positive_number(row.get("bid"))
+        and _positive_number(row.get("ask"))
+        and float(row["ask"]) >= float(row["bid"])
+        for row in rows
+    )
+    retained_count = len(rows)
+    if retained_count and valid_price_pairs == retained_count:
+        price_pair_status = "complete"
+    elif valid_price_pairs:
+        price_pair_status = "partial"
+    else:
+        price_pair_status = "unavailable"
+    return {
+        "source_contract_count": source_contract_count,
+        "retained_contract_count": retained_count,
+        "contracts_with_valid_two_sided_price": valid_price_pairs,
+        "contracts_with_positive_volume": sum(
+            _positive_number(row.get("volume")) for row in rows
+        ),
+        "contracts_with_positive_open_interest": sum(
+            _positive_number(row.get("openInterest")) for row in rows
+        ),
+        "price_pair_status": price_pair_status,
+        "quote_freshness_status": "unverifiable",
+        "contracts_with_fresh_quote": None,
+    }
 
 
 def _frame_rows(frame: Any, symbols: list[str]) -> dict[str, list[dict[str, Any]]]:
@@ -379,9 +420,29 @@ class YFinanceProvider:
         ticker = yf.Ticker(_yahoo_symbol(symbol), session=session)
         expiries = list(self._request_with_retry(lambda: ticker.options, stage='option_surface') or [])
         if not expiries:
-            return {"symbol": symbol, "status": "no_data", "expiries": {}}
+            return {
+                "symbol": symbol,
+                "status": "no_data",
+                "captured_at": datetime.now(ZoneInfo("America/New_York")).isoformat(),
+                "available_expiry_count": 0,
+                "attempted_expiry_count": 0,
+                "collected_expiry_count": 0,
+                "failed_expiry_count": 0,
+                "maximum_option_expiries": self.profile.maximum_option_expiries,
+                "expiry_selection": "nearest_configured_expiries",
+                "quality": _option_quality(source_contract_count=0, rows=[]),
+                "capture_timestamp_semantics": "provider_response_capture_not_exchange_quote_time",
+                "quote_timestamp_status": "unavailable",
+                "quote_freshness_eligible": False,
+                "last_trade_timestamp_semantics": "contract_last_trade_not_quote_time",
+                "directional_flow_semantics": False,
+                "expiries": {},
+            }
         output: dict[str, Any] = {}
-        for expiry in expiries[:3]:
+        aggregate_rows: list[dict[str, Any]] = []
+        aggregate_source_count = 0
+        selected_expiries = expiries[:self.profile.maximum_option_expiries]
+        for expiry in selected_expiries:
             try:
                 chain = self._request_with_retry(lambda: ticker.option_chain(expiry), stage='option_surface')
             except Exception as exc:
@@ -390,36 +451,71 @@ class YFinanceProvider:
                                   "diagnostic": diagnostic}
                 continue
             sides = {}
+            expiry_rows: list[dict[str, Any]] = []
+            expiry_source_count = 0
+            reference_price = None
+            try:
+                reference_price = float(ticker.fast_info.get("last_price"))
+            except (AttributeError, TypeError, ValueError):
+                pass
             for name, frame in (("calls", chain.calls), ("puts", chain.puts)):
                 rows = []
                 for _, row in frame.iterrows():
                     record = {}
                     for key in (
                         "contractSymbol", "strike", "bid", "ask", "lastPrice",
-                        "impliedVolatility", "volume", "openInterest",
+                        "impliedVolatility", "volume", "openInterest", "lastTradeDate",
                     ):
                         value = row.get(key)
                         if value is None or value != value:
                             record[key] = None
+                        elif key == "lastTradeDate":
+                            record[key] = _serialize_index(value)
                         elif hasattr(value, "item"):
                             record[key] = value.item()
                         else:
                             record[key] = value
                     rows.append(record)
-                reference_price = None
-                try:
-                    reference_price = float(ticker.fast_info.get("last_price"))
-                except (AttributeError, TypeError, ValueError):
-                    pass
+                expiry_source_count += len(rows)
                 if reference_price and reference_price > 0:
                     rows.sort(key=lambda item: abs(float(item.get("strike") or 0) - reference_price))
                 rows = rows[: self.profile.maximum_option_contracts_per_side]
                 rows.sort(key=lambda item: float(item.get("strike") or 0))
                 sides[name] = rows
-            output[expiry] = {"status": "collected", **sides}
+                expiry_rows.extend(rows)
+            quality = _option_quality(
+                source_contract_count=expiry_source_count, rows=expiry_rows,
+            )
+            output[expiry] = {"status": "collected", "quality": quality, **sides}
+            aggregate_source_count += expiry_source_count
+            aggregate_rows.extend(expiry_rows)
+        captured_at = datetime.now(ZoneInfo("America/New_York")).isoformat()
+        collected_expiry_count = sum(
+            row.get("status") == "collected" for row in output.values()
+        )
+        failed_expiry_count = sum(
+            row.get("status") == "provider_error" for row in output.values()
+        )
         return {
             "symbol": symbol,
-            "status": "collected" if output else "no_data",
+            "status": (
+                "collected" if collected_expiry_count
+                else ("provider_error" if failed_expiry_count else "no_data")
+            ),
+            "captured_at": captured_at,
+            "available_expiry_count": len(expiries),
+            "attempted_expiry_count": len(selected_expiries),
+            "collected_expiry_count": collected_expiry_count,
+            "failed_expiry_count": failed_expiry_count,
+            "maximum_option_expiries": self.profile.maximum_option_expiries,
+            "expiry_selection": "nearest_configured_expiries",
+            "quality": _option_quality(
+                source_contract_count=aggregate_source_count, rows=aggregate_rows,
+            ),
+            "capture_timestamp_semantics": "provider_response_capture_not_exchange_quote_time",
+            "quote_timestamp_status": "unavailable",
+            "quote_freshness_eligible": False,
+            "last_trade_timestamp_semantics": "contract_last_trade_not_quote_time",
             "directional_flow_semantics": False,
             "expiries": output,
         }

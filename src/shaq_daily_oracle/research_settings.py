@@ -90,6 +90,7 @@ def default_research_settings(package_root: Path) -> dict[str, Any]:
             "intraday_interval": "5m",
             "maximum_candidates": 8,
             "maximum_event_characters": 60000,
+            "maximum_option_expiries": 3,
             "maximum_option_contracts_per_side": 40,
         },
         "sec_identity": "",
