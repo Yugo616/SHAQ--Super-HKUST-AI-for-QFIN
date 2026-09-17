@@ -24,15 +24,19 @@ class WindowsShortcutTests(unittest.TestCase):
             links=root/'links'; links.mkdir()
             env=dict(os.environ, TEST_LINK=str(links/'Example Lab.lnk'),
                      TEST_OTHER=str(links/'Other.lnk'), TEST_MISSING=str(root/'other-user'/'Example Lab.exe'))
-            subprocess.run(['powershell.exe','-NoProfile','-NonInteractive','-Command',
+            created=subprocess.run(['powershell.exe','-NoProfile','-NonInteractive','-Command',
+                '$OutputEncoding=[Console]::OutputEncoding=[Text.UTF8Encoding]::new(); '
                 '$w=New-Object -ComObject WScript.Shell; '
                 '$s=$w.CreateShortcut($env:TEST_LINK);$s.TargetPath=$env:TEST_MISSING;$s.Save(); '
                 '$s=$w.CreateShortcut($env:TEST_OTHER);$s.TargetPath=$env:TEST_MISSING;$s.Save()'],
-                env=env,check=True,capture_output=True)
+                env=env,capture_output=True,text=True,encoding='utf-8',errors='replace')
+            self.assertEqual(created.returncode,0,created.stderr)
             before=(links/'Other.lnk').read_bytes()
             self.assertEqual(repair_shortcuts(exe,[links])['repaired'],1)
             self.assertEqual(repair_shortcuts(exe,[links])['repaired'],0)
             self.assertEqual((links/'Other.lnk').read_bytes(),before)
             actual=subprocess.check_output(['powershell.exe','-NoProfile','-NonInteractive','-Command',
-                '$w=New-Object -ComObject WScript.Shell; $w.CreateShortcut($env:TEST_LINK).TargetPath'],env=env,text=True).strip()
+                '$OutputEncoding=[Console]::OutputEncoding=[Text.UTF8Encoding]::new(); '
+                '$w=New-Object -ComObject WScript.Shell; $w.CreateShortcut($env:TEST_LINK).TargetPath'],
+                env=env,text=True,encoding='utf-8').strip()
             self.assertEqual(Path(actual),exe)

@@ -5,6 +5,7 @@ import unittest
 
 
 TESTS = (
+    'test_windows_shortcuts',
     'test_public_base_update_acceptance',
     'test_update_smoke.InstalledAcceptanceContractTests.test_windows_restart_confirmation_survives_exclusive_receipt_publish_window',
     'test_update_smoke.InstalledAcceptanceContractTests.test_restart_confirmation_retries_only_bounded_windows_read_denial',
