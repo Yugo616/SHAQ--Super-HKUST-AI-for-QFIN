@@ -143,7 +143,11 @@ def main():
                 report['pending_refresh_preserved_latest_scroll'] = True
                 window.evaluate_js("document.querySelector('[data-progress-retry]').click()")
                 wait("state.data.fixture_resumed_batch==='fixture-original-batch'")
+                wait("Boolean(document.querySelector('[data-progress-job=resume-fixture-original-batch] progress'))")
+                if window.evaluate_js("document.querySelectorAll('[data-progress-job]').length") != 1:
+                    raise AssertionError('Recovery duplicated the old failed progress')
                 report['resume_original_batch_action'] = True
+                report['resume_progress_visible'] = True
                 window.evaluate_js("document.querySelector('#connections-button').click()")
                 wait("Boolean(document.querySelector('#execution-policy-form').onsubmit)")
                 if not window.evaluate_js("document.querySelector('#execution-policy-form').elements.timeout_seconds.value==='600' && "

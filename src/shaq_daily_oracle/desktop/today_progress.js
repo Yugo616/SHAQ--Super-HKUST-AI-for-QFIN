@@ -58,9 +58,24 @@ const SHAQProgress = (() => {
   }
   function currentJobs(jobs, now) {
     const day = etDay(now);
+    const seen = new Set();
     return jobs.filter(job => active(job) ||
       (day && etDay(job.started_at_et) === day))
-      .sort((a,b) => Number(active(b))-Number(active(a)) || (Date.parse(b.started_at_et)||0)-(Date.parse(a.started_at_et)||0));
+      .sort((a,b) => Number(active(b))-Number(active(a)) || (Date.parse(b.started_at_et)||0)-(Date.parse(a.started_at_et)||0))
+      .filter(job=>{const key=job.batch_id||job.job_id;if(seen.has(key))return false;seen.add(key);return true});
+  }
+  function failureText(failure) {
+    const raw=String(failure?.message||failure?.error||'');
+    const domain=['derivatives','price_volume','capital','relationships','market','event'].find(name=>raw.includes(name));
+    const label=domain?domainName(domain):'分析报告';
+    if(/cited evidence outside|unavailable or invented evidence|invalid evidence/i.test(raw))return `${label}引用了不合格或本次任务之外的证据，结果未采用。可继续未完成分析。`;
+    if(/timeout|timed out|超时/i.test(raw))return `${label}等待模型超时。已完成的分析已保留，可继续未完成部分。`;
+    if(/403|401|Forbidden|Unauthorized/i.test(raw))return '模型服务拒绝访问，请检查登录或连接设置后继续。';
+    if(/429|rate.?limit/i.test(raw))return '模型服务暂时限流，请稍后继续未完成分析。';
+    if(/database.*locked|SQLITE_BUSY/i.test(raw))return '本地数据暂时被占用，稍后重试；已保存结果不受影响。';
+    if(/Required reports incomplete|model output|schema|JSON/i.test(raw))return `${label}返回内容未通过检查。已完成部分已保留，可继续未完成分析。`;
+    if(/[\u3400-\u9fff]/.test(raw))return raw.replace(/\s+/g,' ').slice(0,120);
+    return '分析未完成，已保存成功结果。请继续未完成分析；详细错误保留在运行记录中。';
   }
   function retryVersions(job) {
     return Object.entries(job.variant_progress || {}).filter(([,status]) =>
@@ -94,7 +109,7 @@ const SHAQProgress = (() => {
         const executionState=!active(job)&&['queued','running'].includes(value)?'incomplete':value;
         const progress=taskProgress(job.research_progress,key);
         const failure=job.variant_errors?.[key]||progress.rows.filter(row=>row.status==='failed').at(-1)||{};
-        const reason=value==='failed'?`<p class="status bad">${esc(String(failure.message||failure.error||'分析未完成，可恢复原批次').replace(/\s+/g,' ').slice(0,120))}</p>`:'';
+        const reason=value==='failed'?`<p class="status bad">${esc(failureText(failure))}</p>`:'';
         const completed=executionState==='complete';
         const running=job.status==='running'&&executionState==='running';
         const text=completed?'已完成':progress.total===null?(running?'分析中，暂未记录任务总量':status(executionState)):`${progress.complete} / ${progress.total} 项`;
@@ -125,6 +140,6 @@ const SHAQProgress = (() => {
     const versionLabel=key=>{const [author,...rest]=key.split('/'),id=rest.join('/');const item=(selection.versions||[]).find(v=>(v.author||'team')===author&&(v.version_id===id||(v.aliases||[]).includes(id)));return item?.method_name||item?.label||key};
     return `<section class="research-view"><label>版本 <select data-view-key="variant" data-research-variant>${variants.map(v=>option(v,chosen,'data-research-variant-option',versionLabel(v))).join('')}</select></label><label>候选 <select data-view-key="symbol" data-research-symbol>${symbols.map(s=>option(s,symbol,'data-research-symbol')).join('')}</select></label><p>${callText(counts)} · 实际耗时 ${elapsed.toFixed(1)} 秒</p><details data-research-section="timeline"${timelineOpen}><summary>执行时间线</summary><ol>${timeline}</ol></details>${sections||'<p>尚无已校验报告；原始无效输出不会显示为结论。</p>'}</section>`;
   }
-  return {etDay,currentJobs,retryVersions,scheduleText,progressHtml,researchHtml,callSummary,taskProgress,domainName,applyTodayAvailability};
+  return {etDay,currentJobs,retryVersions,scheduleText,progressHtml,researchHtml,callSummary,taskProgress,domainName,applyTodayAvailability,failureText};
 })();
 if (typeof module !== 'undefined') module.exports = SHAQProgress;

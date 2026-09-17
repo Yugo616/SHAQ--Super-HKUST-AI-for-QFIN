@@ -5,6 +5,28 @@ from pathlib import Path
 
 
 class TodayProgressTests(unittest.TestCase):
+    def test_resume_replaces_failed_attempt_in_current_progress(self):
+        self.run_js(r'''
+const assert=require('node:assert/strict');
+const original={job_id:'old',batch_id:'batch',started_at_et:'2026-09-17T08:35:00-04:00',status:'partial_failure',variant_progress:{a:'complete',b:'failed'}};
+const resumed={job_id:'resume-batch',batch_id:'batch',started_at_et:'2026-09-17T09:00:00-04:00',status:'queued',variant_progress:{a:'complete',b:'queued'}};
+const html=ui.progressHtml([original,resumed],[],'2026-09-17T09:00:01-04:00');
+assert.doesNotMatch(html,/data-progress-job="old"/);
+assert.match(html,/data-progress-job="resume-batch"/);
+assert.match(html,/<progress/);
+assert.equal(ui.currentJobs([original,{...resumed,status:'complete'}],'2026-09-17T09:01:00-04:00').length,1);
+''')
+
+    def test_validation_error_is_readable_without_losing_diagnostic(self):
+        self.run_js(r'''
+const assert=require('node:assert/strict');
+const failure={message:'Required reports incomplete; synthesis blocked: derivatives: ResearchBatchError: derivatives cited evidence outside its frozen task'};
+const html=ui.progressHtml([{job_id:'j',status:'partial_failure',started_at_et:'2026-09-17T08:35:00-04:00',variant_progress:{v:'failed'},variant_errors:{v:failure}}],[],'2026-09-17T09:00:00-04:00');
+assert.match(html,/期权/);assert.match(html,/引用/);assert.match(html,/继续/);
+assert.doesNotMatch(html,/ResearchBatchError|synthesis blocked/);
+assert.match(failure.message,/ResearchBatchError/,'raw stored error is not rewritten');
+''')
+
     def test_terminal_legacy_progress_never_uses_loading_animation(self):
         self.run_js(r'''
 const assert=require('node:assert/strict');

@@ -12,6 +12,18 @@ const oldRenderEditor=renderEditor,oldRenderHistory=renderHistory,oldRenderBatch
 function restoreUtilities(){for(const section of [...qa('#utility-content > .page')]){section.classList.remove('active');q('main').append(section)}q('#utility-content')?.replaceChildren()}
 function openUtility(page,title){let layer=q('#utility');if(!layer){layer=document.createElement('div');layer.id='utility';layer.className='modal';layer.innerHTML='<div class="setup-card"><div class="section-head"><h2 id="utility-title"></h2><button class="secondary" id="close-utility">关闭</button></div><div id="utility-content"></div></div>';document.body.append(layer);q('#close-utility').onclick=()=>{restoreUtilities();layer.classList.add('hidden')}}restoreUtilities();q('#utility-title').textContent=title;q('#utility-content').append(q('#'+page));q('#'+page).classList.add('active');layer.classList.remove('hidden');({upload:renderUpload,updates:renderUpdates,data:renderData,settings:renderSettings}[page])()}
 function teamSync(){openUtility('upload','团队同步');const bar=document.createElement('div');bar.className='editor-tabs';bar.innerHTML='<button class="secondary" id="sync-upload">上传版本</button><button class="secondary" id="sync-download">下载团队版本</button>';q('#utility-content').prepend(bar);q('#sync-upload').onclick=()=>teamSync();q('#sync-download').onclick=()=>{q('#upload').classList.remove('active');document.querySelector('main').append(q('#upload'));q('#utility-content').append(q('#updates'));q('#updates').classList.add('active');renderUpdates()}}
+async function resumeOriginalBatch(batchId){
+  notice('正在恢复原批次，请稍候…');
+  const job=await api('resume_shadow_batch',batchId);
+  if(job.job_id){
+    state.data.jobs=[...(state.data.jobs||[]).filter(row=>row.job_id!==job.job_id),job];
+  }
+  showPage('run');renderRun();
+  notice(job.message||'已恢复，正在继续未完成分析');
+  // Publish the acknowledged job immediately; history hashing may be slow.
+  void load(false);
+  return job;
+}
 renderRun=function(){
   const s=state.data.settings, versions=state.data.versions||[], profiles=s.model_profiles||[];
   // Move the live form across a run-list refresh instead of replacing user input.
@@ -34,8 +46,9 @@ renderRun=function(){
     const job=(state.data.jobs||[]).find(j=>j.job_id===b.dataset.progressRetry);
     if(job?.batch_id){
       b.disabled=true;
-      try{const result=await api('resume_shadow_batch',job.batch_id);notice(result.message||'正在恢复原批次');await load()}
-      catch(error){notice(error.message,true)}finally{b.disabled=false}
+      b.textContent='正在恢复…';
+      try{await resumeOriginalBatch(job.batch_id)}
+      catch(error){notice(SHAQProgress.failureText(error),true)}finally{b.disabled=false}
       return;
     }
     const selected=SHAQProgress.retryVersions(job||{});

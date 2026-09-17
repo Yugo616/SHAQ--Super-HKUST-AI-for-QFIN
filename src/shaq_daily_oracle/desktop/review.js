@@ -75,10 +75,10 @@ if(typeof document!=='undefined'){
     for(const [id,key] of [['history-from','from'],['history-to','to'],['history-version','version'],['history-model','model']])q('#'+id).onchange=event=>{filters[key]=event.target.value;renderHistory()};
     const jobs=state.data.jobs||[], unfinished=new Map();
     for(const job of jobs)if(job.batch_id&&['failed','partial_failure'].includes(job.status)&&
-      !jobs.some(other=>other.batch_id===job.batch_id&&other.status==='complete'))unfinished.set(job.batch_id,job);
+      !jobs.some(other=>other.batch_id===job.batch_id&&['complete','running','queued'].includes(other.status)))unfinished.set(job.batch_id,job);
     if(unfinished.size)q('#history').innerHTML+=`<details class="sheet" data-view-key="unfinished-history"><summary>未完成分析（${unfinished.size}）</summary>${[...unfinished.values()].map(job=>`<p>${esc(SHAQProgress.etDay(job.started_at_et)||'日期未记录')} <button class="secondary" data-history-resume="${esc(job.batch_id)}">继续未完成分析</button></p>`).join('')}</details>`;
     qa('[data-history-resume]').forEach(button=>button.onclick=async()=>{
-      button.disabled=true;try{await api('resume_shadow_batch',button.dataset.historyResume);notice('正在恢复原批次，仅补未完成分析');await load(false)}catch(error){notice(error.message,true)}finally{button.disabled=false}
+      button.disabled=true;button.textContent='正在恢复…';try{await resumeOriginalBatch(button.dataset.historyResume)}catch(error){notice(SHAQProgress.failureText(error),true)}finally{button.disabled=false}
     });
     qa('[data-result-symbol]').forEach(row=>row.onclick=()=>loadBatch(row.dataset.batch,row.dataset.variantKey,row.dataset.resultSymbol||undefined));
     qa('[data-retry-minute-date]').forEach(button=>{

@@ -1,13 +1,18 @@
 # Software updates
 
-## 0.7.71: Windows settlement recovery
+## 0.7.8: settlement recovery and current-day progress
 
-Windows-only installer/update release; macOS remains on 0.7.7. Retain the last
-saved settlement while observations are rechecked, shorten index write
+Windows and macOS use the same release. Retain the last saved settlement while observations are rechecked, shorten index write
 transactions, and retry transient database locks. Old failed runs stay
 recoverable in history instead of appearing as today's progress. Unresolved
 default model profiles require explicit selection. Existing Windows application
 shortcuts are repaired against the running installation, not a saved username.
+Verified failure corrections for old jobs remain visible while a different
+day's scheduler is running; the original job and failure files are not rewritten.
+Resuming acknowledges and saves the queued job before starting analysis, shows
+its progress without waiting for history refresh, and replaces the earlier
+attempt in today's view. Short Chinese messages explain analysis failures;
+the original diagnostic remains saved. Recovery reuses validated calls.
 
 Predictions, account rules and method packages are unchanged. Build provenance
 is included in the installed `third-party/manifest.json` resource (under the
@@ -47,7 +52,10 @@ Application updates and research-method updates are separate. **0.7.0 is the fir
 
 ## Platform downloads and acceptance
 
-Primary 0.7.7 downloads: [Windows](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.7-windows), [Apple Silicon / Intel Mac](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.7-macos). Each is available only once its matching packages, checksums and acceptance records appear. Publication requires separate native acceptance for each architecture from the same frozen source, including an upgrade from the matching public base recorded in its acceptance report. Previous downloads:
+Primary 0.7.8 downloads: [Windows](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.8-windows), [Apple Silicon / Intel Mac](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.8-macos). Each is available only once its matching packages, checksums and acceptance records appear. Publication requires separate native acceptance for each architecture from the same frozen source, including an upgrade from the matching public base recorded in its acceptance report. Previous downloads:
+
+- [0.7.7 Windows release page](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.7-windows)
+- [0.7.7 macOS release page](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.7-macos)
 
 - [0.7.6 Windows release page](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.6-windows)
 - [0.7.6 macOS release page](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.6-macos)

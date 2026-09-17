@@ -181,9 +181,15 @@ class BatchRecoveryTests(unittest.TestCase):
                 cache_root=service.paths.research_root/'cache/model_calls',registry=service.registry,integration_policy=helper.policy())
             first=runner.run(evidence=evidence,variants=[helper.main_variant(service.registry)],profile=profile,secret='',
                 caller=lambda **kw: (_ for _ in ()).throw(ValueError('stop fixture')))
+            def visible_before_thread(paths,thread):
+                saved=json.loads((paths.research_root/'jobs'/('resume-'+first['status']['batch_id']+'.json')).read_text())
+                self.assertEqual(saved['status'],'queued')
+                self.assertTrue(saved['started_at_et'])
+                self.assertTrue(saved['variant_progress'])
+                thread.run()
             with patch.object(service,'_today_evidence',side_effect=AssertionError('recollected evidence')), \
                  patch.object(service,'start_result_refresh',return_value={'status':'not_due'}), \
-                 patch('shaq_daily_oracle.lab_service.start_guarded_thread',side_effect=lambda paths,thread:thread.run()), \
+                 patch('shaq_daily_oracle.lab_service.start_guarded_thread',side_effect=visible_before_thread), \
                  patch('shaq_daily_oracle.model_backends._codex_cli_call',side_effect=lambda **kw:FakeModel()(**kw,secret='')):
                 job=service.resume_batch(first['status']['batch_id'])
             self.assertEqual(job['status'],'complete',job)

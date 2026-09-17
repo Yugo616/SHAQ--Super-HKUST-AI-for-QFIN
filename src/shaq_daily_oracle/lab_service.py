@@ -1083,7 +1083,8 @@ class LabService:
         resume_evidence=None,
     ) -> None:
         try:
-            self._set_job(job_id, status="running", started_at_et=datetime.now(ET).isoformat(), message="正在冻结共享证据")
+            self._set_job(job_id, status="running", started_at_et=datetime.now(ET).isoformat(),
+                          message="正在恢复原批次分析" if resume_batch_id else "正在冻结共享证据")
             settings = self.settings.load()
             evidence = resume_evidence if resume_batch_id else self._today_evidence(
                 profile=DataProfile.from_dict(settings["data_profile"]),
@@ -1188,11 +1189,18 @@ class LabService:
             task_lock.acquire(timeout=0)
         except LockTimeout:
             return {'job_id': job_id, 'batch_id': batch_id, 'status': 'running', 'message': '原批次正在恢复'}
-        with self.jobs_lock:
-            self.jobs[job_id] = {'job_id': job_id, 'batch_id': batch_id, 'status': 'queued',
-                'message': '准备恢复原批次，仅补齐失败调用；逾期结果不计盘前成绩',
-                'started_at_et': None, 'completed_at_et': None,
-                'variant_progress': {f'{v.author}/{v.version_id}': 'queued' for v in variants}}
+        try:
+            saved_status = json.loads((root / 'batch_status.json').read_text(encoding='utf-8'))
+            completed = set(saved_status.get('completed_variants', []))
+            self._set_job(job_id, batch_id=batch_id, status='queued',
+                message='已恢复，正在继续未完成分析',
+                started_at_et=datetime.now(ET).isoformat(), completed_at_et=None,
+                variant_errors={},
+                variant_progress={f'{v.author}/{v.version_id}':
+                    'complete' if f'{v.author}/{v.version_id}' in completed else 'queued' for v in variants})
+        except Exception:
+            task_lock.release()
+            raise
         thread = threading.Thread(target=self._run_batch_job, kwargs={
             'job_id': job_id, 'variants': variants, 'profile': profile, 'secret': secret,
             'task_lock': task_lock, 'resume_batch_id': batch_id, 'resume_evidence': evidence},

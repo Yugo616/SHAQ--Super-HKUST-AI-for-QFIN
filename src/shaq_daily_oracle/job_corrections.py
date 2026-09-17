@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import re
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
 from datetime import date, datetime
 
 from filelock import FileLock, Timeout
@@ -12,14 +12,16 @@ from .hashing import sha256_file, sha256_payload
 
 
 @contextmanager
-def _inactive_job(root, job_id):
+def _inactive_job(root, job_id, *, require_idle_scheduler=True):
     if not re.fullmatch(r'job-[A-Za-z0-9_-]+', job_id):
         raise ValueError('invalid job identity')
     # Same order as the scheduler: never correct a live job or live automatic run.
     try:
-        with FileLock(str(root / 'schedule.lock'), timeout=0):
-            with FileLock(str(root / 'jobs' / (job_id + '.lock')), timeout=0):
-                yield
+        with ExitStack() as locks:
+            if require_idle_scheduler:
+                locks.enter_context(FileLock(str(root / 'schedule.lock'), timeout=0))
+            locks.enter_context(FileLock(str(root / 'jobs' / (job_id + '.lock')), timeout=0))
+            yield
     except Timeout as exc:
         raise ValueError('job or automatic scheduler is active; correction refused') from exc
 
@@ -76,7 +78,9 @@ def corrected_status(root, row):
     if not candidates.is_dir():
         return row
     try:
-        with _inactive_job(root, job_id):
+        # Reading this job's verified correction must not depend on a different
+        # day's scheduler. Still refuse the overlay if this exact job is live.
+        with _inactive_job(root, job_id, require_idle_scheduler=False):
             for path in candidates.glob(job_id + '-*.json'):
                 try:
                     correction = json.loads(path.read_text(encoding='utf-8'))

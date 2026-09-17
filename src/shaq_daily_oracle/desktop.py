@@ -592,7 +592,13 @@ def _bind_gui_smoke_fixture(bridge, fixture_state, fixture_detail):
         if batch_id != 'fixture-original-batch':
             return {'ok': False, 'error': 'fixture requires original frozen batch'}
         fixture_state['fixture_resumed_batch'] = batch_id
-        return {'ok': True, 'value': {'message': 'fixture original batch resumed'}}
+        prior = next(row for row in fixture_state['jobs'] if row.get('batch_id') == batch_id)
+        job = {**prior, 'job_id': 'resume-' + batch_id, 'status': 'queued',
+               'message': '已恢复，正在继续未完成分析', 'variant_errors': {},
+               'variant_progress': {key: 'complete' if value == 'complete' else 'queued'
+                                    for key, value in prior['variant_progress'].items()}}
+        fixture_state['jobs'] = [row for row in fixture_state['jobs'] if row['job_id'] != job['job_id']] + [job]
+        return {'ok': True, 'value': job}
 
     def fixture_batch_api(self, batch_id):
         return {"ok": True, "value": fixture_detail}
