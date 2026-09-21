@@ -332,7 +332,7 @@ def collect_research_evidence(
     if isinstance(market, YFinanceProvider) and history_cache_root is not None:
         # One session only: a new trading day independently re-observes historical prices.
         market.history_checkpoint_root = (history_cache_root.parent / 'collection_requests'
-                                          / session.session_date.isoformat() / profile.identity())
+                                          / session.session_date.isoformat() / profile.history_identity())
     public_config_path = package_root / "config/public-data.json"
     public_config = json.loads(public_config_path.read_text(encoding="utf-8")) if public_config_path.exists() else None
     if history_cache_root is not None and public_config:

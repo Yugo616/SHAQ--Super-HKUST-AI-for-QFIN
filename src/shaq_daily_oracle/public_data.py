@@ -3,7 +3,7 @@ from __future__ import annotations
 import csv
 import io
 import json
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from html.parser import HTMLParser
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -23,9 +23,18 @@ class DailyBarCache:
         try:
             cached = json.loads((self.root / (sha256_payload(symbol) + '.json')).read_text(encoding='utf-8'))
             body = {key: cached[key] for key in ('start', 'end', 'rows')}
-            if (cached.get('sha256') == sha256_payload(body) and body['rows']
-                    and body['start'] < body['end']):
-                return body
+            start, end = date.fromisoformat(body['start']), date.fromisoformat(body['end'])
+            rows = body['rows']
+            if (cached.get('sha256') != sha256_payload(body) or start >= end
+                    or not isinstance(rows, list) or not rows):
+                return {}
+            for row in rows:
+                if not isinstance(row, dict) or not isinstance(row.get('timestamp'), str):
+                    return {}
+                stamp = datetime.fromisoformat(row['timestamp']).date()
+                if not start <= stamp < end:
+                    return {}
+            return body
         except (OSError, ValueError, KeyError, TypeError):
             pass
         # Legacy or damaged caches lack a verified coverage interval. Fetch them
@@ -36,10 +45,10 @@ class DailyBarCache:
         fresh = [r for r in fresh if start.isoformat() <= str(r['timestamp'])[:10] < end.isoformat()]
         if not fresh:
             return []
-        connected = old and old['start'] <= start.isoformat() <= old['end']
+        connected = old and start.isoformat() <= old['end'] and old['start'] <= end.isoformat()
         merged = {str(r['timestamp']): r for r in old.get('rows', [])} if connected else {}
         merged.update({str(r['timestamp']): r for r in fresh})
-        body = {'start': old['start'] if connected else start.isoformat(),
+        body = {'start': min(old['start'], start.isoformat()) if connected else start.isoformat(),
                 'end': max(old['end'], end.isoformat()) if connected else end.isoformat(),
                 'rows': [merged[k] for k in sorted(merged)]}
         _atomic_json(self.root / (sha256_payload(symbol) + '.json'),

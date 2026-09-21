@@ -343,14 +343,14 @@ class YFinanceProvider:
             'symbols': symbols, 'start': start.isoformat(), 'end': end.isoformat(),
             'interval': interval, 'prepost': prepost,
             'history_checkpoint_root': str(self.history_checkpoint_root) if self.history_checkpoint_root else None,
-            'history_source_identity': self.profile.identity(),
+            'history_source_identity': self.profile.history_identity(),
         })
 
     def _history_checkpoint(self, symbol, *, start, end, interval='1d', prepost=False):
         from .collection_checkpoint import HistoryCheckpoint
         return HistoryCheckpoint(
             self.history_checkpoint_root if interval == '1d' and not prepost else None,
-            {'provider': getattr(self, 'history_source_identity', self.profile.identity()),
+            {'provider': getattr(self, 'history_source_identity', self.profile.history_identity()),
              'symbol': _yahoo_symbol(symbol), 'start': start.isoformat(), 'end': end.isoformat(),
              'interval': interval, 'prepost': prepost},
         )

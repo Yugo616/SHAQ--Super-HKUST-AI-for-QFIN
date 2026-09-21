@@ -155,6 +155,7 @@ class CollectionRecoveryTests(unittest.TestCase):
             self.assertEqual(self.last_price_refresh_count, 0)
 
     def test_worker_carries_checkpoint_to_real_child_and_recovery_uses_it(self):
+        from dataclasses import replace
         from shaq_daily_oracle import collection_worker
         from shaq_daily_oracle.model_execution import run_model_process
         import sys
@@ -180,6 +181,11 @@ with patch.object(yf.Ticker, 'history', history): main()
                     provider.history(['AAA', 'BBB'], start=date(2026, 9, 1), end=date(2026, 9, 21))
             self.assertEqual(caught.exception.diagnostic['symbol'], 'BBB')
             self.assertEqual(len(list(Path(directory).glob('*.json'))), 1)
+            provider = YFinanceProvider(replace(provider.profile, maximum_candidates=3,
+                                               request_timeout_seconds=19))
+            provider.history_checkpoint_root = Path(directory)
+            self.assertEqual(provider.recover_history(['AAA'], start=date(2026, 9, 1),
+                              end=date(2026, 9, 21))['AAA'][0]['open'], 123)
             script = script.replace("if ticker.ticker == 'BBB': raise CurlError('private', code=28)",
                                     "if ticker.ticker == 'AAA': raise AssertionError('must reuse AAA')")
             with patch.object(collection_worker, 'run_model_process', side_effect=run):

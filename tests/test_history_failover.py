@@ -15,6 +15,48 @@ from shaq_daily_oracle.public_data import DailyBarCache
 
 
 class HistoryRecoveryTests(unittest.TestCase):
+    def test_runtime_profile_change_reuses_same_completed_daily_checkpoint(self):
+        from dataclasses import replace
+        profile = DataProfile('test', 'a', yahoo_request_max_retries=0)
+        with tempfile.TemporaryDirectory() as directory:
+            first = YFinanceProvider(profile)
+            first.history_checkpoint_root = Path(directory)
+            first._history_checkpoint('AAA', start=date(2026, 9, 1), end=date(2026, 9, 21)).save(
+                [{'timestamp': '2026-09-18', 'close': 11}])
+            second = YFinanceProvider(replace(profile, maximum_candidates=3, request_timeout_seconds=19))
+            second.history_checkpoint_root = Path(directory)
+            self.assertEqual(second.recover_history(['AAA'], start=date(2026, 9, 1),
+                              end=date(2026, 9, 21)), {'AAA': [{'timestamp': '2026-09-18', 'close': 11}]})
+
+    def test_earlier_overlapping_backfill_preserves_recent_cached_rows(self):
+        class Provider:
+            def history(self, symbols, **kwargs):
+                stamp = '2026-09-18' if kwargs['start'].month == 9 else '2026-08-20'
+                return {'AAA': [{'timestamp': stamp, 'close': 11}]}
+        with tempfile.TemporaryDirectory() as directory:
+            cache = DailyBarCache(Provider(), Path(directory), overlap_days=7)
+            cache.history(['AAA'], start=date(2026, 9, 1), end=date(2026, 9, 21))
+            cache.history(['AAA'], start=date(2026, 8, 1), end=date(2026, 9, 8))
+            saved = json.loads(next(Path(directory).glob('*.json')).read_text())
+            self.assertEqual(saved['start'], '2026-08-01')
+            self.assertEqual(saved['end'], '2026-09-21')
+            self.assertEqual([r['timestamp'] for r in saved['rows']], ['2026-08-20', '2026-09-18'])
+
+    def test_hashed_but_malformed_rows_are_treated_as_cache_miss(self):
+        from shaq_daily_oracle.hashing import sha256_payload
+        class Provider:
+            def history(self, symbols, **kwargs):
+                return {'AAA': [{'timestamp': '2026-09-18', 'close': 11}]}
+        for rows in ['bad rows', [None], [{'timestamp': 'not-a-date'}]]:
+            with self.subTest(rows=rows), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                body = {'start': '2026-09-01', 'end': '2026-09-21', 'rows': rows}
+                (root / (sha256_payload('AAA') + '.json')).write_text(
+                    json.dumps({**body, 'sha256': sha256_payload(body)}))
+                result = DailyBarCache(Provider(), root, overlap_days=7).history(
+                    ['AAA'], start=date(2026, 9, 1), end=date(2026, 9, 21))
+                self.assertEqual(result['AAA'][0]['close'], 11)
+
     def test_daily_cache_identity_ignores_screening_and_execution_settings(self):
         from dataclasses import replace
         profile = DataProfile('one', 'universe-a')

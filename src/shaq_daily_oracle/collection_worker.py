@@ -83,7 +83,7 @@ def execute_operation(operation, payload):
     profile = DataProfile.from_dict(payload['profile'])
     provider = YFinanceProvider(profile)
     provider.history_checkpoint_root = payload.get('history_checkpoint_root')
-    provider.history_source_identity = payload.get('history_source_identity', profile.identity())
+    provider.history_source_identity = payload.get('history_source_identity', profile.history_identity())
     yf = provider._module()
     # This directory is parent-independent and never contains a durable request.
     # ExitStack closes the session/databases before deleting it (also on Windows).
