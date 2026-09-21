@@ -20,6 +20,8 @@ from .market_calendar import market_session, next_market_session
 from .settings import _atomic_json
 from .update_admission import guarded_worker
 from .background_process import background_process_options
+from .data_retry import is_transient_diagnostic
+from .hashing import sha256_payload
 
 ET = ZoneInfo("America/New_York")
 SERVICE_LABEL = "org.shaq.daily-oracle.research"
@@ -109,6 +111,14 @@ def save_schedule(paths, lab, submitted):
         lab.settings.model_profile(submitted.get("model_profile_id"))
     value = {"enabled": enabled, "start_et": start.isoformat(), "selections": selected,
              "model_profile_id": str(submitted.get("model_profile_id", ""))}
+    for key, default, maximum in [('collection_max_recoveries', 1, 3),
+                                  ('collection_recovery_delay_seconds', 30, 300)]:
+        previous_path = paths.research_root / 'schedule.json'
+        previous = json.loads(previous_path.read_text(encoding='utf-8')) if previous_path.exists() else {}
+        parameter = submitted.get(key, previous.get(key, default))
+        if type(parameter) is not int or not 0 <= parameter <= maximum:
+            raise ValueError('行情恢复次数或等待时间设置无效')
+        value[key] = parameter
     if enabled and sys.platform == 'win32':
         _register_windows_worker(paths)
     elif enabled:
@@ -147,6 +157,25 @@ def due_status(now, start_et):
     return "due"
 
 
+def _collection_recovery_due(saved, value, now):
+    """Only failed acquisition before a batch exists is safe to restart automatically."""
+    if (saved.get('status') != 'failed' or saved.get('error_type') != 'ResearchCollectionError'
+            or saved.get('batch_id') or not is_transient_diagnostic(saved.get('error_diagnostic'))):
+        return False
+    limit = value.get('collection_max_recoveries', 1)
+    delay = value.get('collection_recovery_delay_seconds', 30)
+    count = saved.get('collection_recovery_count', 0)
+    if (type(limit) is not int or not 0 <= limit <= 3 or type(count) is not int
+            or count < 0 or count >= limit or type(delay) is not int or not 0 <= delay <= 300):
+        return False
+    try:
+        completed = datetime.fromisoformat(saved['completed_at_et'])
+        return (completed.tzinfo is not None and completed.astimezone(ET).date() == now.date()
+                and now >= completed + timedelta(seconds=delay))
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
 @guarded_worker
 def run_research_worker(paths):
     from .lab_service import LabService
@@ -157,6 +186,7 @@ def run_research_worker(paths):
         return 0
     lab = None
     state = None
+    recovery_pending = False
     try:
         value = schedule_status(paths)
         lab = LabService(paths)
@@ -168,19 +198,38 @@ def run_research_worker(paths):
         if state in {"waiting", "closed"}:
             return 0
         saved = json.loads(ledger.read_text(encoding="utf-8")) if ledger.exists() else {}
-        if saved.get("status") in {"complete", "partial_failure", "missed", "failed"}:
+        delay = value.get('collection_recovery_delay_seconds', 30)
+        retry_at = now + timedelta(seconds=delay if type(delay) is int and 0 <= delay <= 300 else 30)
+        recovery_pending = (due_status(retry_at, value['start_et']) == 'due'
+                            and _collection_recovery_due(saved, value, retry_at))
+        recovering = state == 'due' and _collection_recovery_due(saved, value, now)
+        if saved.get("status") in {"complete", "partial_failure", "missed", "failed"} and not recovering:
             return 0
         if state == "missed":
             _atomic_json(ledger, {"status": "missed", "recorded_at": now.isoformat()})
             _atomic_json(paths.research_root / "schedule_status.json", {"message": "错过自动运行窗口，可手动运行练习"})
             return 0
-        _atomic_json(ledger, {"status": "running", "started_at": now.isoformat()})
+        recovery_count = saved.get('collection_recovery_count', 0)
+        if recovering:
+            # Keep the previous attempt intact before start_batch can replace its job status.
+            receipt = ledger.parent / 'attempts' / (now.date().isoformat() + '-' + sha256_payload(saved) + '.json')
+            if not receipt.exists():
+                _atomic_json(receipt, saved)
+            recovery_count += 1
+            _atomic_json(paths.research_root / 'schedule_status.json', {
+                'message': '正在恢复行情采集，复用已取得的历史行情', 'heartbeat': now.isoformat()})
+        _atomic_json(ledger, {"status": "running", "started_at": now.isoformat(),
+                              'collection_recovery_count': recovery_count})
         job = lab.start_batch(selections=value["selections"], model_profile_id=value["model_profile_id"])
         while True:
             current = next((x for x in lab.job_statuses() if x["job_id"] == job["job_id"]), job)
             _atomic_json(paths.research_root / "schedule_status.json", {"message": current.get("message", "运行中"), "heartbeat": datetime.now(ET).isoformat()})
             if current["status"] not in {"queued", "running"}:
-                _atomic_json(ledger, current)
+                result = {**current, 'collection_recovery_count': recovery_count}
+                _atomic_json(ledger, result)
+                retry_at = datetime.now(ET) + timedelta(seconds=delay if type(delay) is int and 0 <= delay <= 300 else 30)
+                recovery_pending = (due_status(retry_at, value['start_et']) == 'due'
+                                    and _collection_recovery_due(result, value, retry_at))
                 return 0
             time.sleep(5)
     except Exception as exc:
@@ -189,7 +238,8 @@ def run_research_worker(paths):
             'error_type': type(exc).__name__,
         })
         if 'ledger' in locals():
-            _atomic_json(ledger, {'status': 'failed', 'error': str(exc)})
+            _atomic_json(ledger, {'status': 'failed', 'error': str(exc),
+                                  'collection_recovery_count': locals().get('recovery_count', 0)})
         return 1
     finally:
         try:
@@ -199,7 +249,7 @@ def run_research_worker(paths):
                 owned = getattr(lab, '_owned_result_refresh', None)
                 if owned:
                     lab.wait_result_refresh(owned[0], timeout=None)
-                elif state != 'waiting':
+                elif state != 'waiting' and not recovery_pending:
                     refresh = lab.refresh_labels_if_due()
                     if refresh.get('status') == 'running':
                         # Worker network calls enforce their actual deadlines.

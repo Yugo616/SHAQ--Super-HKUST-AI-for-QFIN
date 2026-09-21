@@ -329,6 +329,10 @@ def collect_research_evidence(
     market = market_provider or (
         openbb if profile.market_provider == "openbb-rest" else YFinanceProvider(profile)
     )
+    if isinstance(market, YFinanceProvider) and history_cache_root is not None:
+        # One session only: a new trading day independently re-observes historical prices.
+        market.history_checkpoint_root = (history_cache_root.parent / 'collection_requests'
+                                          / session.session_date.isoformat() / profile.identity())
     public_config_path = package_root / "config/public-data.json"
     public_config = json.loads(public_config_path.read_text(encoding="utf-8")) if public_config_path.exists() else None
     if history_cache_root is not None and public_config:
@@ -346,12 +350,8 @@ def collect_research_evidence(
         stock_intraday = market.recent_intraday(stock_symbols, cutoff=data_cutoff)
         benchmark_intraday = market.recent_intraday(benchmark_symbols, cutoff=data_cutoff)
     except DataProviderError as exc:
-        reason = {
-            'resource_exhausted': '采集进程资源不足',
-            'timeout': '采集进程超过总时限',
-            'worker_crash': '采集进程意外退出',
-            'protocol_error': '采集进程返回格式错误',
-        }.get(exc.diagnostic.get('kind'), '行情提供方明确返回错误')
+        from .data_retry import failure_message
+        reason = failure_message(exc.diagnostic)
         raise ResearchCollectionError(f'provider_error：{reason}，未启动模型分析。',
                                       diagnostic=exc.diagnostic) from exc
     premarket_observations = {symbol: {

@@ -31,10 +31,25 @@ def sanitize_diagnostic(value, stage=None):
         result['error_type'] = name
     for key, low, high in [('errno', 0, 4096), ('curl_code', 0, 999),
                            ('http_status', 100, 599), ('attempts', 1, 4),
-                           ('retry_count', 0, 3), ('returncode', -255, 255)]:
+                           ('retry_count', 0, 3), ('returncode', -255, 255),
+                           ('completed_symbols', 0, 100000), ('failed_symbols', 0, 100000)]:
         number = value.get(key)
         if isinstance(number, int) and not isinstance(number, bool) and low <= number <= high:
             result[key] = int(number)
+    symbol = value.get('symbol')
+    if isinstance(symbol, str) and re.fullmatch(r'[A-Z0-9^][A-Z0-9.^=_-]{0,31}', symbol):
+        result['symbol'] = symbol
+    requested = value.get('requested_symbols')
+    if isinstance(requested, list):
+        result['requested_symbols'] = [item for item in requested[:10000]
+            if isinstance(item, str) and re.fullmatch(r'[A-Z0-9^][A-Z0-9.^=_-]{0,31}', item)]
+    if value.get('interval') in {'1d', '1m', '2m', '5m', '15m', '30m', '60m'}:
+        result['interval'] = value['interval']
+    if value.get('timeout_scope') in {'request', 'worker'}:
+        result['timeout_scope'] = value['timeout_scope']
+    for key in ('request_start', 'request_end'):
+        if isinstance(value.get(key), str) and re.fullmatch(r'\d{4}-\d{2}-\d{2}', value[key]):
+            result[key] = value[key]
     return result
 
 
@@ -101,4 +116,10 @@ def failure_message(diagnostic):
         'protocol_error': 'Yahoo 数据进程返回格式异常',
         'worker_crash': 'Yahoo 数据进程异常退出',
     }
-    return messages.get(diagnostic.get('kind'), 'Yahoo 数据请求失败，未生成替代数据')
+    message = messages.get(diagnostic.get('kind'), 'Yahoo 数据请求失败，未生成替代数据')
+    if diagnostic.get('kind') == 'timeout' and diagnostic.get('timeout_scope') == 'worker':
+        message = 'Yahoo 采集进程达到总时限，已保存的历史行情可继续复用'
+    safe = sanitize_diagnostic(diagnostic)
+    if safe.get('symbol'):
+        message += '（' + safe['symbol'] + ('，' + safe['interval'] if safe.get('interval') else '') + '）'
+    return message

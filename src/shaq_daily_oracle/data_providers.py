@@ -294,6 +294,7 @@ class YFinanceProvider:
 
     def __init__(self, profile: DataProfile) -> None:
         self.profile = profile
+        self.history_checkpoint_root = None
 
     def _request_with_retry(self, request, *, stage):
         # Validate even directly constructed profiles before issuing any request.
@@ -332,6 +333,7 @@ class YFinanceProvider:
         return call_in_worker('history', self.profile, {
             'symbols': symbols, 'start': start.isoformat(), 'end': end.isoformat(),
             'interval': interval, 'prepost': prepost,
+            'history_checkpoint_root': str(self.history_checkpoint_root) if self.history_checkpoint_root else None,
         })
 
     def _history_inline(
@@ -341,14 +343,26 @@ class YFinanceProvider:
         from collections import Counter
         import pandas as pd
         from yfinance.exceptions import YFPricesMissingError, YFTzMissingError
+        from .collection_checkpoint import HistoryCheckpoint
 
         yf = self._module()
         normalized = {_yahoo_symbol(symbol): symbol for symbol in symbols}
         output = {symbol: [] for symbol in symbols}
+        failures = []
         for group in _chunks(list(normalized), self.profile.batch_size):
             try:
                 frames = {}
                 for symbol in group:
+                    checkpoint = HistoryCheckpoint(
+                        self.history_checkpoint_root if interval == '1d' and not prepost else None,
+                        {'provider': self.profile.identity(), 'symbol': symbol,
+                         'start': start.isoformat(), 'end': end.isoformat(),
+                         'interval': interval, 'prepost': prepost},
+                    )
+                    recovered = checkpoint.read()
+                    if recovered is not None:
+                        output[normalized[symbol]] = recovered
+                        continue
                     try:
                         # Bulk download catches all ticker errors and turns even
                         # EMFILE into empty data. Direct history preserves errors
@@ -359,8 +373,21 @@ class YFinanceProvider:
                             interval=interval, prepost=prepost, auto_adjust=False,
                             actions=False, timeout=self.profile.request_timeout_seconds,
                         ), stage='history')
+                        if interval == '1d' and not prepost and not frames[symbol].empty:
+                            daily = frames[symbol].copy()
+                            daily.index = daily.index.tz_localize(None)
+                            checkpoint.save(_frame_rows(daily, [normalized[symbol]])[normalized[symbol]])
                     except (YFPricesMissingError, YFTzMissingError):
                         frames[symbol] = pd.DataFrame()
+                    except DataProviderError as exc:
+                        diagnostic = {**exc.diagnostic, 'symbol': symbol, 'interval': interval,
+                                      'request_start': start.isoformat(), 'request_end': end.isoformat()}
+                        if not is_transient_diagnostic(diagnostic):
+                            raise DataProviderError(failure_message(diagnostic), diagnostic=diagnostic) from exc
+                        failures.append(diagnostic)
+                        continue
+                if not frames:
+                    continue
                 nonempty = [frame for frame in frames.values() if frame is not None and not frame.empty]
                 # Preserve download's day+ tz-naive / intraday majority-timezone
                 # contract before using the existing multi-column row normalizer.
@@ -376,14 +403,18 @@ class YFinanceProvider:
             except Exception as exc:
                 diagnostic = failure_diagnostic(exc, 'history')
                 raise DataProviderError(failure_message(diagnostic), diagnostic=diagnostic) from exc
-            group_original = [normalized[value] for value in group]
+            group_original = [normalized[value] for value in frames]
             rows = _frame_rows(frame, group_original)
             output.update(rows)
+        if failures:
+            diagnostic = {**failures[0], 'completed_symbols': sum(bool(rows) for rows in output.values()),
+                          'failed_symbols': len(failures)}
+            raise DataProviderError(failure_message(diagnostic), diagnostic=diagnostic)
         return output
 
     def fresh_history(self, *args: Any, **kwargs: Any) -> dict[str, list[dict[str, Any]]]:
         """A fresh child has no historical-response LRU from an earlier read."""
-        return self.history(*args, **kwargs)
+        return YFinanceProvider(self.profile).history(*args, **kwargs)
 
     def recent_intraday(
         self, symbols: list[str], *, cutoff: datetime

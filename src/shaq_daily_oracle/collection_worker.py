@@ -44,8 +44,14 @@ def call_in_worker(operation, profile, payload):
                 text=True, encoding='utf-8', errors='replace', capture_output=True,
                 timeout=profile.yahoo_worker_timeout_seconds, env=environment, shell=False, check=False)
     except subprocess.TimeoutExpired as exc:
+        # A parent deadline identifies the requested group, not the ticker
+        # active when the worker stopped; never invent a per-ticker cause.
+        diagnostic = sanitize_diagnostic({'kind': 'timeout', 'stage': operation,
+            'timeout_scope': 'worker', 'requested_symbols': payload.get('symbols'),
+            'symbol': payload.get('symbol'), 'request_start': payload.get('start'),
+            'request_end': payload.get('end'), 'interval': payload.get('interval')})
         raise DataProviderError('Yahoo collection worker deadline exceeded',
-                                diagnostic={'kind':'timeout','stage':operation}) from exc
+                                diagnostic=diagnostic) from exc
     except OSError as exc:
         raise DataProviderError('Yahoo collection worker could not start',
                                 diagnostic=_failure_diagnostic(exc, 'startup')) from exc
@@ -76,6 +82,7 @@ def execute_operation(operation, payload):
     from curl_cffi.requests import Session
     profile = DataProfile.from_dict(payload['profile'])
     provider = YFinanceProvider(profile)
+    provider.history_checkpoint_root = payload.get('history_checkpoint_root')
     yf = provider._module()
     # This directory is parent-independent and never contains a durable request.
     # ExitStack closes the session/databases before deleting it (also on Windows).
