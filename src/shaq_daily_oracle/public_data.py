@@ -19,14 +19,43 @@ class DailyBarCache:
     def __getattr__(self, name):
         return getattr(self.provider, name)
 
+    def _read(self, symbol):
+        try:
+            cached = json.loads((self.root / (sha256_payload(symbol) + '.json')).read_text(encoding='utf-8'))
+            body = {key: cached[key] for key in ('start', 'end', 'rows')}
+            if (cached.get('sha256') == sha256_payload(body) and body['rows']
+                    and body['start'] < body['end']):
+                return body
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
+        # Legacy or damaged caches lack a verified coverage interval. Fetch them
+        # again; never infer a continuous history from the most recent row alone.
+        return {}
+
+    def _save(self, symbol, old, fresh, *, start, end):
+        fresh = [r for r in fresh if start.isoformat() <= str(r['timestamp'])[:10] < end.isoformat()]
+        if not fresh:
+            return []
+        connected = old and old['start'] <= start.isoformat() <= old['end']
+        merged = {str(r['timestamp']): r for r in old.get('rows', [])} if connected else {}
+        merged.update({str(r['timestamp']): r for r in fresh})
+        body = {'start': old['start'] if connected else start.isoformat(),
+                'end': max(old['end'], end.isoformat()) if connected else end.isoformat(),
+                'rows': [merged[k] for k in sorted(merged)]}
+        _atomic_json(self.root / (sha256_payload(symbol) + '.json'),
+                     {**body, 'sha256': sha256_payload(body)})
+        return body['rows']
+
     def history(self, symbols, *, start, end, interval="1d", prepost=False):
         if interval != "1d" or prepost:
             return self.provider.history(symbols, start=start, end=end, interval=interval, prepost=prepost)
-        output, groups = {}, {}
+        from .data_providers import DataProviderError
+        output, groups, cached_by_symbol = {}, {}, {}
         for symbol in symbols:
-            path = self.root / (sha256_payload(symbol) + ".json")
-            cached = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
-            rows = cached.get("rows", [])
+            cached = self._read(symbol)
+            cached_by_symbol[symbol] = cached
+            # A later replay must not choose a fetch start after this request's end.
+            rows = [r for r in cached.get('rows', []) if str(r['timestamp'])[:10] < end.isoformat()]
             recent = max((str(r.get("timestamp", ""))[:10] for r in rows), default="")
             beginning = start
             if recent and cached.get("start", "9999") <= start.isoformat():
@@ -34,17 +63,22 @@ class DailyBarCache:
             groups.setdefault(beginning, []).append(symbol)
             output[symbol] = rows
         for beginning, group in groups.items():
-            fresh = self.provider.history(group, start=beginning, end=end, interval="1d")
+            try:
+                fresh = self.provider.history(group, start=beginning, end=end, interval="1d")
+            except DataProviderError:
+                recover = getattr(self.provider, 'recover_history', None)
+                if recover is not None:
+                    partial = recover(group, start=beginning, end=end)
+                    for symbol, rows in partial.items():
+                        self._save(symbol, cached_by_symbol[symbol], rows, start=beginning, end=end)
+                raise
             for symbol in group:
                 rows = fresh.get(symbol, [])
                 if not rows:
                     # A failed provider update must not silently present old bars as fresh.
                     output[symbol] = []
                     continue
-                merged = {str(r["timestamp"]): r for r in output[symbol]}
-                merged.update({str(r["timestamp"]): r for r in rows})
-                full = [merged[k] for k in sorted(merged)]
-                _atomic_json(self.root / (sha256_payload(symbol)+".json"), {"start": min(start.isoformat(), full[0]["timestamp"][:10]), "rows": full})
+                full = self._save(symbol, cached_by_symbol[symbol], rows, start=beginning, end=end)
                 output[symbol] = [r for r in full if start.isoformat() <= r["timestamp"][:10] < end.isoformat()]
         return output
 

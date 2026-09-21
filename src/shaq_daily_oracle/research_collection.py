@@ -337,7 +337,7 @@ def collect_research_evidence(
     public_config = json.loads(public_config_path.read_text(encoding="utf-8")) if public_config_path.exists() else None
     if history_cache_root is not None and public_config:
         from .public_data import DailyBarCache
-        market = DailyBarCache(market, history_cache_root / profile.identity(), overlap_days=public_config["history_overlap_days"])
+        market = DailyBarCache(market, history_cache_root / profile.history_identity(), overlap_days=public_config["history_overlap_days"])
     lookback_start = session.session_date - timedelta(days=400)
     stock_symbols = [member.symbol for member in members]
     try:

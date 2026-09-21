@@ -130,6 +130,15 @@ class DataProfile:
     def identity(self) -> str:
         return sha256_payload(self.source_dict())
 
+    def history_identity(self) -> str:
+        """Cache raw daily bars by upstream semantics, not screening/runtime knobs."""
+        source = {'schema_version': 1, 'provider': self.market_provider,
+                  'interval': '1d', 'prepost': False, 'adjustment': 'unadjusted'}
+        if self.market_provider == 'openbb-rest':
+            source.update(base_url=self.openbb_base_url,
+                          route=self.openbb_routes.get('daily_bars'))
+        return sha256_payload(source)
+
 
 @dataclass(frozen=True)
 class UniverseMember:
@@ -334,7 +343,22 @@ class YFinanceProvider:
             'symbols': symbols, 'start': start.isoformat(), 'end': end.isoformat(),
             'interval': interval, 'prepost': prepost,
             'history_checkpoint_root': str(self.history_checkpoint_root) if self.history_checkpoint_root else None,
+            'history_source_identity': self.profile.identity(),
         })
+
+    def _history_checkpoint(self, symbol, *, start, end, interval='1d', prepost=False):
+        from .collection_checkpoint import HistoryCheckpoint
+        return HistoryCheckpoint(
+            self.history_checkpoint_root if interval == '1d' and not prepost else None,
+            {'provider': getattr(self, 'history_source_identity', self.profile.identity()),
+             'symbol': _yahoo_symbol(symbol), 'start': start.isoformat(), 'end': end.isoformat(),
+             'interval': interval, 'prepost': prepost},
+        )
+
+    def recover_history(self, symbols, *, start, end):
+        """Read only completed, hashed daily requests after an owned worker failed."""
+        return {symbol: rows for symbol in symbols
+                if (rows := self._history_checkpoint(symbol, start=start, end=end).read()) is not None}
 
     def _history_inline(
         self, symbols: list[str], *, start: date, end: date,
@@ -343,7 +367,6 @@ class YFinanceProvider:
         from collections import Counter
         import pandas as pd
         from yfinance.exceptions import YFPricesMissingError, YFTzMissingError
-        from .collection_checkpoint import HistoryCheckpoint
 
         yf = self._module()
         normalized = {_yahoo_symbol(symbol): symbol for symbol in symbols}
@@ -353,12 +376,8 @@ class YFinanceProvider:
             try:
                 frames = {}
                 for symbol in group:
-                    checkpoint = HistoryCheckpoint(
-                        self.history_checkpoint_root if interval == '1d' and not prepost else None,
-                        {'provider': self.profile.identity(), 'symbol': symbol,
-                         'start': start.isoformat(), 'end': end.isoformat(),
-                         'interval': interval, 'prepost': prepost},
-                    )
+                    checkpoint = self._history_checkpoint(symbol, start=start, end=end,
+                                                          interval=interval, prepost=prepost)
                     recovered = checkpoint.read()
                     if recovered is not None:
                         output[normalized[symbol]] = recovered
@@ -382,7 +401,10 @@ class YFinanceProvider:
                     except DataProviderError as exc:
                         diagnostic = {**exc.diagnostic, 'symbol': symbol, 'interval': interval,
                                       'request_start': start.isoformat(), 'request_end': end.isoformat()}
-                        if not is_transient_diagnostic(diagnostic):
+                        # A shared upstream rate limit is not a missing ticker.
+                        # Stop this group after its bounded retry, rather than
+                        # sending the same blocked request for every constituent.
+                        if diagnostic.get('kind') == 'rate_limited' or not is_transient_diagnostic(diagnostic):
                             raise DataProviderError(failure_message(diagnostic), diagnostic=diagnostic) from exc
                         failures.append(diagnostic)
                         continue
