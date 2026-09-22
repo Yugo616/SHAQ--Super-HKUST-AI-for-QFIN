@@ -590,11 +590,15 @@ class FinanceDatabaseProvider:
         except ImportError as exc:
             raise DataProviderError("pandas is unavailable for FinanceDatabase metadata") from exc
         try:
-            import httpx
+            from curl_cffi.requests import Session
             from io import BytesIO
-            response = httpx.get(self.equities_dataset_url,
-                                 timeout=self.timeout_seconds, follow_redirects=True)
-            response.raise_for_status()
+            # Non-streaming curl applies TIMEOUT_MS to the entire transfer,
+            # including redirects: a slow trickle cannot reset a read timeout.
+            with Session() as session:
+                response = session.get(self.equities_dataset_url,
+                                       timeout=self.timeout_seconds,
+                                       allow_redirects=True, stream=False)
+                response.raise_for_status()
             frame = pd.read_csv(
                 BytesIO(response.content), compression="bz2", index_col=0
             )
