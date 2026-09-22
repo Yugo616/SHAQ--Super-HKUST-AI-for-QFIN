@@ -581,19 +581,27 @@ class FinanceDatabaseProvider:
         "main/compression/equities.bz2"
     )
 
+    def __init__(self, *, timeout_seconds: float):
+        self.timeout_seconds = timeout_seconds
+
     def metadata(self, symbols: list[str]) -> dict[str, dict[str, Any]]:
         try:
             import pandas as pd  # type: ignore
         except ImportError as exc:
             raise DataProviderError("pandas is unavailable for FinanceDatabase metadata") from exc
         try:
+            import httpx
+            from io import BytesIO
+            response = httpx.get(self.equities_dataset_url,
+                                 timeout=self.timeout_seconds, follow_redirects=True)
+            response.raise_for_status()
             frame = pd.read_csv(
-                self.equities_dataset_url, compression="bz2", index_col=0
+                BytesIO(response.content), compression="bz2", index_col=0
             )
             frame = frame[~frame.index.astype(str).str.contains(r"\.", na=False)]
         except Exception as exc:
             raise DataProviderError(
-                f"FinanceDatabase metadata read failed: {type(exc).__name__}: {exc}"
+                f"FinanceDatabase metadata read failed: {type(exc).__name__}"
             ) from exc
         output = {}
         for symbol in symbols:

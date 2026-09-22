@@ -386,7 +386,9 @@ def collect_research_evidence(
     metadata_status = "not_configured"
     if profile.metadata_provider == "financedatabase":
         try:
-            metadata = (metadata_provider or FinanceDatabaseProvider()).metadata(candidate_symbols)
+            metadata = (metadata_provider or FinanceDatabaseProvider(
+                timeout_seconds=profile.request_timeout_seconds,
+            )).metadata(candidate_symbols)
             metadata_status = "collected"
         except Exception as exc:
             metadata_status = f"provider_error:{type(exc).__name__}"
