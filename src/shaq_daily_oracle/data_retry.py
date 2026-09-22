@@ -95,7 +95,9 @@ def failure_diagnostic(exc, stage):
     elif (isinstance(exc, (TimeoutError, subprocess.TimeoutExpired)) or curl_code == 28
           or number == errno.ETIMEDOUT):
         kind = 'timeout'
-    elif (isinstance(exc, ConnectionError) or curl_code in {5, 6, 7, 18, 52, 55, 56, 92}
+    # SSL_CONNECT_ERROR is a failed handshake, not certificate verification
+    # (curl 60). Retry only within the existing bounded transport policy.
+    elif (isinstance(exc, ConnectionError) or curl_code in {5, 6, 7, 18, 35, 52, 55, 56, 92}
           or number in {errno.ECONNRESET, errno.ECONNREFUSED, errno.ECONNABORTED,
                         errno.ENETUNREACH, errno.EHOSTUNREACH}):
         kind = 'connection_error'

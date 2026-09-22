@@ -17,6 +17,27 @@ from shaq_daily_oracle.data_providers import DataProfile, DataProviderError, YFi
 
 
 class YahooTransportRetryTests(unittest.TestCase):
+    def test_ssl_handshake_failure_retries_but_certificate_failure_does_not(self):
+        for code, expected_calls, succeeds in [(35, 2, True), (60, 1, False)]:
+            calls = []
+            def history(ticker, **kwargs):
+                calls.append(ticker.ticker)
+                if len(calls) == 1:
+                    raise CurlError('private TLS detail', code=code)
+                return pd.DataFrame({'Open': [101], 'Volume': [3]},
+                                    index=pd.DatetimeIndex(['2026-09-01'], tz='UTC'))
+            with self.subTest(code=code), patch.object(yf.Ticker, 'history', history):
+                provider = YFinanceProvider(DataProfile('test', 'unused', yahoo_retry_backoff_seconds=0))
+                if succeeds:
+                    rows = provider._history_inline(['AAA'], start=date(2026, 9, 1),
+                                                    end=date(2026, 9, 2), session=None)
+                    self.assertEqual(rows['AAA'][0]['open'], 101)
+                else:
+                    with self.assertRaises(DataProviderError):
+                        provider._history_inline(['AAA'], start=date(2026, 9, 1),
+                                                 end=date(2026, 9, 2), session=None)
+                self.assertEqual(len(calls), expected_calls)
+
     def test_curl_timeout_code_survives_wrapper_without_private_text(self):
         try:
             try:
