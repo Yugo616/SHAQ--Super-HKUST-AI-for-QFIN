@@ -7,7 +7,6 @@ from datetime import date, datetime, timedelta
 from html.parser import HTMLParser
 from pathlib import Path
 from zoneinfo import ZoneInfo
-import httpx
 from .hashing import sha256_payload
 from .settings import _atomic_json
 
@@ -116,10 +115,14 @@ def collect_public_context(config, *, cutoff):
             packets.append({'provider': name, 'status': 'not_enabled', 'source_uri': source['url']})
             continue
         try:
-            response = httpx.get(source['url'], params={'date': cutoff.date().isoformat()} if name == 'nasdaq_earnings' else None,
-                                 timeout=config['timeout_seconds'], follow_redirects=True,
-                                 headers={'User-Agent': 'SHAQ Daily Oracle Research', 'Accept': 'application/json,text/csv,text/html'})
-            response.raise_for_status()
+            from curl_cffi.requests import Session
+            # Non-streaming libcurl timeout bounds the entire transfer, even if
+            # a server keeps sending small chunks below an inactivity timeout.
+            with Session() as session:
+                response = session.get(source['url'], params={'date': cutoff.date().isoformat()} if name == 'nasdaq_earnings' else None,
+                                       timeout=config['timeout_seconds'], allow_redirects=True, stream=False,
+                                       headers={'User-Agent': 'SHAQ Daily Oracle Research', 'Accept': 'application/json,text/csv,text/html'})
+                response.raise_for_status()
             captured = datetime.now(ZoneInfo('America/New_York'))
             if source['kind'] == 'csv':
                 rows = list(csv.DictReader(io.StringIO(response.text)))
