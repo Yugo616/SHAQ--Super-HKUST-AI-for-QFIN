@@ -49,13 +49,13 @@ const completed=render('complete','complete');
 assert.match(bar(completed),/max="1" value="1"/,'completed legacy work must be a static full bar');
 assert.doesNotMatch(completed,/任务总量未记录/,'finished work should show completion, not an unresolved loading label');
 for(const state of ['failed','partial_failure','cancelled','stopped']){
- assert.match(bar(render(state,'running')),/value="0"/,'a stopped job cannot animate a stale running child');
+ assert.equal(bar(render(state,'running')),undefined,'a stopped job with no task plan has no synthetic bar');
  assert.doesNotMatch(render(state,'running'),/分析中|进行中/);
 }
 assert.match(bar(render('running','complete')),/value="1"/,'one completed variant stops while its sibling runs');
-assert.match(bar(render('running','failed')),/value="0"/);
-assert.match(bar(render('queued','queued')),/value="0"/,'queued work has not started');
-assert.doesNotMatch(bar(render('running','running')),/value=/,'only genuinely running work without a plan is indeterminate');
+assert.equal(bar(render('running','failed')),undefined);
+assert.equal(bar(render('queued','queued')),undefined,'queued work has not started');
+assert.equal(bar(render('running','running')),undefined,'unknown totals never imply timer progress');
 ''')
 
     def test_terminal_status_overrides_incomplete_display_events_without_fake_counts(self):
@@ -91,7 +91,8 @@ assert.match(html,/<progress[^>]*max="2"[^>]*value="1"/);
 assert.match(html,/saved conclusion/);
 assert.doesNotMatch(html,/执行时间线|call_requested|report_validated/);
 const old=ui.progressHtml([{job_id:'old',status:'running',variant_progress:{v:'running'},research_progress:events.slice(1)}],[],'2026-09-15T08:00:00-04:00');
-assert.doesNotMatch(old,/<progress[^>]*value=/,'old records must not invent a denominator');
+assert.match(old,/等待任务清单/,'old records disclose missing task totals');
+assert.doesNotMatch(old,/<progress(?![^>]*value=)[^>]*>/,'no timer animation substitutes for unknown totals');
 """)
     def test_calls_are_counted_per_version_without_report_or_stage_inflation(self):
         self.run_js(r"""
@@ -141,7 +142,7 @@ assert.match(historical,/data-progress-retry="old"/);
 const window={showCandidate(){}};const document={activeElement:null};
 let renderEditor=()=>{},renderHistory=()=>{},renderBatch=()=>{},loadSkill=()=>{},renderRun=()=>{},
     showPage=()=>{},saveDraft=()=>{},estimate=()=>{};
-const startBatch=()=>{},setInterval=()=>{},esc=String,qa=()=>[],versionKey=v=>v.author+'/'+v.version_id,selectedVersions=()=>[];
+const startBatch=()=>{},tickLocalClock=()=>{},setInterval=()=>{},esc=String,qa=()=>[],versionKey=v=>v.author+'/'+v.version_id,selectedVersions=()=>[];
 const nodes={};const q=s=>nodes[s]||=( {parentElement:{prepend(){}},classList:{toggle(){}},contains(){return false},replaceWith(){},disabled:false,textContent:'',innerHTML:''} );
 const state={runSelections:null,data:{settings:{model_profiles:[{model:'fixture',profile_id:'p'}]},
  versions:[],jobs:[],clock:{today_available:false,is_trading_day:false,next_trade_date:'2026-09-14',today_message:'今日休市；不启动今日研究。'}}};
@@ -179,7 +180,7 @@ const jobs=[
  {job_id:'old',status:'complete',started_at_et:'2026-09-09T08:00:00-04:00'},
  {job_id:'today',status:'complete',started_at_et:'2026-09-10T08:00:00-04:00'},
  {job_id:'overnight',status:'running',started_at_et:'2026-09-09T23:00:00-04:00'},
- {job_id:'queued',status:'queued',started_at_et:null},
+ {job_id:'queued',status:'queued',started_at_et:null,queued_at_et:'2026-09-10T08:00:00-04:00'},
  {job_id:'invalid',status:'complete',started_at_et:'bad'}];
 assert.deepEqual(ui.currentJobs(jobs,'2026-09-11T00:30:00+08:00').map(j=>j.job_id), ['overnight','queued','today']);
 assert.equal(ui.etDay('2026-11-09T04:30:00Z'),'2026-11-08');

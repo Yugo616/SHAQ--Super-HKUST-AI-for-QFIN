@@ -141,31 +141,79 @@ class HistoricalFallbackProvider:
         self.primary, self.backup = primary, backup
         self.primary_failed = False
         self.fallback_events = []
+        self.last_history_was_fresh = False
 
     def __getattr__(self, name):
         return getattr(self.primary, name)
 
     def history(self, symbols, *, start, end, interval='1d', prepost=False):
+        return self._history(symbols, start=start, end=end, interval=interval,
+                             prepost=prepost, fresh=False)
+
+    def fresh_history(self, symbols, *, start, end, interval='1d', prepost=False,
+                      required_timestamps=None):
+        """A new provider read must pass through the same historical circuit."""
+        return self._history(symbols, start=start, end=end, interval=interval,
+                             prepost=prepost, fresh=True,
+                             required_timestamps=required_timestamps)
+
+    @staticmethod
+    def _source_rows(provider, rows):
+        provider_id = getattr(provider, 'provider_id', None)
+        if not isinstance(provider_id, str):
+            provider_id = getattr(getattr(provider, 'profile', None), 'market_provider', 'unknown')
+        return {symbol: [{**row, 'source_provider': provider_id} for row in records]
+                for symbol, records in rows.items()}
+
+    @staticmethod
+    def _timestamp(row):
+        stamp = datetime.fromisoformat(str(row['timestamp']).replace('Z', '+00:00'))
+        if stamp.tzinfo is None or stamp.utcoffset() is None:
+            raise ValueError('Historical minute timestamp requires an offset')
+        return stamp
+
+    def _history(self, symbols, *, start, end, interval, prepost, fresh,
+                 required_timestamps=None):
+        if required_timestamps is not None and (interval != '1m' or prepost):
+            raise DataProviderError('Exact target timestamps require historical regular-session 1m bars.',
+                                    diagnostic={'kind': 'provider_error', 'stage': 'history'})
+        required = {symbol: set(required_timestamps.get(symbol, [])) for symbol in symbols} if required_timestamps else {}
         if prepost or interval not in {'1d', '1m'}:
-            return self.primary.history(symbols, start=start, end=end, interval=interval, prepost=prepost)
+            method = getattr(self.primary, 'fresh_history', self.primary.history) if fresh else self.primary.history
+            self.last_history_was_fresh = fresh and hasattr(self.primary, 'fresh_history')
+            return method(symbols, start=start, end=end, interval=interval, prepost=prepost)
         primary_rows = {}
         reason = 'primary_circuit_open'
         if not self.primary_failed:
             try:
-                primary_rows = self.primary.history(symbols, start=start, end=end, interval=interval)
+                method = self.primary.fresh_history if fresh else self.primary.history
+                primary_rows = self._source_rows(self.primary, method(
+                    symbols, start=start, end=end, interval=interval))
                 reason = 'missing_history'
+                self.last_history_was_fresh = fresh
             except DataProviderError as exc:
                 reason = exc.diagnostic.get('kind')
                 if reason not in {'timeout', 'connection_error', 'rate_limited', 'provider_unavailable'}:
                     raise
                 self.primary_failed = True
                 recover = getattr(self.primary, 'recover_history', None)
-                if recover is not None and interval == '1d':
-                    primary_rows = recover(symbols, start=start, end=end)
-        missing = [s for s in symbols if not primary_rows.get(s)]
+                if not fresh and recover is not None and interval == '1d':
+                    primary_rows = self._source_rows(self.primary, recover(symbols, start=start, end=end))
+        missing = [s for s in symbols if not primary_rows.get(s) or (
+            required and not required[s].issubset({self._timestamp(row) for row in primary_rows[s]}))]
         if missing:
             replacement = self.backup.history(missing, start=start, end=end, interval=interval)
-            primary_rows.update({s: replacement.get(s, []) for s in missing})
+            replacement = self._source_rows(self.backup, replacement)
+            for symbol in missing:
+                if required:
+                    present = {self._timestamp(row) for row in primary_rows.get(symbol, [])}
+                    needed = required[symbol] - present
+                    additions = [row for row in replacement.get(symbol, [])
+                                 if self._timestamp(row) in needed]
+                    primary_rows[symbol] = primary_rows.get(symbol, []) + additions
+                else:
+                    primary_rows[symbol] = replacement.get(symbol, [])
+            self.last_history_was_fresh = True
             self.fallback_events.append({'symbols': missing, 'reason': reason,
                 'provider': self.backup.provider_id, 'interval': interval,
                 'start': start.isoformat(), 'end_exclusive': end.isoformat()})

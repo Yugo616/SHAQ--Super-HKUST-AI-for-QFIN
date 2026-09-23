@@ -189,7 +189,7 @@ class ResultRecoveryTests(unittest.TestCase):
             receipt = {'status': 'running', 'operation_id': 'other-instance'}
             service._result_refresh_receipt.write_text(json.dumps(receipt))
             before = service._result_refresh_receipt.read_bytes()
-            self.assertEqual(service.wait_result_refresh('other-instance', timeout=0)['status'], 'running')
+            self.assertEqual(service.wait_result_refresh('other-instance', timeout=0)['status'], 'interrupted')
             self.assertEqual(service._result_refresh_receipt.read_bytes(), before)
 
     def test_legacy_retry_retains_success_ids_and_partial_status_across_failures(self):

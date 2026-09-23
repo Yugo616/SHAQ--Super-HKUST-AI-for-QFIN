@@ -6,6 +6,10 @@ from pathlib import Path
 import tempfile
 import unittest
 
+from shaq_daily_oracle.data_providers import DataProfile
+from shaq_daily_oracle.history_fallback import HistoricalFallbackProvider
+from shaq_daily_oracle.minute_settlements import MINUTE_NAMESPACE, refresh_minute_observations
+
 
 def records(day='2026-09-09', opening=100, closing=110):
     return {'AAA': [dict(timestamp=f'{day}T{clock}:00-04:00', open=value,
@@ -112,6 +116,47 @@ class MinuteStoreTests(unittest.TestCase):
         data = records(); data['AAA'].append(dict(data['AAA'][0]))
         result = self.observe(data=data)
         self.assertIsNone(result['targets']['AAA']['entry'])
+
+    def test_target_preserves_actual_feed_with_legacy_collection_namespace(self):
+        data = records()
+        for row in data['AAA']:
+            row.update(source_provider='alpaca-sip', source_feed='sip',
+                       price_adjustment='unadjusted')
+            row['timestamp'] = ('2026-09-09T13:31:00Z' if row['timestamp'][11:16] == '09:31'
+                                else '2026-09-09T19:55:00Z')
+        data['AAA'].insert(0, {'timestamp': 'bad', 'open': 1, 'volume': 1})
+        result = self.observe(data=data)
+        self.assertEqual(result['provider'], 'yfinance')  # legacy lookup namespace
+        self.assertEqual(result['source'], 'alpaca-sip')
+        self.assertEqual(result['target_observations']['AAA']['entry']['source_provider'], 'alpaca-sip')
+        self.assertEqual(result['target_observations']['AAA']['exit']['source_feed'], 'sip')
+
+    def test_refresh_backfills_exact_missing_exit_from_authorized_history_wrapper(self):
+        class Primary:
+            provider_id = 'yfinance'
+            def fresh_history(self, symbols, **kwargs):
+                return {'AAA': [{'timestamp': '2026-09-09T09:31:00-04:00',
+                                 'open': 100, 'volume': 100}]}
+
+        class Backup:
+            provider_id = 'alpaca-sip'
+            def history(self, symbols, **kwargs):
+                return {'AAA': [{'timestamp': '2026-09-09T19:55:00Z',
+                                 'open': 110, 'volume': 100,
+                                 'source_feed': 'sip',
+                                 'price_adjustment': 'unadjusted'}]}
+
+        receipt = refresh_minute_observations(
+            research_root=Path(self.tmp.name),
+            rows=[{'trade_date': '2026-09-09', 'predictions': [{'symbol': 'AAA'}]}],
+            profile=DataProfile(profile_id='test', universe_file='unused.csv'),
+            observed_at=datetime.fromisoformat('2026-09-10T09:00:00-04:00'),
+            market_provider=HistoricalFallbackProvider(Primary(), Backup()),
+        )
+        snapshot = type(self.store)(Path(self.tmp.name) / MINUTE_NAMESPACE).snapshot('2026-09-09', ['AAA'])
+        self.assertEqual(receipt['refreshed_dates'], ['2026-09-09'])
+        self.assertEqual(snapshot['targets']['AAA']['exit']['open'], 110)
+        self.assertEqual(snapshot['target_observations']['AAA']['exit']['source_provider'], 'alpaca-sip')
 
     def test_tampering_is_rejected_and_shared_subset_uses_same_observation(self):
         data = records(); data['BBB'] = copy.deepcopy(data['AAA'])

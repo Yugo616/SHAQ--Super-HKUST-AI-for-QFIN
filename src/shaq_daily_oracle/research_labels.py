@@ -58,11 +58,11 @@ def _bar_for_date(records: list[dict[str, Any]], trade_date: date) -> dict[str, 
                 continue
         opening, closing = _number(row.get("open")), _number(row.get("close"))
         if observed_date == trade_date and opening not in {None, 0} and closing is not None:
-            matches.append((opening, closing))
+            matches.append((opening, closing, row))
     if len(matches) != 1:
         return None
-    opening, closing = matches[0]
-    return {
+    opening, closing, source = matches[0]
+    result = {
         "official_unadjusted_open": opening,
         "official_unadjusted_close": closing,
         "open_to_close_return": closing / opening - 1,
@@ -70,6 +70,10 @@ def _bar_for_date(records: list[dict[str, Any]], trade_date: date) -> dict[str, 
             "bullish" if closing > opening else ("bearish" if closing < opening else "neutral")
         ),
     }
+    for key in ("source_provider", "source_feed", "price_adjustment"):
+        if isinstance(source.get(key), str) and source[key]:
+            result[key] = source[key]
+    return result
 
 
 def _observation_time(row: dict[str, Any]) -> datetime:
@@ -232,9 +236,10 @@ def refresh_research_labels(
                 if label is None:
                     missing_symbols.append(symbol)
                     continue
+                source_provider = label.pop("source_provider", profile.market_provider)
                 observation = {
                     "observed_at_et": now.isoformat(),
-                    "provider": profile.market_provider,
+                    "provider": source_provider,
                     "fresh_provider_read": fresh_provider_read,
                     **label,
                 }

@@ -157,6 +157,17 @@ def due_status(now, start_et):
     return "due"
 
 
+def preparation_window(now, start_et, lead_minutes):
+    """Return the real scheduled deadline, not a new evidence cutoff."""
+    now = now.astimezone(ET)
+    if type(lead_minutes) is not int or lead_minutes <= 0:
+        raise ValueError('invalid preparation lead time')
+    if market_session(now.date()) is None:
+        return None
+    start = datetime.combine(now.date(), clock_time.fromisoformat(start_et), ET)
+    return start if start - timedelta(minutes=lead_minutes) <= now < start else None
+
+
 def _collection_recovery_due(saved, value, now):
     """Only failed acquisition before a batch exists is safe to restart automatically."""
     if (saved.get('status') != 'failed' or saved.get('error_type') != 'ResearchCollectionError'
@@ -187,6 +198,7 @@ def run_research_worker(paths):
     lab = None
     state = None
     recovery_pending = False
+    prepared = {}
     try:
         value = schedule_status(paths)
         lab = LabService(paths)
@@ -194,9 +206,27 @@ def run_research_worker(paths):
             return 0
         now = datetime.now(ET)
         state = due_status(now, value["start_et"])
-        ledger = paths.research_root / "automatic_runs" / f"{now.date()}.json"
+        if state == 'waiting' and hasattr(lab, 'prepare_if_due'):
+            try:
+                prepared = lab.prepare_if_due(now=now, start_et=value['start_et'])
+            except Exception as exc:
+                # Prior-history preparation is maintenance, not an attempted
+                # forecast. It must never create a failed automatic-run ledger.
+                try:
+                    _atomic_json(paths.research_root / 'preparation_failure.json', {
+                        'session_date': now.date().isoformat(),
+                        'message': str(exc), 'error_type': type(exc).__name__,
+                        'recorded_at': datetime.now(ET).isoformat(),
+                    })
+                except Exception:
+                    pass  # Diagnostic persistence cannot cancel the forecast.
+            # Preparation may consume the final seconds before the scheduled
+            # start while this worker owns schedule.lock; check the clock again.
+            now = datetime.now(ET)
+            state = due_status(now, value['start_et'])
         if state in {"waiting", "closed"}:
             return 0
+        ledger = paths.research_root / "automatic_runs" / f"{now.date()}.json"
         saved = json.loads(ledger.read_text(encoding="utf-8")) if ledger.exists() else {}
         delay = value.get('collection_recovery_delay_seconds', 30)
         retry_at = now + timedelta(seconds=delay if type(delay) is int and 0 <= delay <= 300 else 30)
@@ -242,6 +272,9 @@ def run_research_worker(paths):
                                   'collection_recovery_count': locals().get('recovery_count', 0)})
         return 1
     finally:
+        # Release the file lock, but also avoid pre-start maintenance below:
+        # non-overlapping OS schedulers will not launch another worker until exit.
+        lock.release()
         try:
             if lab is not None:
                 # First finish the time-sensitive forecast decision. Historical
@@ -258,9 +291,7 @@ def run_research_worker(paths):
                     # Another process owns an already_running operation and its
                     # lifetime; this scheduler neither waits nor changes it.
         except Exception as exc:
-            _atomic_json(paths.research_root / 'schedule_status.json', {
+            _atomic_json(paths.research_root / 'maintenance_failure.json', {
                 'message': '价格与成绩刷新失败：' + str(exc),
                 'recorded_at': datetime.now(ET).isoformat(), 'error_type': type(exc).__name__,
             })
-        finally:
-            lock.release()

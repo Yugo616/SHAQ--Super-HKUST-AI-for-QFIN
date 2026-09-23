@@ -234,6 +234,13 @@ class LabService:
             value = read_refresh_receipt(self._result_refresh_receipt)
         except (FileNotFoundError, json.JSONDecodeError):
             value = {"status": "idle", "operation_id": "", "result": {}}
+        if value.get('status') == 'running':
+            try:
+                with FileLock(str(self.paths.research_root / 'result_refresh.lock'), timeout=0):
+                    value = {**value, 'status': 'interrupted',
+                             'error': '价格更新进程已中断；已有价格和余额保留，可继续更新。'}
+            except (LockTimeout, OSError):
+                pass
         return {**value, 'scope': 'result_refresh',
                 'impact': 'price_and_account_refresh_only',
                 'occurred_at': value.get('completed_at') or value.get('attempted_at'),
@@ -310,9 +317,6 @@ class LabService:
         except LockTimeout:
             current = self.result_refresh_status()
             return {**current, "status": "already_running"}
-        if not manual and not retry_failed_only and eligible_dates is not None:
-            from .minute_settlements import record_settlement_attempt
-            record_settlement_attempt(self.paths.research_root, eligible_dates, now, app_open=True)
         if not manual and not retry_failed_only and eligible_dates is None and prior.get("attempted_at"):
             try:
                 attempted = datetime.fromisoformat(str(prior["attempted_at"])).astimezone(ET)
@@ -333,14 +337,26 @@ class LabService:
             "retry_targets": retry_targets,
             "automatic_retry_count": prior.get('automatic_retry_count', 0) + 1 if automatic_retry else 0,
         }
-        _atomic_json(self._result_refresh_receipt, running)
-        thread = threading.Thread(
-            target=self._run_result_refresh,
-            args=(lock, running, eligible_dates), daemon=True,
-            name="shaq-result-refresh",
-        )
-        self._owned_result_refresh = (operation_id, thread)
-        start_guarded_thread(self.paths, thread)
+        try:
+            _atomic_json(self._result_refresh_receipt, running)
+            thread = threading.Thread(
+                target=self._run_result_refresh,
+                args=(lock, running, eligible_dates), daemon=True,
+                name="shaq-result-refresh",
+            )
+            self._owned_result_refresh = (operation_id, thread)
+            start_guarded_thread(self.paths, thread)
+        except Exception as exc:
+            self._owned_result_refresh = None
+            try:
+                _atomic_json(self._result_refresh_receipt, {
+                    **running, 'status': 'failed', 'error_type': type(exc).__name__,
+                    'error': '价格更新任务未能启动，请重试。',
+                    'completed_at': datetime.now(ET).isoformat(),
+                })
+            finally:
+                lock.release()
+            raise
         return running
 
     def wait_result_refresh(self, operation_id, timeout=180):
@@ -362,6 +378,14 @@ class LabService:
         minute_dates = (set(eligible_dates) if eligible_dates is not None else None) if not targets else (
             None if targets.get('all_dates') else set(targets['dates']))
         stage = 'setup'
+        completed_stages = []
+
+        def progress(name):
+            # Count finished operations, never elapsed-time estimates.
+            _atomic_json(self._result_refresh_receipt, {
+                **running, 'stage': name, 'completed_stages': list(completed_stages),
+                'total_stages': 3,
+            })
 
         def clear_stage(name):
             result['stage_failures'] = [f for f in result['stage_failures'] if f.get('stage') != name]
@@ -375,6 +399,7 @@ class LabService:
             next_retry = datetime.now(ET) + RESULT_RETRY_DELAY if will_retry else None
             _atomic_json(self._result_refresh_receipt, {
                 **running, 'status': ('partial_failure' if successes else 'failed') if failures else 'complete',
+                'stage': stage, 'completed_stages': list(completed_stages), 'total_stages': 3,
                 'completed_at': datetime.now(ET).isoformat(), 'result': result,
                 'failure_count': len(failures), 'success_count': successes,
                 'next_retry_at': next_retry.isoformat() if next_retry else None,
@@ -382,6 +407,10 @@ class LabService:
                     'error': result['stage_failures'][-1]['message']} if result['stage_failures'] else {}),
             })
         try:
+            if not running.get('manual') and not running.get('retry_failed_only') and eligible_dates is not None:
+                from .minute_settlements import record_settlement_attempt
+                record_settlement_attempt(self.paths.research_root, eligible_dates, datetime.now(ET), app_open=True)
+            progress(stage)
             profile = DataProfile.from_dict(self.settings.load()["data_profile"])
             if profile.market_provider != "yfinance":
                 raise LabServiceError(
@@ -389,8 +418,10 @@ class LabService:
                 )
             market = _RefreshMarket(profile)
             clear_stage('setup')
+            completed_stages.append('setup')
             if batch_ids is None or batch_ids:
                 stage = 'daily_labels'
+                progress(stage)
                 daily = refresh_research_labels(
                     research_root=self.paths.research_root, batches_root=self.paths.batches_root,
                     profile=profile,
@@ -401,7 +432,9 @@ class LabService:
                 retained = [f for f in result['failures'] if batch_ids is not None and f.get('batch_id') not in batch_ids]
                 result['failures'] = retained + daily['failures']
                 clear_stage(stage)
+            completed_stages.append('daily_labels')
             stage = 'minute_settlement'
+            progress(stage)
             reconcile_only = targets is not None and not minute_dates and minute_dates is not None
             minute = self._refresh_minute_accounts(
                 profile, eligible_dates=minute_dates, market_provider=market,
@@ -414,6 +447,7 @@ class LabService:
             clear_stage('account_reconciliation')
             result['stage_failures'].extend(minute.pop('stage_failures', []))
             result['minute_settlement'] = minute
+            completed_stages.append('minute_settlement')
             finish()
         except Exception as exc:
             clear_stage(stage)
@@ -433,8 +467,24 @@ class LabService:
         """Compatibility entry point for the research scheduler."""
         return self.start_result_refresh(manual=False)
 
+    def prepare_if_due(self, *, now, start_et):
+        """Scheduled stable-data work; never invoked by a page/status read."""
+        from .research_schedule import preparation_window
+        from .research_preparation import prepare_research_history
+        config_path = self.paths.package_root / 'config/research-preparation.json'
+        if not config_path.is_file():
+            return {'status': 'not_configured'}
+        config = json.loads(config_path.read_text(encoding='utf-8'))
+        deadline = preparation_window(now, start_et, config['lead_minutes'])
+        if deadline is None:
+            from datetime import time as clock_time
+            start = datetime.combine(now.astimezone(ET).date(), clock_time.fromisoformat(start_et), ET)
+            return {'status': 'not_due', 'allow_result_refresh':
+                    now < start - timedelta(minutes=config['lead_minutes'])}
+        profile = DataProfile.from_dict(self.settings.load()['data_profile'])
+        return prepare_research_history(self.paths, profile, now=now, deadline_et=deadline)
+
     def state(self) -> dict[str, Any]:
-        self.start_result_refresh(manual=False)
         now = datetime.now(ET)
         settings = self.settings.public_settings()
         storage = shutil.disk_usage(self.paths.research_root)
@@ -482,11 +532,17 @@ class LabService:
                 continue
         with self.jobs_lock:
             memory = {key: dict(value) for key, value in self.jobs.items()}
-        current = sha256_payload({'files': stamps, 'jobs': memory})
+        jobs = self.job_statuses()
+        refresh = self.result_refresh_status()
+        clock = today_collection_status(datetime.now(ET))
+        current = sha256_payload({'files': stamps, 'jobs': memory,
+            'live_jobs': [(row.get('job_id'), row.get('status'), row.get('live_state')) for row in jobs],
+            'refresh_status': refresh.get('status'),
+            'clock': {key: clock.get(key) for key in ('trade_date','today_available','today_message')}})
         value = dict(revision=current, changed=current != revision,
-                     observed_at=datetime.now(ET).isoformat())
+                     observed_at=datetime.now(ET).isoformat(), clock=clock)
         if value['changed']:
-            value.update(jobs=self.job_statuses(), result_refresh=self.result_refresh_status())
+            value.update(jobs=jobs, result_refresh=refresh)
         return value
 
     def compare_methods(
@@ -558,51 +614,147 @@ class LabService:
             except Exception:
                 evidence_manifest = None
         captured_at = str(evidence_manifest.get("as_of_et", "")) if evidence_manifest else ""
-        collection = (
-            evidence_manifest.get("provider_manifest", {}).get("collection_statuses", [])
-            if evidence_manifest else []
-        )
+        provider_manifest = evidence_manifest.get("provider_manifest", {}) if evidence_manifest else {}
+        collection = provider_manifest.get("collection_statuses", [])
         status_counts: dict[str, int] = {}
         for row in collection:
             status = str(row.get("status", "unknown"))
             status_counts[status] = status_counts.get(status, 0) + 1
-        run_status = "fresh" if evidence_manifest else "not_run"
-        run_note = (
-            "本次批跑开始时重新联网采集，并冻结给所有版本共用。"
-            if evidence_manifest else "尚未生成本机证据；开始今日批跑时会重新联网采集。"
+        current_et = datetime.now(ET)
+        try:
+            evidence_time = datetime.fromisoformat(captured_at.replace("Z", "+00:00"))
+            evidence_today = (
+                evidence_time.tzinfo is not None
+                and evidence_time.astimezone(ET).date() == current_et.date()
+                and evidence_time <= current_et
+            )
+        except ValueError:
+            evidence_today = False
+        run_status = "fresh" if evidence_today else ("historical" if evidence_manifest else "not_run")
+        if run_status == "fresh":
+            run_note = "今日联网采集并冻结给各版本共用。"
+            if evidence_manifest.get("cutoff_status") == "late_research_only":
+                run_note += " 本批为错过截止后的研究补跑，不计准时盘前成绩。"
+        elif run_status == "historical":
+            run_note = "最近一次冻结证据属于历史日期，不代表今天已采集。"
+        else:
+            run_note = "尚未生成本机证据；开始今日批跑时会重新联网采集。"
+
+        def domain_rows(domain: str) -> list[dict[str, Any]]:
+            return [row for row in collection if row.get("domain") == domain]
+
+        def source_status(domain: str, *, empty: str = "not_run") -> str:
+            if run_status != "fresh":
+                return run_status
+            observed = domain_rows(domain)
+            if not observed:
+                return empty
+            statuses = {str(row.get("status")) for row in observed}
+            if "provider_error" in statuses:
+                return "partial_failure" if "collected" in statuses else "provider_error"
+            return "fresh" if "collected" in statuses else empty
+
+        event_rows = domain_rows("event")
+        if run_status != "fresh":
+            event_status, event_note = run_status, run_note
+        elif any(row.get("status") == "provider_error" for row in event_rows):
+            event_status = "partial_failure" if any(row.get("status") == "collected" for row in event_rows) else "provider_error"
+            event_note = "公司公告来源出现错误；不能确认今日事件情况。"
+        elif any(row.get("status") == "collected" for row in event_rows):
+            event_status, event_note = "fresh", "今日一手公告已采集；其余无适用事件的标的单独记录。"
+        elif event_rows and all(row.get("status") == "not_applicable" for row in event_rows):
+            event_status, event_note = "not_applicable", "今日已核对候选公司，今日无事件适用于这些标的。"
+        else:
+            event_status, event_note = "not_run", "尚无可核验的今日公司公告采集结果。"
+
+        option_rows = domain_rows("derivatives")
+        def option_count(field: str) -> str:
+            values = [row.get(field) for row in option_rows]
+            known = [value for value in values if type(value) in {int, float} and value >= 0]
+            if not known:
+                return "未记录"
+            total = sum(known)
+            return str(total) if len(known) == len(values) else f"至少{total}（部分未记录）"
+
+        option_coverage = (
+            f"源合约{option_count('source_contract_count')}；"
+            f"保留{option_count('retained_contract_count')}；"
+            f"有效双边价{option_count('valid_two_sided_price_count')}"
+            if evidence_manifest else "将在运行时检查"
+        )
+        if run_status != "fresh":
+            option_status, option_note = run_status, run_note
+        elif any(row.get("status") == "provider_error" for row in option_rows):
+            option_status = "partial_failure" if any(row.get("status") != "provider_error" for row in option_rows) else "provider_error"
+            option_note = "期权来源出现接口故障；不可当作无合约或有效报价。"
+        elif any(row.get("reason") == "missing_exchange_quote_timestamp" for row in option_rows):
+            option_status = "limited"
+            option_note = "已取得部分期权链，但缺少交易所报价时间，不能验证报价新鲜度或推断方向。"
+        elif any(row.get("reason") == "quote_not_fresh" for row in option_rows):
+            option_status, option_note = "limited", "期权报价时间可见，但不满足新鲜度要求。"
+        elif any(row.get("status") == "collected" for row in option_rows):
+            option_status, option_note = "limited", "期权价格结构可用，但不具备可靠主动买卖或开平仓方向语义。"
+        elif option_rows and all(row.get("reason") == "no_option_chain" for row in option_rows):
+            option_status, option_note = "unavailable", "本批未取得期权链；这不同于报价时间缺失或接口故障。"
+        else:
+            option_status, option_note = "unavailable" if option_rows else "not_run", "本批没有可验证的期权报价时间与方向语义。"
+
+        observations = provider_manifest.get("premarket_observations", {})
+        unknown_volume = sum(
+            row.get("volume_status") in {"volume_unavailable", "provider_reported_zero"}
+            for row in observations.values() if isinstance(row, dict)
+        )
+        market_note = run_note
+        if unknown_volume:
+            market_note += f" {unknown_volume}只股票的供应商盘前量字段全为0，真实成交量未知。"
+        market_coverage = (
+            f"{sum(row.get('status') == 'collected' for row in observations.values() if isinstance(row, dict))}只股票有盘前价格柱；"
+            f"{unknown_volume}只股票盘前成交量不可验证"
+            if evidence_manifest else "将在运行时检查"
+        )
+        metadata_status = str(provider_manifest.get("metadata_status", ""))
+        metadata_display_status = (
+            run_status if run_status != "fresh" else
+            ("provider_error" if metadata_status.startswith("provider_error") else
+             ("unavailable" if metadata_status == "not_configured" else
+              ("fresh" if metadata_status == "collected" else "not_run")))
+        )
+        metadata_note = (
+            "公司身份与行业资料来源发生错误；不可视为今日已采集。"
+            if metadata_display_status == "provider_error" else run_note
         )
         rows = [
             {
                 "name": "股票、市场与行业行情",
                 "source": profile.market_provider,
                 "updated_at": captured_at,
-                "status": run_status,
-                "coverage": "全股票池筛选；候选保存完整价格路径与盘前状态" if evidence_manifest else "将在运行时检查",
-                "note": run_note,
+                "status": source_status("market"),
+                "coverage": market_coverage,
+                "note": market_note,
             },
             {
                 "name": "公司一手公告",
                 "source": profile.event_provider,
                 "updated_at": captured_at,
-                "status": run_status,
+                "status": event_status,
                 "coverage": "截止时间前SEC公告；当天没有公告会标为今日无事件",
-                "note": run_note,
+                "note": event_note,
             },
             {
                 "name": "基础期权表面",
                 "source": profile.market_provider,
                 "updated_at": captured_at,
-                "status": "limited" if evidence_manifest else "not_run",
-                "coverage": "候选的到期日、隐含波动、偏斜与期限结构",
-                "note": "免费源不提供可靠的主动买卖与开平仓语义，因此只能解释波动结构。",
+                "status": option_status,
+                "coverage": option_coverage,
+                "note": option_note,
             },
             {
                 "name": "证券身份与行业资料",
                 "source": profile.metadata_provider,
                 "updated_at": captured_at,
-                "status": run_status,
+                "status": metadata_display_status,
                 "coverage": "候选公司身份与行业；不凭相关性虚构客户供应商关系",
-                "note": run_note,
+                "note": metadata_note,
             },
             {
                 "name": "标普500研究股票池",
@@ -641,8 +793,9 @@ class LabService:
             names = {'cboe_vix': 'Cboe波动率历史', 'federal_reserve_h15': '美联储公开利率', 'nasdaq_earnings': 'Nasdaq财报日历与预期'}
             for item in evidence_manifest.get('provider_manifest', {}).get('public_source_statuses', []):
                 rows.append({'name': names.get(item['provider'], item['provider']), 'source': item.get('source_uri', ''),
-                             'updated_at': item.get('captured_at', ''), 'status': item['status'],
-                             'coverage': '', 'note': item.get('error', '仅使用本次已保存的公开资料')})
+                             'updated_at': item.get('captured_at', ''),
+                             'status': item['status'] if run_status == 'fresh' else 'historical',
+                             'coverage': '', 'note': item.get('error', '仅使用本次已保存的公开资料') if run_status == 'fresh' else run_note})
         return {
             "latest_evidence_hash": evidence_manifest["evidence_hash"] if evidence_manifest else "",
             "latest_cutoff_status": (
@@ -1088,7 +1241,9 @@ class LabService:
                 return dict(existing)
             self.jobs[job_id] = {
                 "job_id": job_id, "status": "queued", "started_at_et": None,
+                "queued_at_et": datetime.now(ET).isoformat(),
                 "completed_at_et": None, "message": "等待开始",
+                "model_profile_id": profile.profile_id,
                 "variant_progress": {f'{v.author}/{v.version_id}': 'queued' for v in variants},
             }
         thread = threading.Thread(
@@ -1101,8 +1256,23 @@ class LabService:
             daemon=True,
             name=f"shaq-research-{job_identity}",
         )
-        start_guarded_thread(self.paths, thread)
+        self._start_prediction_thread(thread, task_lock, job_id)
         return dict(self.jobs[job_id])
+
+    def _start_prediction_thread(self, thread, task_lock, job_id):
+        try:
+            start_guarded_thread(self.paths, thread)
+        except Exception as exc:
+            try:
+                self._set_job(job_id, status='failed',
+                    completed_at_et=datetime.now(ET).isoformat(),
+                    message='分析未能启动，请稍后继续未完成分析',
+                    error_type=type(exc).__name__,
+                    variant_progress={key: value if value == 'complete' else 'failed'
+                        for key, value in self.jobs[job_id].get('variant_progress', {}).items()})
+            finally:
+                task_lock.release()
+            raise
 
     def _run_batch_job(
         self, *, job_id: str, variants: list[VariantSelection],
@@ -1112,11 +1282,17 @@ class LabService:
         try:
             self._set_job(job_id, status="running", started_at_et=datetime.now(ET).isoformat(),
                           message="正在恢复原批次分析" if resume_batch_id else "正在冻结共享证据")
+            event_log = ResearchProgressLog(self.paths.research_root / 'jobs' / f'{job_id}-research.jsonl')
+            def observe(**event):
+                if event.get('batch_id'):
+                    self._set_job(job_id, batch_id=event['batch_id'])
+                return event_log.append(**event)
             settings = self.settings.load()
             evidence = resume_evidence if resume_batch_id else self._today_evidence(
                 profile=DataProfile.from_dict(settings["data_profile"]),
                 sec_identity=str(settings["sec_identity"]),
                 variants=variants,
+                observer=observe,
                 openbb_api_key=(self.settings.get_openbb_secret() or "") if "openbb-rest" in (
                     settings["data_profile"].get("market_provider"), settings["data_profile"].get("event_provider"),
                     settings["data_profile"].get("metadata_provider"),
@@ -1131,11 +1307,6 @@ class LabService:
                 cache_root=self.paths.research_root / "cache/model_calls",
                 registry=self.registry, integration_policy=integration,
             )
-            event_log = ResearchProgressLog(self.paths.research_root / 'jobs' / f'{job_id}-research.jsonl')
-            def observe(**event):
-                if event.get('batch_id'):
-                    self._set_job(job_id, batch_id=event['batch_id'])
-                return event_log.append(**event)
             run = runner.resume if resume_batch_id else runner.run
             result = run(
                 evidence=evidence, profile=profile, secret=secret,
@@ -1144,9 +1315,6 @@ class LabService:
                 progress=lambda key, status: self._variant_progress(job_id, key, status),
                 observer=observe,
             )
-            label_refresh = self.start_result_refresh(manual=False)
-            if label_refresh.get('status') == 'running':
-                label_refresh = self.wait_result_refresh(label_refresh['operation_id'])
             completed = result["status"]["all_variants_completed"]
             completed_count = len(result['status'].get('completed_variants', []))
             variant_errors = result['status'].get('failed_variants', {})
@@ -1157,11 +1325,23 @@ class LabService:
                 message=("所选版本已完成" if completed else
                          f"{completed_count} 个版本完成，{len(variant_errors)} 个未完成；可继续未完成分析"),
                 batch_id=result["status"]["batch_id"],
-                label_refresh=label_refresh,
                 completed_variant_count=completed_count,
                 failed_variant_count=len(variant_errors),
                 variant_errors=variant_errors,
             )
+            # Research completion and historical settlement are separate jobs.
+            # Never make a finished model wait on Yahoo or turn it into failure.
+            try:
+                label_refresh = self.start_result_refresh(manual=False)
+            except Exception as exc:
+                label_refresh = {'status': 'failed', 'scope': 'result_refresh',
+                                 'error_type': type(exc).__name__,
+                                 'message': '价格更新未启动，分析结果已保存。'}
+            try:
+                self._set_job(job_id, label_refresh=label_refresh)
+            except Exception:
+                # Optional maintenance metadata cannot invalidate saved research.
+                pass
         except Exception as exc:
             try:
                 self._set_job(
@@ -1221,6 +1401,8 @@ class LabService:
             completed = set(saved_status.get('completed_variants', []))
             self._set_job(job_id, batch_id=batch_id, status='queued',
                 message='已恢复，正在继续未完成分析',
+                model_profile_id=profile.profile_id,
+                queued_at_et=datetime.now(ET).isoformat(),
                 started_at_et=datetime.now(ET).isoformat(), completed_at_et=None,
                 variant_errors={},
                 variant_progress={f'{v.author}/{v.version_id}':
@@ -1232,7 +1414,7 @@ class LabService:
             'job_id': job_id, 'variants': variants, 'profile': profile, 'secret': secret,
             'task_lock': task_lock, 'resume_batch_id': batch_id, 'resume_evidence': evidence},
             daemon=True, name='shaq-resume')
-        start_guarded_thread(self.paths, thread)
+        self._start_prediction_thread(thread, task_lock, job_id)
         return dict(self.jobs[job_id])
 
     def _variant_progress(self, job_id, key, status):
@@ -1244,6 +1426,7 @@ class LabService:
 
     def _today_evidence(
         self, *, profile: DataProfile, sec_identity: str, openbb_api_key: str = "", variants=None,
+        observer=None,
     ):
         now = self._require_today_available()
         from .module_rules import default_rule
@@ -1274,6 +1457,7 @@ class LabService:
                 screening_rules=screening_rules or None,
                 history_cache_root=self.paths.research_root / "cache/daily_bars",
                 allow_replay=False,
+                observer=observer,
             )
             validate_today_evidence(evidence, datetime.now(ET))
             destination = self.paths.research_root / "evidence" / evidence.manifest["evidence_hash"]
@@ -1330,7 +1514,7 @@ class LabService:
         return versions
 
     def job_statuses(self) -> list[dict[str, Any]]:
-        from .job_corrections import corrected_status
+        from .job_corrections import corrected_status, observed_job_status
         from .research_progress import summarize_job
         stored = {}
         jobs_root = self.paths.research_root / "jobs"
@@ -1350,7 +1534,7 @@ class LabService:
         with self.jobs_lock:
             stored.update({key: dict(value) for key, value in self.jobs.items()})
         for job_id, row in stored.items():
-            row = corrected_status(self.paths.research_root, row)
+            row = observed_job_status(self.paths.research_root, corrected_status(self.paths.research_root, row))
             stored[job_id] = row
             row["research_progress"] = ResearchProgressLog(
                 self.paths.research_root / "jobs" / f"{job_id}-research.jsonl"

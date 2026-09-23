@@ -295,7 +295,7 @@ def _plain_chinese(
             support = f"最近两个期限隐含的双向波动约为{moves[0][0]}%和{moves[0][1]}%；但缺少可靠方向语义，所以保持中性。"
     elif domain == "price_volume":
         parts = [f"相对{metrics['sector_benchmark']}盘前多涨/少跌{_pct(metrics.get('residual'))}"]
-        if metrics.get("volume_status") == "provider_reported_zero":
+        if metrics.get("volume_status") in {"provider_reported_zero", "volume_unavailable"}:
             parts.append("数据源的成交量字段全部返回0，不能据此确认没有成交")
         elif metrics.get("volume_status") in {"missing", "partially_missing", "no_price_bars"}:
             parts.append("盘前成交参与数据不完整，不能据此判断活跃程度")

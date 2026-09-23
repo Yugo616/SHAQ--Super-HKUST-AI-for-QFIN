@@ -134,6 +134,84 @@ class HistoricalFallbackTests(unittest.TestCase):
         self.assertEqual(provider.option_surface('AAA'), {'status': 'no_data'})
         backup.history.assert_not_called()
 
+    def test_fresh_history_uses_backup_and_retains_actual_row_source(self):
+        class Primary:
+            provider_id = 'yfinance'
+            def history(self, *args, **kwargs):
+                raise AssertionError('stale history path used')
+            def fresh_history(self, *args, **kwargs):
+                raise DataProviderError('limited', diagnostic={'kind': 'rate_limited'})
+
+        class Backup:
+            provider_id = 'alpaca-sip'
+            def history(self, symbols, **kwargs):
+                return {symbol: [{'timestamp': '2026-09-21T00:00:00',
+                                  'open': 10, 'high': 11, 'low': 9, 'close': 10,
+                                  'volume': 100, 'source_feed': 'sip',
+                                  'price_adjustment': 'unadjusted'}] for symbol in symbols}
+
+        provider = self.wrapper(Primary(), Backup())
+        rows = provider.fresh_history(['AAA'], start=date(2026, 9, 21),
+                                      end=date(2026, 9, 22))
+        self.assertEqual(rows['AAA'][0]['source_provider'], 'alpaca-sip')
+        self.assertEqual(rows['AAA'][0]['source_feed'], 'sip')
+        self.assertTrue(provider.last_history_was_fresh)
+
+    def test_primary_fresh_rows_are_attributed_to_primary(self):
+        class Primary:
+            provider_id = 'yfinance'
+            def fresh_history(self, symbols, **kwargs):
+                return {symbol: [{'timestamp': '2026-09-21', 'open': 10, 'close': 11}]
+                        for symbol in symbols}
+
+        provider = self.wrapper(Primary(), Mock(provider_id='alpaca-sip'))
+        rows = provider.fresh_history(['AAA'], start=date(2026, 9, 21),
+                                      end=date(2026, 9, 22))
+        self.assertEqual(rows['AAA'][0]['source_provider'], 'yfinance')
+
+    def test_required_minutes_backfill_only_exact_missing_targets(self):
+        entry = '2026-09-21T09:31:00-04:00'
+        exit_stamp = '2026-09-21T15:55:00-04:00'
+        class Primary:
+            provider_id = 'yfinance'
+            def fresh_history(self, symbols, **kwargs):
+                return {'AAA': [{'timestamp': entry, 'open': 10, 'volume': 100}]}
+
+        class Backup:
+            provider_id = 'alpaca-sip'
+            def history(self, symbols, **kwargs):
+                return {'AAA': [
+                    {'timestamp': '2026-09-21T13:31:00Z', 'open': 999, 'volume': 100,
+                     'source_feed': 'sip'},
+                    {'timestamp': '2026-09-21T19:55:00Z', 'open': 11, 'volume': 100,
+                     'source_feed': 'sip'},
+                    {'timestamp': '2026-09-21T19:56:00Z', 'open': 12, 'volume': 100,
+                     'source_feed': 'sip'},
+                ]}
+
+        provider = self.wrapper(Primary(), Backup())
+        result = provider.fresh_history(['AAA'], start=date(2026, 9, 21),
+                                        end=date(2026, 9, 22), interval='1m',
+                                        required_timestamps={'AAA': [datetime.fromisoformat(entry),
+                                                                     datetime.fromisoformat(exit_stamp)]})
+        self.assertEqual(len(result['AAA']), 2)
+        self.assertEqual([row['open'] for row in result['AAA']], [10, 11])
+        self.assertEqual([row['source_provider'] for row in result['AAA']],
+                         ['yfinance', 'alpaca-sip'])
+
+    def test_required_targets_reject_non_minute_or_premarket_scope(self):
+        primary, backup = Mock(), Mock(provider_id='alpaca-sip')
+        provider = self.wrapper(primary, backup)
+        required = {'AAA': [datetime.fromisoformat('2026-09-21T09:31:00-04:00')]}
+        for interval, prepost in [('1d', False), ('1m', True)]:
+            with self.subTest(interval=interval, prepost=prepost):
+                with self.assertRaises(DataProviderError):
+                    provider.fresh_history(['AAA'], start=date(2026, 9, 21),
+                        end=date(2026, 9, 22), interval=interval, prepost=prepost,
+                        required_timestamps=required)
+        primary.fresh_history.assert_not_called()
+        backup.history.assert_not_called()
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -11,6 +11,28 @@ from filelock import FileLock, Timeout
 from .hashing import sha256_file, sha256_payload
 
 
+def observed_job_status(root, row):
+    """Read-only liveness overlay; an abandoned owned lock is not active work."""
+    if row.get('status') not in {'queued', 'running'}:
+        return row
+    job_id = str(row.get('job_id', ''))
+    if not re.fullmatch(r'(?:job-|resume-LAB-)[A-Za-z0-9_-]+', job_id):
+        return row
+    path = root / 'jobs' / (job_id + '.lock')
+    # Legacy snapshots without an execution lock have no liveness proof.
+    # Do not infer an exit from a missing older protocol artifact.
+    if not path.is_file():
+        return row
+    try:
+        with FileLock(str(path), timeout=0):
+            return {**row, 'status': 'incomplete', 'live_state': 'interrupted',
+                    'message': '后台任务已中断；已保存部分保留，可继续未完成分析。',
+                    'variant_progress': {key: 'incomplete' if value in {'queued', 'running'} else value
+                                         for key, value in row.get('variant_progress', {}).items()}}
+    except (Timeout, OSError):
+        return row
+
+
 @contextmanager
 def _inactive_job(root, job_id, *, require_idle_scheduler=True):
     if not re.fullmatch(r'job-[A-Za-z0-9_-]+', job_id):

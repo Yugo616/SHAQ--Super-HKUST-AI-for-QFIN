@@ -21,7 +21,7 @@ await startDesktop();console.log(JSON.stringify({failed,success:calls}));})();
         self.assertEqual(result.returncode,0,result.stderr)
         value=json.loads(result.stdout)
         self.assertEqual(value['failed'],['get_lab_state'])
-        self.assertEqual(value['success'],['get_lab_state','confirm_desktop_ready'])
+        self.assertEqual(value['success'],['get_lab_state','confirm_desktop_ready','check_result_refresh_due'])
 
     def test_manual_handler_renders_exact_busy_queue_message(self):
         source=(Path(__file__).parents[1]/'src/shaq_daily_oracle/desktop/software_updates.js').read_text()

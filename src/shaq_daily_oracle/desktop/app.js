@@ -11,7 +11,8 @@ function refreshStatusText(value={}){const status=value.status||'idle',retry=val
     /target minutes unavailable|missing.*minute|minute.*missing/i.test(raw)?'缺少目标分钟行情，已保存结果不受影响':
     /offline|connect|network|timeout|timed out/i.test(raw)&&!/[\u3400-\u9fff]/.test(raw)?'行情网络连接暂未完成':
     /[\u3400-\u9fff]/.test(raw)?raw.replace(/\s+/g,' ').slice(0,120):'暂未完成，请重试；详细原因可在技术详情查看';
-  if(status==='running'||status==='already_running')return '正在更新价格与成绩…';
+  if(status==='running'||status==='already_running')return ({setup:'正在准备价格更新',daily_labels:'正在核验开收盘价格',minute_settlement:'正在获取成交分钟并核对余额'}[value.stage]||'正在更新价格与成绩…');
+  if(status==='interrupted')return '上次价格更新已中断；已有成绩保留，可重新更新。';
   if(status==='complete')return '价格与成绩更新完成';
   if(status==='partial_failure')return `价格与成绩：${Number(value.failure_count||0)} 项暂未更新 · ${reason}${retry}`;
   if(status==='failed')return `价格与成绩：${reason}${retry}`;return ''}
@@ -37,13 +38,13 @@ async function checkUpdates(){const box=q('#update-list');box.innerHTML='<div cl
 const money=v=>v===null||v===undefined?'—':`${Number(v)>=0?'+':''}$${Number(v).toFixed(2)}`;
 const replayStatus=s=>({provisional:'初步',final:'已复核',pending:'等待结果',empty:'空榜',engineering_failure:'工程失败'}[s]||s);
 function renderHistory(){const d=state.data.dashboard,rows=d.daily_results||[],finalRows=rows.filter(r=>r.status==='final'),correct=finalRows.reduce((n,r)=>n+Number(r.correct||0),0),incorrect=finalRows.reduce((n,r)=>n+Number(r.incorrect||0),0);const table=rows.map(r=>`<tr class="clickable" data-batch="${esc(r.batch_id)}" data-variant-key="${esc(r.variant_key)}"><td>${esc(r.trade_date)}</td><td>${esc(r.label)}</td><td>${(r.predictions||[]).map(p=>`${esc(p.symbol)} ${dir(p.direction)}`).join('、')||'空榜'}</td><td>${r.status==='final'?`${r.correct} / ${r.incorrect}`:'—'}</td><td>${money(r.daily_pnl)}</td><td>${money(r.cumulative_pnl)}</td><td><span class="status ${r.status==='final'||r.status==='empty'?'ok':r.status==='engineering_failure'?'bad':''}">${replayStatus(r.status)}</span></td></tr>`).join('')||'<tr><td colspan="7">尚无本地研究记录</td></tr>';q('#history').innerHTML=`<div class="metrics">${metric('已核验方向',correct+incorrect,correct+incorrect?`${correct} 正确 · ${incorrect} 错误`:'尚无结果')}${metric('研究回放','每只固定 1 股','官方未复权开盘→收盘')}${metric('交易成本','$0.00','研究回放，不是富途成交')}</div><div class="card"><div class="section-head"><div><h2>每日版本结果</h2><p>一行就是“一个交易日 × 一个 Skill 版本”。点击任意一行，查看当天从筛选到六域判断的完整过程。</p></div></div><table class="table result-table"><thead><tr><th>日期</th><th>版本</th><th>最终结果</th><th>正确 / 错误</th><th>当日回放</th><th>累计回放</th><th>状态</th></tr></thead><tbody>${table}</tbody></table></div>`;qa('[data-batch]').forEach(row=>row.onclick=()=>loadBatch(row.dataset.batch,row.dataset.variantKey))}
-function renderData(){const d=state.data.data_status||{},labels={fresh:'本次已采集',not_run:'运行时采集',limited:'部分可用',versioned:'版本化快照',unavailable:'免费源不提供',provider_error:'接口故障'},rows=(d.items||[]).map(item=>`<tr><td><b>${esc(item.name)}</b><br><small>${esc(item.note)}</small></td><td>${esc(item.source)}</td><td>${esc(item.updated_at||'—')}</td><td>${esc(item.coverage)}</td><td><span class="status ${['fresh','versioned'].includes(item.status)?'ok':item.status==='provider_error'?'bad':''}">${esc(labels[item.status]||item.status)}</span></td></tr>`).join('');q('#data').innerHTML=`<div class="hero"><div><p class="eyebrow">真实来源与更新时间</p><h2>系统今天实际拿到了什么？</h2><p>每次批跑重新联网采集；同一次运行的 main 和所有 Shadow 共用同一份冻结资料。</p></div></div><div class="card"><table class="table"><thead><tr><th>数据</th><th>来源</th><th>最近更新时间</th><th>覆盖</th><th>状态</th></tr></thead><tbody>${rows}</tbody></table></div>`}
+function renderData(){const d=state.data.data_status||{},labels={fresh:'本次已采集',historical:'历史证据',not_applicable:'今日无事件',partial_failure:'部分失败',not_run:'运行时采集',limited:'部分可用',versioned:'版本化快照',unavailable:'免费源不提供',provider_error:'接口故障'},rows=(d.items||[]).map(item=>`<tr><td><b>${esc(item.name)}</b><br><small>${esc(item.note)}</small></td><td>${esc(item.source)}</td><td>${esc(item.updated_at||'—')}</td><td>${esc(item.coverage)}</td><td><span class="status ${['fresh','versioned'].includes(item.status)?'ok':item.status==='provider_error'?'bad':''}">${esc(labels[item.status]||item.status)}</span></td></tr>`).join('');q('#data').innerHTML=`<div class="hero"><div><p class="eyebrow">真实来源与更新时间</p><h2>系统今天实际拿到了什么？</h2><p>每次批跑重新联网采集；同一次运行的 main 和所有 Shadow 共用同一份冻结资料。</p></div></div><div class="card"><table class="table"><thead><tr><th>数据</th><th>来源</th><th>最近更新时间</th><th>覆盖</th><th>状态</th></tr></thead><tbody>${rows}</tbody></table></div>`}
 async function loadBatch(id,key,symbol,quiet=false){
   const modal=q('#replay-modal'),target=q('#batch-detail');
   const request=(loadBatch.request||0)+1;loadBatch.request=request;
   const previousReplay=state.replay,previousGeneration=state.replayGeneration||0;
   if(!quiet){state.replay=null;state.replayGeneration=(state.replayGeneration||0)+1;}
-  if(!quiet){target.innerHTML='<p class="card">正在加载分析详情…</p>';target.scrollTop=0;}
+  if(!quiet){target.innerHTML='<section class="card operation-loading" role="status"><b>正在加载分析详情…</b><progress aria-label="正在读取已保存的分析"></progress><p>读取已保存的报告与价格，不会重新调用模型。关闭即可返回。</p></section>';target.scrollTop=0;}
   const invalidateReplay=()=>{loadBatch.request=(loadBatch.request||0)+1;state.replay=null;state.replayGeneration=(state.replayGeneration||0)+1};
   modal.oncancel=invalidateReplay;modal.onclose=invalidateReplay;
   q('#replay-close').onclick=()=>{invalidateReplay();modal.close()};
@@ -59,7 +60,10 @@ async function loadBatch(id,key,symbol,quiet=false){
     if(!quiet)target.scrollTop=0;
   }catch(e){
     if(loadBatch.request!==request||!modal.open)return;
-    if(!quiet)target.innerHTML='<p class="card">无法加载详情：'+esc(e.message)+'</p>';
+    if(!quiet){
+      target.innerHTML='<section class="card"><p>无法加载详情：'+esc(e.message)+'</p><button class="secondary" id="retry-replay">重新加载</button></section>';
+      q('#retry-replay').onclick=()=>loadBatch(id,key,symbol);
+    }
     else notice('详情更新失败，保留已显示报告：'+e.message,true);
   }
 }
@@ -109,6 +113,7 @@ async function load(showError=true){
     const pageChanged=pageSnapshot(state.data,state.page)!==pageSnapshot(value,state.page);
     const settingsChanged=JSON.stringify(state.data?.settings)!==JSON.stringify(value.settings);
     state.data=value;render(pageChanged,settingsChanged);restore();restoreSetup();
+    if(typeof refreshRunProgress==='function')refreshRunProgress();
     window.scrollTo?.(0,pageScroll);
     if(replay&&state.replay===replay&&state.replayGeneration===replayGeneration&&q('#replay-modal')?.open){
       await loadBatch(replay.batchId,replay.key,replay.symbol,true);
@@ -121,14 +126,16 @@ function pageSnapshot(data,page){
   if(page==='history')return JSON.stringify([data.dashboard,data.versions]);
   if(page==='run'){
     const {et,local,...clock}=data.clock||{};
-    return JSON.stringify([data.settings,data.versions,data.jobs,data.data_status,data.formal_operator,clock]);
+    return JSON.stringify([data.settings,data.versions,data.formal_operator,clock]);
   }
   return JSON.stringify([data.settings,data.versions,data.drafts,data.data_status]);
 }
 function renderRefreshControls(status){
+  const bar=q('#refresh-progress');
+  if(bar){bar.hidden=!['running','already_running'].includes(status.status);bar.max=status.total_stages||3;bar.value=(status.completed_stages||[]).length;}
   const detail=q('#refresh-diagnostic');
   if(detail?.classList){
-    const failed=Number(status.failure_count)>0||['failed','partial_failure'].includes(status.status);
+    const failed=Number(status.failure_count)>0||['failed','partial_failure','interrupted'].includes(status.status);
     detail.classList.toggle('hidden',!failed);
     const diagnostic={scope:'result_refresh',status:status.status,operation_id:status.operation_id,
       occurred_at:status.completed_at||status.attempted_at,next_retry_at:status.next_retry_at,
@@ -208,8 +215,11 @@ async function pollDesktopActivity(){
     state.activityRevision=value.revision;
     load.request=(load.request||0)+1;
     state.data.jobs=value.jobs;state.data.result_refresh=value.result_refresh;
-    state.data.clock={...state.data.clock,et:value.observed_at};
-    render(state.page==='run',false);restore();window.scrollTo?.(0,pageScroll);
+    state.data.clock={...state.data.clock,...value.clock,et:value.observed_at};
+    if(typeof updateRunClockStatus==='function')updateRunClockStatus();
+    render(false,false);
+    if(typeof refreshRunProgress==='function')refreshRunProgress();
+    restore();window.scrollTo?.(0,pageScroll);
     // Show live work before the slower immutable-history verification.
     const terminal=job=>!['queued','running'].includes(job.status);
     const finished=value.jobs.some(job=>terminal(job)&&!previous.some(old=>old.job_id===job.job_id&&old.status===job.status));
@@ -220,5 +230,11 @@ async function pollDesktopActivity(){
     const target=q('#activity-status');if(target)target.textContent='进度同步暂未完成，稍后自动重试。';
   }finally{pollDesktopActivity.busy=false}
 }
-async function startDesktop(){if(await load())await api('confirm_desktop_ready')}
-qa('.nav').forEach(b=>b.onclick=()=>showPage(b.dataset.page));q('#refresh-button').onclick=async()=>{try{const value=await api('refresh_prices_and_results');state.data.result_refresh=value;render();await load(false)}catch(e){notice(e.message,true)}};window.addEventListener('pywebviewready',()=>startDesktop().catch(e=>notice(e.message,true)));setInterval(()=>{void pollDesktopActivity()},10000);setInterval(async()=>{try{const r=await api("check_result_refresh_due");if(["running","already_running"].includes(r.status))await load(false)}catch(e){}},60*1000);
+function tickLocalClock(now=new Date()){
+  const element=q('#local-clock');
+  if(element)element.textContent='本地 '+now.toLocaleTimeString('zh-CN',{hour12:false});
+}
+async function startDesktop(){if(await load()){await api('confirm_desktop_ready');void api('check_result_refresh_due').catch(()=>{});}}
+qa('.nav').forEach(b=>b.onclick=()=>showPage(b.dataset.page));q('#refresh-button').onclick=async()=>{try{const value=await api('refresh_prices_and_results');state.data.result_refresh=value;render(false,false);await load(false)}catch(e){notice(e.message,true)}};window.addEventListener('pywebviewready',()=>startDesktop().catch(e=>notice(e.message,true)));setInterval(()=>{void pollDesktopActivity()},10000);setInterval(async()=>{try{const r=await api("check_result_refresh_due");if(["running","already_running"].includes(r.status))await load(false)}catch(e){}},60*1000);
+setInterval(()=>tickLocalClock(),1000);
+document.addEventListener('visibilitychange',()=>{if(!document.hidden){tickLocalClock();void pollDesktopActivity();}});

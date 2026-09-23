@@ -64,12 +64,12 @@ class MinuteAccountIntegrationTests(unittest.TestCase):
             self.assertIn(expected, updated['2026-09-09']['scheduled_offsets'])
         self.assertEqual(settlement_due_dates([row], now, load_settlement_attempts(self.root)), [])
 
-    def test_complete_provisional_waits_until_next_session_confirmation(self):
+    def test_complete_provisional_can_confirm_same_evening(self):
         row = self.fixture.row()
         row['minute']['status'] = 'provisional'
         attempts = {'2026-09-09': {'scheduled_offsets':[5]}}
-        self.assertEqual(settlement_due_dates([row], datetime.fromisoformat('2026-09-09T16:30:00-04:00'), attempts), [])
-        self.assertEqual(settlement_due_dates([row], datetime.fromisoformat('2026-09-10T16:05:00-04:00'), attempts), ['2026-09-09'])
+        self.assertEqual(settlement_due_dates([row], datetime.fromisoformat('2026-09-09T16:30:00-04:00'), attempts), ['2026-09-09'])
+        self.assertEqual(settlement_due_dates([row], datetime.fromisoformat('2026-09-10T07:30:00-04:00'), attempts, app_open=True), ['2026-09-09'])
 
     def test_missing_entry_zero_is_not_frozen_when_later_observation_arrives(self):
         row = self.fixture.row(); row['minute']['records']['AAA'] = row['minute']['records']['AAA'][1:]

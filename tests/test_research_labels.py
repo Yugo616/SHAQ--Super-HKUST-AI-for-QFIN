@@ -9,6 +9,8 @@ from zoneinfo import ZoneInfo
 from unittest import mock
 
 from shaq_daily_oracle.data_providers import DataProfile
+from shaq_daily_oracle.data_providers import DataProviderError
+from shaq_daily_oracle.history_fallback import HistoricalFallbackProvider
 from shaq_daily_oracle.model_backends import ModelProfile
 from shaq_daily_oracle.research_batch import (
     ResearchBatchRunner,
@@ -162,6 +164,36 @@ class ResearchLabelTests(unittest.TestCase):
         self.assertEqual(result["refreshed_batches"], [])
         self.assertEqual(result["failures"][0]["batch_id"], batch_id)
         self.assertEqual(result["failures"][0]["missing_symbols"], ["AAPL"])
+
+    def test_label_observation_uses_actual_fallback_source(self):
+        class LimitedPrimary:
+            provider_id = 'yfinance'
+            def fresh_history(self, *args, **kwargs):
+                raise DataProviderError('limited', diagnostic={'kind': 'rate_limited'})
+
+        class HistoricalBackup:
+            provider_id = 'alpaca-sip'
+            def history(self, symbols, **kwargs):
+                return {symbol: [{'timestamp': '2026-09-04T00:00:00',
+                                  'open': 100.0, 'high': 103.0, 'low': 99.0,
+                                  'close': 102.0, 'volume': 100,
+                                  'source_feed': 'sip',
+                                  'price_adjustment': 'unadjusted'}] for symbol in symbols}
+
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name) / 'research'
+            batch_id = self.setup_batch(root)
+            result = refresh_research_labels(
+                research_root=root, batches_root=root / 'batches',
+                profile=DataProfile(profile_id='test', universe_file='unused.csv'),
+                observed_at=datetime(2026, 9, 5, 9, tzinfo=ZoneInfo('America/New_York')),
+                market_provider=HistoricalFallbackProvider(LimitedPrimary(), HistoricalBackup()),
+            )
+            observed = json.loads((root / 'batches' / batch_id / 'labels.json').read_text())[
+                'labels']['AAPL']['observations'][0]
+        self.assertEqual(result['refreshed_batches'], [batch_id])
+        self.assertEqual(observed['provider'], 'alpaca-sip')
+        self.assertEqual(observed['source_feed'], 'sip')
     def test_openbb_label_refresh_receives_explicit_credential(self):
         profile = DataProfile(
             profile_id="openbb-test",

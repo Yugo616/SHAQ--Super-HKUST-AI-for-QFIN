@@ -181,6 +181,13 @@ class BatchRecoveryTests(unittest.TestCase):
                 cache_root=service.paths.research_root/'cache/model_calls',registry=service.registry,integration_policy=helper.policy())
             first=runner.run(evidence=evidence,variants=[helper.main_variant(service.registry)],profile=profile,secret='',
                 caller=lambda **kw: (_ for _ in ()).throw(ValueError('stop fixture')))
+            with patch('shaq_daily_oracle.lab_service.start_guarded_thread', side_effect=RuntimeError('cannot start')):
+                with self.assertRaises(RuntimeError):
+                    service.resume_batch(first['status']['batch_id'])
+            self.assertEqual(service.jobs['resume-'+first['status']['batch_id']]['status'], 'failed')
+            from filelock import FileLock
+            with FileLock(str(service.paths.research_root/'jobs'/('resume-'+first['status']['batch_id']+'.lock')), timeout=0):
+                pass
             def visible_before_thread(paths,thread):
                 saved=json.loads((paths.research_root/'jobs'/('resume-'+first['status']['batch_id']+'.json')).read_text())
                 self.assertEqual(saved['status'],'queued')

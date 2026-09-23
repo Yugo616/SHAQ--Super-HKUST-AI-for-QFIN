@@ -6,7 +6,7 @@ import math
 from datetime import date, datetime, time, timedelta
 from html.parser import HTMLParser
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from zoneinfo import ZoneInfo
 
 from .data_providers import (
@@ -22,6 +22,7 @@ from .data_providers import (
 from .hashing import sha256_payload
 from .market_calendar import market_session, previous_market_session, next_market_session
 from .research_batch import FrozenEvidence, freeze_evidence_bundle
+from .research_progress import safe_observe
 
 
 class ResearchCollectionError(ValueError):
@@ -33,6 +34,14 @@ class ResearchCollectionError(ValueError):
 
 
 ET = ZoneInfo("America/New_York")
+
+
+def history_lookback_days(package_root: Path) -> int:
+    """Share the governed history window between warmup and evidence collection."""
+    value = json.loads((package_root / 'config/price-history.json').read_text(encoding='utf-8'))['lookback_calendar_days']
+    if type(value) is not int or value <= 0:
+        raise ValueError('invalid history lookback window')
+    return value
 
 
 def today_collection_status(now: datetime) -> dict[str, Any]:
@@ -177,7 +186,7 @@ def _premarket_state(
         volume_status = "observed_positive"
         volume_note = "provider reported positive volume in at least one eligible price bar"
     else:
-        volume_status = "provider_reported_zero"
+        volume_status = "volume_unavailable"
         volume_note = "all provider volume fields were zero; this does not prove no trading occurred"
     return {
         "status": "collected" if eligible else "no_data",
@@ -190,7 +199,7 @@ def _premarket_state(
             if last_price is not None and previous_close not in {None, 0}
             else None
         ),
-        "observed_volume": sum(present_volumes) if present_volumes else None,
+        "observed_volume": sum(present_volumes) if positive_volume_count else None,
         "volume_status": volume_status,
         "volume_note": volume_note,
         "eligible_price_bar_count": len(eligible),
@@ -303,7 +312,16 @@ def collect_research_evidence(
     screening_rules: dict[str, str] | None = None,
     history_cache_root: Path | None = None,
     allow_replay: bool = False,
+    observer: Callable[..., None] | None = None,
 ) -> FrozenEvidence:
+    def observe(component: str, status: str, *, source: str, completed: int,
+                total: int, message: str, **details: Any) -> None:
+        safe_observe(
+            observer, stage="data_preparation", component=component,
+            status=status, source=source, completed=completed, total=total,
+            message=message, **details,
+        )
+
     now = (observed_at or datetime.now(ET)).astimezone(ET)
     session = market_session(now.date())
     if session is None:
@@ -317,9 +335,18 @@ def collect_research_evidence(
     universe_path = Path(profile.universe_file)
     if not universe_path.is_absolute():
         universe_path = package_root / universe_path
-    members = load_versioned_universe(universe_path, cutoff=data_cutoff)
-    benchmark_path = package_root / "config/market-benchmarks.csv"
-    benchmark_symbols, sector_etf = _benchmark_rows(benchmark_path)
+    observe("universe", "running", source=str(universe_path), completed=0, total=1,
+            message="读取候选池与市场基准")
+    try:
+        members = load_versioned_universe(universe_path, cutoff=data_cutoff)
+        benchmark_path = package_root / "config/market-benchmarks.csv"
+        benchmark_symbols, sector_etf = _benchmark_rows(benchmark_path)
+    except Exception:
+        observe("universe", "failed", source=str(universe_path), completed=0, total=1,
+                message="候选池或市场基准读取失败")
+        raise
+    observe("universe", "complete", source=str(universe_path), completed=1, total=1,
+            message="候选池与市场基准读取完成", symbol_count=len(members))
     openbb = OpenBBProviderAdapter(
         profile=profile, api_key=openbb_api_key,
         sec_user_agent=sec_identity,
@@ -329,6 +356,9 @@ def collect_research_evidence(
     market = market_provider or (
         openbb if profile.market_provider == "openbb-rest" else YFinanceProvider(profile)
     )
+    if isinstance(market, YFinanceProvider) and observer is not None:
+        # Retry telemetry is display-only and never enters frozen evidence.
+        market.progress_observer = lambda **event: safe_observe(observer, **event)
     if isinstance(market, YFinanceProvider) and history_cache_root is not None:
         # One session only: a new trading day independently re-observes historical prices.
         market.history_checkpoint_root = (history_cache_root.parent / 'collection_requests'
@@ -338,17 +368,58 @@ def collect_research_evidence(
     if history_cache_root is not None and public_config:
         from .public_data import DailyBarCache
         market = DailyBarCache(market, history_cache_root / profile.history_identity(), overlap_days=public_config["history_overlap_days"])
-    lookback_start = session.session_date - timedelta(days=400)
+    lookback_start = session.session_date - timedelta(days=history_lookback_days(package_root))
     stock_symbols = [member.symbol for member in members]
+
+    def grouped_market_requests(component: str) -> tuple[
+        dict[str, list[dict[str, Any]]], dict[str, list[dict[str, Any]]]
+    ]:
+        requests = [
+            (scope, symbols[start:start + profile.batch_size])
+            for scope, symbols in (("stocks", stock_symbols), ("benchmarks", benchmark_symbols))
+            for start in range(0, len(symbols), profile.batch_size)
+        ]
+        total = len(requests)
+        completed = 0
+        returned_symbol_count = 0
+        outputs: dict[str, dict[str, list[dict[str, Any]]]] = {
+            "stocks": {}, "benchmarks": {},
+        }
+        observe(component, "running", source=profile.market_provider,
+                completed=0, total=total, message="开始分组获取市场数据",
+                returned_symbol_count=0)
+        for scope, group in requests:
+            try:
+                if component == "history":
+                    rows = market.history(
+                        group, start=lookback_start, end=session.session_date,
+                        interval="1d",
+                    )
+                else:
+                    rows = market.recent_intraday(group, cutoff=data_cutoff)
+            except Exception:
+                observe(component, "failed", source=profile.market_provider,
+                        completed=completed, total=total,
+                        message="市场数据分组请求失败",
+                        returned_symbol_count=returned_symbol_count)
+                raise
+            outputs[scope].update(rows)
+            completed += 1
+            returned_symbol_count += sum(bool(rows.get(symbol)) for symbol in group)
+            observe(component, "running", source=profile.market_provider,
+                    completed=completed, total=total,
+                    message="市场数据分组请求已完成",
+                    returned_symbol_count=returned_symbol_count)
+        if component == "history":
+            observe(component, "complete", source=profile.market_provider,
+                    completed=completed, total=total,
+                    message="历史行情请求已检查；返回数据与请求完成分开计数",
+                    returned_symbol_count=returned_symbol_count)
+        return outputs["stocks"], outputs["benchmarks"]
+
     try:
-        stock_daily = market.history(
-            stock_symbols, start=lookback_start, end=session.session_date, interval="1d"
-        )
-        benchmark_daily = market.history(
-            benchmark_symbols, start=lookback_start, end=session.session_date, interval="1d"
-        )
-        stock_intraday = market.recent_intraday(stock_symbols, cutoff=data_cutoff)
-        benchmark_intraday = market.recent_intraday(benchmark_symbols, cutoff=data_cutoff)
+        stock_daily, benchmark_daily = grouped_market_requests("history")
+        stock_intraday, benchmark_intraday = grouped_market_requests("premarket")
     except DataProviderError as exc:
         from .data_retry import failure_message
         reason = failure_message(exc.diagnostic)
@@ -364,6 +435,20 @@ def collect_research_evidence(
     } for symbol in stock_symbols for state in [_premarket_state(
         stock_intraday.get(symbol, []), session_date=session.session_date,
         cutoff=data_cutoff, previous_close=None)]}
+    eligible_symbol_count = sum(
+        row["status"] == "collected" for row in premarket_observations.values()
+    )
+    premarket_total = sum(
+        (len(symbols) + profile.batch_size - 1) // profile.batch_size
+        for symbols in (stock_symbols, benchmark_symbols)
+    )
+    observe("premarket", "complete" if eligible_symbol_count else "unavailable",
+            source=profile.market_provider, completed=premarket_total,
+            total=premarket_total,
+            message="盘前请求已检查；有效价格资料单独计数",
+            returned_symbol_count=sum(bool(rows) for rows in stock_intraday.values())
+            + sum(bool(rows) for rows in benchmark_intraday.values()),
+            eligible_symbol_count=eligible_symbol_count)
     if not allow_replay and not any(row['status'] == 'collected' for row in premarket_observations.values()):
         raise ResearchCollectionError('no_data：未取得当天盘前数据；不使用上一交易日分钟数据启动今日研究。')
     candidates, stock_states, benchmark_states = _candidate_rows(
@@ -384,6 +469,9 @@ def collect_research_evidence(
     member_by_symbol = {member.symbol: member for member in members}
     metadata: dict[str, Any] = {}
     metadata_status = "not_configured"
+    if profile.metadata_provider != "none":
+        observe("metadata", "running", source=profile.metadata_provider,
+                completed=0, total=1, message="开始获取候选标的资料")
     if profile.metadata_provider == "financedatabase":
         try:
             metadata = (metadata_provider or FinanceDatabaseProvider(
@@ -398,6 +486,16 @@ def collect_research_evidence(
             metadata_status = "collected"
         except Exception as exc:
             metadata_status = f"provider_error:{type(exc).__name__}"
+    observe(
+        "metadata",
+        "failed" if metadata_status.startswith("provider_error") else
+        ("unavailable" if metadata_status == "not_configured" else "complete"),
+        source=profile.metadata_provider,
+        completed=1 if metadata_status == "collected" else 0,
+        total=0 if metadata_status == "not_configured" else 1,
+        message="候选标的资料获取结果已记录",
+        returned_symbol_count=len(metadata),
+    )
     previous = previous_market_session(session.session_date)
     events: dict[str, list[dict[str, Any]]] = {symbol: [] for symbol in candidate_symbols}
     sec = event_provider or (
@@ -405,6 +503,8 @@ def collect_research_evidence(
             user_agent=sec_identity, timeout_seconds=profile.request_timeout_seconds
         )
     )
+    observe("events", "running", source=profile.event_provider,
+            completed=0, total=len(candidate_symbols), message="开始核对候选公司事件")
     try:
         events = sec.recent_events(
             [member_by_symbol[symbol] for symbol in candidate_symbols],
@@ -422,8 +522,24 @@ def collect_research_evidence(
     public_statuses = []
     if public_config and market_provider is None:
         from .public_data import collect_public_context
-        for packet in collect_public_context(public_config, cutoff=scheduled_cutoff):
+        public_total = len(public_config["sources"])
+        observe("public_context", "running", source="configured_public_sources",
+                completed=0, total=public_total, message="开始获取公开市场背景")
+        try:
+            public_packets = collect_public_context(public_config, cutoff=scheduled_cutoff)
+        except Exception:
+            observe("public_context", "failed", source="configured_public_sources",
+                    completed=0, total=public_total, message="公开市场背景获取失败")
+            raise
+        public_completed = 0
+        public_with_data = 0
+        public_failed = False
+        for packet in public_packets:
             name = packet["provider"]
+            packet_status = packet["status"]
+            public_completed += packet_status == "collected"
+            public_with_data += packet_status == "collected" and bool(packet.get("data"))
+            public_failed |= packet_status == "provider_error"
             raw = packet.pop("raw", None)
             public_statuses.append({k: v for k, v in packet.items() if k != "data"})
             if raw is not None:
@@ -436,7 +552,19 @@ def collect_research_evidence(
                     "scope_symbols": [str(r['symbol']) for r in packet['data'] if r.get('symbol')] if name == 'nasdaq_earnings' else ["*"],
                     "consumer_domains": ["event", "relationships", "price_volume"] if name == 'nasdaq_earnings' else ["market", "price_volume", "derivatives"],
                     "root_component_type": "event_calendar" if name == 'nasdaq_earnings' else "market_context"})
-    collection_statuses: list[dict[str, str]] = [
+            observe("public_context", "running", source="configured_public_sources",
+                    completed=public_completed, total=public_total,
+                    message="公开市场背景来源已检查",
+                    checked=len(public_statuses), returned_source_count=public_with_data)
+        observe("public_context", "failed" if public_failed else
+                ("complete" if public_completed else "unavailable"),
+                source="configured_public_sources", completed=public_completed,
+                total=public_total, message="公开市场背景来源状态已记录",
+                checked=len(public_statuses), returned_source_count=public_with_data)
+    else:
+        observe("public_context", "unavailable", source="configured_public_sources",
+                completed=0, total=0, message="当前采集路径未启用公开市场背景")
+    collection_statuses: list[dict[str, Any]] = [
         {"symbol": "*", "domain": "market", "status": "collected"},
         {"symbol": "*", "domain": "capital", "status": "no_data"},
     ]
@@ -454,6 +582,16 @@ def collect_research_evidence(
         "consumer_domains": ["market", "relationships", "price_volume"],
         "root_component_type": "market_context",
     })
+    events_checked = 0
+    events_completed = 0
+    event_document_count = 0
+    option_checked = 0
+    option_completed = 0
+    option_chain_count = 0
+    option_failed = False
+    observe("options", "running", source=profile.market_provider,
+            completed=0, total=len(candidates), message="开始逐只核对期权链",
+            checked=0, chain_count=0)
     for candidate in candidates:
         symbol = candidate["symbol"]
         collection_statuses.extend([
@@ -534,6 +672,7 @@ def collect_research_evidence(
                     "root_component_type": "stock_event",
                 })
                 event_document_collected = True
+                event_document_count += 1
             except Exception:
                 candidate["captured_primary_event"] = False
                 event_failed = True
@@ -544,11 +683,25 @@ def collect_research_evidence(
                 else ("provider_error" if event_failed else "not_applicable")
             ),
         })
+        events_checked += 1
+        if not event_failed:
+            events_completed += 1
+        observe("events", "running", source=profile.event_provider,
+                completed=events_completed, total=len(candidates),
+                message="候选公司事件已核对", checked=events_checked,
+                document_count=event_document_count)
         try:
             option_surface = market.option_surface(symbol)
         except Exception as exc:
             option_surface = {"symbol": symbol, "status": "provider_error", "error_type": type(exc).__name__}
         option_surface = dict(option_surface)
+        quality = option_surface.get("quality") or {}
+        for target, source in (
+            ("source_contract_count", "source_contract_count"),
+            ("retained_contract_count", "retained_contract_count"),
+            ("valid_two_sided_price_count", "contracts_with_valid_two_sided_price"),
+        ):
+            option_surface.setdefault(target, quality.get(source))
         option_task_eligible = (
             option_surface.get("status") == "collected"
             and option_surface.get("quote_timestamp_status") == "available"
@@ -557,7 +710,8 @@ def collect_research_evidence(
         option_surface["derivatives_task_eligible"] = option_task_eligible
         if option_surface.get("status") == "collected" and not option_task_eligible:
             option_surface["derivatives_task_ineligibility_reason"] = (
-                "missing_exchange_quote_timestamp"
+                "quote_not_fresh" if option_surface.get("quote_timestamp_status") == "available"
+                else "missing_exchange_quote_timestamp"
             )
         option_path = f"raw/options/{symbol}.json"
         files[option_path] = _json_bytes(option_surface)
@@ -570,13 +724,47 @@ def collect_research_evidence(
                 "scope_symbols": [symbol], "consumer_domains": ["derivatives"],
                 "root_component_type": "stock_derivatives",
             })
+        option_status = (
+            "collected" if option_task_eligible
+            else ("provider_error" if option_surface.get("status") == "provider_error" else "no_data")
+        )
+        if option_status == "provider_error":
+            option_reason = "provider_error"
+        elif option_surface.get("status") == "no_data":
+            option_reason = "no_option_chain"
+        elif not option_task_eligible:
+            option_reason = option_surface.get("derivatives_task_ineligibility_reason")
+        else:
+            option_reason = None
         collection_statuses.append({
             "symbol": symbol, "domain": "derivatives",
-            "status": (
-                "collected" if option_task_eligible
-                else ("provider_error" if option_surface.get("status") == "provider_error" else "no_data")
-            ),
+            "status": option_status,
+            "reason": option_reason,
+            "error_type": option_surface.get("error_type"),
+            "source_contract_count": option_surface["source_contract_count"],
+            "retained_contract_count": option_surface["retained_contract_count"],
+            "valid_two_sided_price_count": option_surface["valid_two_sided_price_count"],
+            "quote_timestamp_status": option_surface.get("quote_timestamp_status"),
         })
+        option_checked += 1
+        if option_surface.get("status") == "provider_error":
+            option_failed = True
+        else:
+            option_completed += 1
+            option_chain_count += option_surface.get("status") == "collected"
+        observe("options", "running", source=profile.market_provider,
+                completed=option_completed, total=len(candidates),
+                message="候选期权链已核对", checked=option_checked,
+                chain_count=option_chain_count)
+    observe("events", "complete" if events_completed == len(candidates) else "failed",
+            source=profile.event_provider, completed=events_completed,
+            total=len(candidates), message="公司事件核对结果已记录",
+            checked=events_checked, document_count=event_document_count)
+    observe("options", "failed" if option_failed else
+            ("complete" if option_chain_count else "unavailable"),
+            source=profile.market_provider, completed=option_completed,
+            total=len(candidates), message="期权链核对结果已记录",
+            checked=option_checked, chain_count=option_chain_count)
     files["raw/provider-status.json"] = _json_bytes({
         "capital": {
             "status": "unavailable",

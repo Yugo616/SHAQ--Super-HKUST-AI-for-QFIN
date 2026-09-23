@@ -7,19 +7,42 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 from dataclasses import asdict
 from datetime import date
+from pathlib import Path
 
 from .model_execution import run_model_process
 from .model_http_worker import _worker_stream
 from .data_retry import failure_diagnostic, failure_message, sanitize_diagnostic
+from .research_progress import safe_observe
 
 
 def _failure_diagnostic(exc, stage):
     return failure_diagnostic(exc, stage)
 
 
-def call_in_worker(operation, profile, payload):
+def _forward_progress(path, observer, stop):
+    with path.open('r', encoding='utf-8') as stream:
+        while True:
+            position = stream.tell()
+            line = stream.readline()
+            if line and line.endswith('\n'):
+                try:
+                    event = json.loads(line)
+                except (TypeError, ValueError):
+                    continue
+                if isinstance(event, dict) and isinstance(event.get('stage'), str):
+                    safe_observe(observer, **event)
+                continue
+            if line:
+                stream.seek(position)  # Wait for the writer's complete JSONL record.
+            if stop.is_set():
+                return
+            stop.wait(0.02)
+
+
+def call_in_worker(operation, profile, payload, *, progress_observer=None):
     from .data_providers import DataProviderError
     from .model_backends import _local_cli_environment
     command = ([sys.executable, '--collection-worker'] if getattr(sys, 'frozen', False)
@@ -38,11 +61,35 @@ def call_in_worker(operation, profile, payload):
     try:
         # Parent owns scratch cleanup even after a forced owned-tree termination.
         with tempfile.TemporaryDirectory(prefix='shaq-collection-') as cache_parent:
-            completed = run_model_process(command, input=json.dumps({
-                'operation': operation, 'payload': {**payload, 'profile': source,
-                                                   'cache_parent': cache_parent}}),
-                text=True, encoding='utf-8', errors='replace', capture_output=True,
-                timeout=profile.yahoo_worker_timeout_seconds, env=environment, shell=False, check=False)
+            progress_path = Path(cache_parent) / 'progress.jsonl' if progress_observer is not None else None
+            stop = thread = None
+            if progress_path is not None:
+                try:
+                    progress_path.touch()
+                    stop = threading.Event()
+                    thread = threading.Thread(target=_forward_progress,
+                                              args=(progress_path, progress_observer, stop),
+                                              daemon=True, name='shaq-collection-progress')
+                    thread.start()
+                except (OSError, RuntimeError):
+                    # A display channel failure cannot cancel market data.
+                    if stop is not None:
+                        stop.set()
+                    if thread is not None and thread.is_alive():
+                        thread.join(timeout=1)
+                    progress_path = stop = thread = None
+            try:
+                child_payload = {**payload, 'profile': source, 'cache_parent': cache_parent}
+                if progress_path is not None:
+                    child_payload['progress_path'] = str(progress_path)
+                completed = run_model_process(command, input=json.dumps({
+                    'operation': operation, 'payload': child_payload}),
+                    text=True, encoding='utf-8', errors='replace', capture_output=True,
+                    timeout=profile.yahoo_worker_timeout_seconds, env=environment, shell=False, check=False)
+            finally:
+                if stop is not None:
+                    stop.set()
+                    thread.join(timeout=1)
     except subprocess.TimeoutExpired as exc:
         # A parent deadline identifies the requested group, not the ticker
         # active when the worker stopped; never invent a per-ticker cause.
@@ -81,7 +128,20 @@ def execute_operation(operation, payload):
     from .data_providers import DataProfile, YFinanceProvider
     from curl_cffi.requests import Session
     profile = DataProfile.from_dict(payload['profile'])
-    provider = YFinanceProvider(profile)
+    progress_path = payload.get('progress_path')
+    progress_observer = None
+    if progress_path is not None:
+        progress_file = Path(progress_path).resolve()
+        cache_parent = Path(payload['cache_parent']).resolve()
+        if not progress_file.is_relative_to(cache_parent):
+            raise ValueError('invalid collection progress path')
+
+        def progress_observer(**event):
+            with progress_file.open('a', encoding='utf-8') as stream:
+                stream.write(json.dumps(event, sort_keys=True, ensure_ascii=False) + '\n')
+                stream.flush()
+
+    provider = YFinanceProvider(profile, progress_observer=progress_observer)
     provider.history_checkpoint_root = payload.get('history_checkpoint_root')
     provider.history_source_identity = payload.get('history_source_identity', profile.history_identity())
     yf = provider._module()

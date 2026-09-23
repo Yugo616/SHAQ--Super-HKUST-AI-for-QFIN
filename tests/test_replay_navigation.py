@@ -22,11 +22,13 @@ vm.createContext(ctx);vm.runInContext(fn,ctx);
 (async()=>{
  const loading=ctx.loadBatch('batch','version','BBB');
  assert.ok(modal.open);assert.ok(target.innerHTML.includes('加载'));
+ assert.match(target.innerHTML,/<progress/,'real pending read has visible activity, not a blank panel');
  requests.shift().resolve({id:'batch'});await loading;
  assert.equal(target.innerHTML,'batch:version:BBB');
  assert.equal(typeof back.onclick,'function');back.onclick();assert.equal(modal.open,false);
  const failed=ctx.loadBatch('broken','version');requests.shift().reject(new Error('<missing>'));await failed;
  assert.ok(target.innerHTML.includes('&lt;missing>'));
+ assert.match(target.innerHTML,/重新加载/);assert.doesNotMatch(target.innerHTML,/<progress/);
  const stale=ctx.loadBatch('stale','v','AAA'), fresh=ctx.loadBatch('fresh','v','BBB');
  requests[1].resolve({id:'fresh'});await fresh;
  requests[0].resolve({id:'stale'});await stale;

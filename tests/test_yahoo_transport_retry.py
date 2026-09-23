@@ -195,6 +195,9 @@ class YahooTransportRetryTests(unittest.TestCase):
             'contracts_with_fresh_quote': None,
         })
         self.assertEqual(result['quality'], expiry['quality'])
+        self.assertEqual(result['source_contract_count'], 5)
+        self.assertEqual(result['retained_contract_count'], 4)
+        self.assertEqual(result['valid_two_sided_price_count'], 2)
         self.assertEqual(result['available_expiry_count'], 1)
         self.assertEqual(result['collected_expiry_count'], 1)
         self.assertEqual(result['maximum_option_expiries'], 3)
@@ -243,6 +246,9 @@ class YahooTransportRetryTests(unittest.TestCase):
             result = YFinanceProvider(DataProfile(
                 'test', 'unused',
             ))._option_surface_inline('AAA', session=None)
+        self.assertEqual(result['source_contract_count'], 0)
+        self.assertEqual(result['retained_contract_count'], 0)
+        self.assertEqual(result['valid_two_sided_price_count'], 0)
 
         self.assertEqual(result['status'], 'no_data')
         self.assertEqual(result['available_expiry_count'], 0)

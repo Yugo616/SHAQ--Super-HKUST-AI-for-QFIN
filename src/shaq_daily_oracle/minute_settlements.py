@@ -15,6 +15,11 @@ ET = ZoneInfo('America/New_York')
 MINUTE_NAMESPACE = 'minute_observations_v1'
 
 
+def _target_times(session):
+    return (session.market_open + timedelta(minutes=1),
+            session.market_close - timedelta(minutes=5))
+
+
 def _stamp(value):
     stamp = datetime.fromisoformat(str(value).replace('Z', '+00:00'))
     if stamp.tzinfo is None:
@@ -30,8 +35,8 @@ def target_bars(trade_date, records, symbols, *, entry_times=None):
     session = market_session(date.fromisoformat(trade_date))
     if session is None:
         raise ValueError('Minute settlement requires a trading session')
-    targets = dict(entry=session.market_open.replace(hour=9, minute=31),
-                   exit=session.market_close - timedelta(minutes=5))
+    entry, exit_time = _target_times(session)
+    targets = dict(entry=entry, exit=exit_time)
     output = {}
     for symbol in symbols:
         output[symbol] = {}
@@ -68,11 +73,16 @@ class MinuteStore:
         if not session or now <= session.market_close:
             raise ValueError('Execution collection is post-close only')
         symbols = sorted(set(symbols))
+        sources = {row.get('source_provider', provider) for rows in records.values() for row in rows}
+        source = (next(iter(sources)) if len(sources) == 1 else 'mixed'
+                  if sources else provider)
         document = dict(schema_version=1, trade_date=trade_date, provider=provider,
             interval='1m', price_adjustment='unadjusted', session_scope='US_regular_session',
             timestamp_semantics='bar_start', captured_at_et=now.isoformat(), symbols=symbols,
             fresh_provider_read=bool(fresh_provider_read),
-            source='Yahoo Finance via YFinanceProvider.history' if provider == 'yfinance' else provider,
+            # provider is the legacy collection lookup namespace; source is the
+            # actual market-data provider represented by this immutable read.
+            source=source,
             records=records)
         digest = sha256_payload(document)
         document['observation_sha256'] = digest
@@ -149,6 +159,17 @@ class MinuteStore:
                 for phase, target in phases.items():
                     if target is None:
                         continue
+                    source_row = None
+                    for row in observation['records'].get(symbol, []):
+                        try:
+                            matches_target = _stamp(row.get('timestamp')) == _stamp(target['timestamp'])
+                        except (ValueError, TypeError):
+                            continue
+                        if matches_target:
+                            source_row = row
+                            break
+                    if source_row is None:
+                        raise ValueError('Selected target minute has no source row')
                     prior = evidence[symbol][phase]
                     if prior is None or prior['target'] != target:
                         correction = correction or prior is not None
@@ -160,7 +181,9 @@ class MinuteStore:
                                        prior['first_captured_at_et']).astimezone(ET).date()))):
                         prior['confirmed'] = True
                     prior.update(captured_at_et=captured,
-                                 observation_sha256=observation['observation_sha256'])
+                                 observation_sha256=observation['observation_sha256'],
+                                 source_provider=source_row.get('source_provider', observation['provider']),
+                                 source_feed=source_row.get('source_feed'))
                     evidence[symbol][phase] = prior
         targets = {symbol: {phase: value['target'] if value else None
                            for phase, value in phases.items()} for symbol, phases in evidence.items()}
@@ -178,6 +201,9 @@ class MinuteStore:
         records = {symbol: [dict(timestamp=value['target']['timestamp'], open=value['target']['open'],
                                 volume=1 if value['target']['usable_volume'] else 0)
                             for value in phases.values() if value] for symbol, phases in evidence.items()}
+        target_sources = {value['source_provider'] for value in used}
+        actual_source = (next(iter(target_sources)) if len(target_sources) == 1 else 'mixed'
+                         if target_sources else current['source'])
         return dict(base, status='final' if confirmed else 'provisional', targets=targets,
                     records=records, execution_sha256=sha256_payload(targets), correction=correction,
                     captured_at_et=max((value['captured_at_et'] for value in used), key=_stamp) if used else None,
@@ -185,13 +211,14 @@ class MinuteStore:
                     target_observations={symbol: {phase: {key: item for key, item in value.items() if key != 'target'}
                                                  if value else None for phase, value in phases.items()}
                                          for symbol, phases in evidence.items()},
-                    source=current['source'], confirmed_by_independent_reobservation=confirmed)
+                    source=actual_source, confirmed_by_independent_reobservation=confirmed)
 
 
 def refresh_minute_observations(*, research_root, rows, profile, observed_at=None, market_provider=None,
                                 eligible_dates=None):
     """Background service entry point. Never called during dashboard rendering."""
     from .data_providers import YFinanceProvider
+    from .history_fallback import HistoricalFallbackProvider
     now = (observed_at or datetime.now(ET)).astimezone(ET)
     store = MinuteStore(research_root / MINUTE_NAMESPACE)
     if profile.market_provider != 'yfinance':
@@ -211,8 +238,11 @@ def refresh_minute_observations(*, research_root, rows, profile, observed_at=Non
             continue
         try:
             history = getattr(provider, 'fresh_history', provider.history)
-            data = history(sorted(symbols), start=day, end=day + timedelta(days=1),
-                           interval='1m', prepost=False)
+            kwargs = dict(start=day, end=day + timedelta(days=1), interval='1m', prepost=False)
+            if isinstance(provider, HistoricalFallbackProvider):
+                targets = _target_times(market_session(day))
+                kwargs['required_timestamps'] = {symbol: targets for symbol in symbols}
+            data = history(sorted(symbols), **kwargs)
             fresh = hasattr(provider, 'fresh_history') or getattr(
                 provider, 'last_history_was_fresh', True)
             snapshot = store.observe(day.isoformat(), sorted(symbols), data, provider='yfinance',
@@ -255,7 +285,7 @@ def record_settlement_attempt(research_root, dates, now, *, app_open=False):
             item['scheduled_offsets'].sort()
         if app_open:
             item['last_app_open_date'] = now.date().isoformat()
-        if session and now >= next_market_session(date.fromisoformat(day_text)).market_close + timedelta(minutes=5):
+        if session and now >= session.market_close + timedelta(minutes=RETRY_MINUTES[1]):
             item['confirmation_attempted_at_et'] = now.isoformat()
         item['last_attempted_at_et'] = now.isoformat()
     _atomic_json(Path(research_root) / 'minute_refresh_attempts.json', attempts)
@@ -281,21 +311,13 @@ def settlement_due_dates(rows, now, attempts=None, *, app_open=False, manual=Fal
             continue
         if manual:
             due.append(day_text); continue
-        complete_provisional = all(
-            row.get('minute', {}).get('status') == 'provisional'
-            and all(value.get('status') in ('provisional', 'final')
-                    for value in row.get('labels', {}).values())
-            for row in day_rows)
         elapsed = (now - session.market_close).total_seconds() / 60
         used = set(attempts.get(day_text, {}).get('scheduled_offsets', []))
         offset = next((value for value in RETRY_MINUTES if elapsed >= value and value not in used), None)
-        if not complete_provisional and offset is not None and elapsed <= RETRY_MINUTES[-1] + 1:
+        if offset is not None and elapsed <= RETRY_MINUTES[-1] + 1:
             due.append(day_text); continue
-        next_session = next_market_session(date.fromisoformat(day_text))
-        confirmation_due = next_session.market_close + timedelta(minutes=5)
+        confirmation_due = session.market_close + timedelta(minutes=RETRY_MINUTES[-1])
         local_day = now.date().isoformat()
-        if now >= confirmation_due and not attempts.get(day_text, {}).get('confirmation_attempted_at_et'):
-            due.append(day_text); continue
         if app_open and now >= confirmation_due and attempts.get(day_text, {}).get('last_app_open_date') != local_day:
             due.append(day_text)
     return due

@@ -40,7 +40,14 @@ class FakeMarket:
         }
 
     def option_surface(self, symbol):
-        return {"symbol": symbol, "status": "no_data", "expiries": {}}
+        return {
+            "symbol": symbol, "status": "no_data", "expiries": {},
+            "quality": {
+                "source_contract_count": 0,
+                "retained_contract_count": 0,
+                "contracts_with_valid_two_sided_price": 0,
+            },
+        }
 
 
 class FakeMetadata:
@@ -54,6 +61,29 @@ class FakeEvents:
 
 
 class ResearchCollectionTests(unittest.TestCase):
+    def test_collection_uses_configured_history_window(self):
+        import shutil
+        from datetime import date
+        starts = []
+        class RecordingMarket(FakeMarket):
+            def history(self, symbols, **kwargs):
+                starts.append(kwargs['start'])
+                return super().history(symbols, **kwargs)
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            package = root/'package'
+            shutil.copytree(PACKAGE_ROOT/'config', package/'config')
+            path = package/'config/price-history.json'
+            value = json.loads(path.read_text())
+            value['lookback_calendar_days'] = 365
+            path.write_text(json.dumps(value))
+            collect_research_evidence(root=root/'evidence', package_root=package,
+                profile=self.profile(), sec_identity='Research test@example.edu',
+                observed_at=datetime(2026,9,4,8,45,tzinfo=ZoneInfo('America/New_York')),
+                market_provider=RecordingMarket(), metadata_provider=FakeMetadata(), event_provider=FakeEvents())
+            self.assertTrue(starts)
+            self.assertEqual(set(starts), {date(2025,9,4)})
+
     def test_premarket_state_distinguishes_provider_zero_from_missing_volume(self):
         cutoff = datetime(2026, 9, 17, 8, 50, tzinfo=ZoneInfo("America/New_York"))
         common = {
@@ -71,8 +101,8 @@ class ResearchCollectionTests(unittest.TestCase):
             previous_close=240.0,
         )
 
-        self.assertEqual(reported_zero["volume_status"], "provider_reported_zero")
-        self.assertEqual(reported_zero["observed_volume"], 0.0)
+        self.assertEqual(reported_zero["volume_status"], "volume_unavailable")
+        self.assertIsNone(reported_zero["observed_volume"])
         self.assertEqual(reported_zero["volume_observation_count"], 1)
         self.assertEqual(reported_zero["zero_volume_bar_count"], 1)
         self.assertFalse(reported_zero["volume_ranking_eligible"])
@@ -130,6 +160,11 @@ class ResearchCollectionTests(unittest.TestCase):
                     "quote_freshness_eligible": False,
                     "last_trade_timestamp_semantics": "contract_last_trade_not_quote_time",
                     "directional_flow_semantics": False,
+                    "quality": {
+                        "source_contract_count": 3,
+                        "retained_contract_count": 3,
+                        "contracts_with_valid_two_sided_price": 2,
+                    },
                     "expiries": {"2026-09-18": {"status": "collected"}},
                 }
 
@@ -156,6 +191,18 @@ class ResearchCollectionTests(unittest.TestCase):
                 (evidence.root / "raw/options/AAPL.json").read_text(encoding="utf-8")
             )
             self.assertEqual(archived["quote_timestamp_status"], "unavailable")
+            self.assertEqual(archived["source_contract_count"], 3)
+            self.assertEqual(archived["retained_contract_count"], 3)
+            self.assertEqual(archived["valid_two_sided_price_count"], 2)
+            derivatives_status = next(
+                row for row in evidence.manifest["provider_manifest"]["collection_statuses"]
+                if row["symbol"] == "AAPL" and row["domain"] == "derivatives"
+            )
+            self.assertEqual(derivatives_status["status"], "no_data")
+            self.assertEqual(derivatives_status["reason"], "missing_exchange_quote_timestamp")
+            self.assertEqual(derivatives_status["retained_contract_count"], 3)
+            self.assertEqual(derivatives_status["valid_two_sided_price_count"], 2)
+            self.assertEqual(derivatives_status["quote_timestamp_status"], "unavailable")
 
     def profile(self, maximum_candidates=3):
         return DataProfile(
@@ -189,6 +236,12 @@ class ResearchCollectionTests(unittest.TestCase):
             self.assertTrue(all(row["collection_status"] == "no_data" for row in capital))
             self.assertTrue(all(row["collection_status"] == "not_applicable" for row in event))
             self.assertTrue(all(row["collection_status"] == "no_data" for row in derivatives))
+            derivatives_status = next(
+                row for row in evidence.manifest["provider_manifest"]["collection_statuses"]
+                if row["symbol"] == "AAPL" and row["domain"] == "derivatives"
+            )
+            self.assertEqual(derivatives_status["reason"], "no_option_chain")
+            self.assertEqual(derivatives_status["retained_contract_count"], 0)
             self.assertFalse(evidence.manifest["provider_manifest"]["production_grade_claimed"])
             provider_status = json.loads(
                 (evidence.root / "raw/provider-status.json").read_text(encoding="utf-8")
@@ -209,6 +262,61 @@ class ResearchCollectionTests(unittest.TestCase):
             )
             self.assertEqual(candidate["premarket_volume"], 5000.0)
             self.assertEqual(candidate["premarket_volume_status"], "observed_positive")
+
+    def test_option_provider_error_is_not_reported_as_empty_chain(self):
+        class MarketWithOptionError(FakeMarket):
+            def option_surface(self, symbol):
+                raise ValueError("unavailable")
+
+        with tempfile.TemporaryDirectory() as name:
+            evidence = collect_research_evidence(
+                root=Path(name) / "evidence", package_root=PACKAGE_ROOT,
+                profile=self.profile(), sec_identity="Research test@example.edu",
+                observed_at=datetime(2026, 9, 4, 8, 45, tzinfo=ZoneInfo("America/New_York")),
+                market_provider=MarketWithOptionError(), metadata_provider=FakeMetadata(),
+                event_provider=FakeEvents(),
+            )
+            status = next(
+                row for row in evidence.manifest["provider_manifest"]["collection_statuses"]
+                if row["symbol"] == "AAPL" and row["domain"] == "derivatives"
+            )
+            self.assertEqual(status["status"], "provider_error")
+            self.assertEqual(status["reason"], "provider_error")
+            self.assertEqual(status["error_type"], "ValueError")
+            self.assertIsNone(status["retained_contract_count"])
+
+    def test_option_quote_time_present_but_not_fresh_has_distinct_reason(self):
+        class MarketWithStaleQuote(FakeMarket):
+            def option_surface(self, symbol):
+                return {
+                    "symbol": symbol, "status": "collected",
+                    "quote_timestamp_status": "available",
+                    "quote_freshness_eligible": False,
+                    "quality": {
+                        "source_contract_count": 1,
+                        "retained_contract_count": 1,
+                        "contracts_with_valid_two_sided_price": 1,
+                    },
+                    "expiries": {"2026-09-18": {"status": "collected"}},
+                }
+
+        with tempfile.TemporaryDirectory() as name:
+            evidence = collect_research_evidence(
+                root=Path(name) / "evidence", package_root=PACKAGE_ROOT,
+                profile=self.profile(), sec_identity="Research test@example.edu",
+                observed_at=datetime(2026, 9, 4, 8, 45, tzinfo=ZoneInfo("America/New_York")),
+                market_provider=MarketWithStaleQuote(), metadata_provider=FakeMetadata(),
+                event_provider=FakeEvents(),
+            )
+            status = next(
+                row for row in evidence.manifest["provider_manifest"]["collection_statuses"]
+                if row["symbol"] == "AAPL" and row["domain"] == "derivatives"
+            )
+            self.assertEqual(status["status"], "no_data")
+            self.assertEqual(status["reason"], "quote_not_fresh")
+            self.assertFalse(any(
+                record["domain"] == "derivatives" for record in evidence.lineage["records"]
+            ))
 
     def test_weekend_collection_creates_no_evidence(self):
         with tempfile.TemporaryDirectory() as name:

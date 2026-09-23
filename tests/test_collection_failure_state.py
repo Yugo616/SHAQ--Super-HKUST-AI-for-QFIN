@@ -158,7 +158,9 @@ with patch.object(yf.Ticker, 'history', exhaust):
                 self.assertEqual(path.read_bytes(), content)
             # A changed proof invalidates the overlay instead of laundering a new run.
             paths[1].write_text('{}')
-            self.assertEqual(restarted.job_statuses()[0]['status'], 'running')
+            row = restarted.job_statuses()[0]
+            self.assertEqual(row['status'], 'incomplete')
+            self.assertNotIn('status_correction', row)
 
     def test_correction_refuses_active_locks_wrong_hashes_and_mismatched_failure(self):
         self.assertTrue(hasattr(LabService, 'correct_interrupted_job'))

@@ -1,0 +1,10 @@
+{
+  "parameter_bindings": {
+    "lead_minutes": ["REF-OPENBB-PROVIDERS-001", "DEC-DATA-PROVIDERS-001", "EXP-CROSS-PLATFORM-LAB-001"],
+    "deadline_guard_seconds": ["REF-OPENBB-PROVIDERS-001", "DEC-DATA-PROVIDERS-001", "EXP-CROSS-PLATFORM-LAB-001"],
+    "lock_timeout_seconds": ["REF-OPENBB-PROVIDERS-001", "DEC-DATA-PROVIDERS-001", "EXP-CROSS-PLATFORM-LAB-001"]
+  },
+  "lead_minutes": 20,
+  "deadline_guard_seconds": 2,
+  "lock_timeout_seconds": 0
+}

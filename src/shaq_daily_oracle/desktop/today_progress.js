@@ -5,7 +5,7 @@ const SHAQProgress = (() => {
   const domainName = value => ({market:'市场环境',relationships:'行业与关系传导',event:'公司催化事件',capital:'买卖压力与流动性',derivatives:'期权定价与仓位',price_volume:'价格走势与参与度',screening:'候选筛选',preparation:'资料准备',adversary:'反方审查',decision:'最终决策'}[value]||value||'研究');
   function callSummary(events,variant){
     const calls=new Map(),attempts=new Set();
-    const states={call_requested:'running',model_started:'running',model_returned:'complete',cache_hit:'reused',failure:'failed',validation_failure:'failed'};
+    const states={call_requested:'running',model_started:'running',model_returned:'complete',cache_hit:'reused',failure:'failed',validation_failure:'failed',model_attempt_failed:'failed',model_retry_scheduled:'running',model_retry_started:'running'};
     for(const event of events||[]){
       if(event.variant_key!==variant||!event.call_id||!states[event.stage])continue;
       const attempt=Number(event.attempt||1),previous=calls.get(event.call_id);
@@ -29,7 +29,15 @@ const SHAQProgress = (() => {
     if(rows.some(row=>row.stage==='variant_reused'&&row.status==='complete'))for(const id of tasks.keys())completed.add(id);
     return {total:plan?tasks.size:null,complete:completed.size,tasks:[...tasks.values()],rows};
   }
-  function compactResearchHtml(progress, executionState){
+  function attemptStatus(event, now){
+    if(!event)return '等待';
+    if(event.stage==='model_retry_scheduled')return `正在自动重试 · 第 ${Number(event.attempt||1)} / ${Number(event.max_attempts||1)} 次尝试${event.next_retry_at?' · 下一次 '+new Date(event.next_retry_at).toLocaleTimeString('zh-CN',{hour12:false}):''}`;
+    if(event.status==='failed')return failureText(event);
+    const start=Date.parse(event.occurred_at_et),end=Date.parse(now);
+    const elapsed=Number.isFinite(start)&&Number.isFinite(end)?`，已用时 ${Math.max(0,Math.floor((end-start)/1000))}秒`:'';
+    return `正在分析${elapsed}`;
+  }
+  function compactResearchHtml(progress, executionState, now){
     const ended=!['queued','running'].includes(executionState);
     const unfinished=executionState==='complete'?'报告未记录':'未完成';
     const reports=new Map(progress.rows.filter(row=>row.stage==='report_validated').map(row=>[`${row.symbol}:${row.domain}`,row]));
@@ -41,13 +49,10 @@ const SHAQProgress = (() => {
       const id=`${symbol}:${task.domain}`;
       if(report)return `<details data-view-key="${esc(id)}" data-research-section="${esc(id)}"><summary>${esc(domainName(task.domain))} · ${row.status==='no_data'?'无合格资料':'已完成'}</summary><p><b>主要结论：</b>${esc(report.thesis||'—')}</p><p><b>反方：</b>${esc(report.antithesis||'—')}</p><p><b>未知：</b>${esc((report.unknowns||[]).join('；')||'未列明')}</p><p><b>失效条件：</b>${esc((report.invalidation||[]).join('；')||'未列明')}</p></details>`;
       const latest=progress.rows.filter(event=>event.domain===task.domain&&(event.symbol===symbol||(event.symbols||[]).includes(symbol))).at(-1);
-      return `<p>${esc(domainName(task.domain))} · ${latest?.status==='failed'?'失败':ended?unfinished:latest?'进行中':'等待'}</p>`;
+      const clock=!ended&&['model_started','model_retry_started'].includes(latest?.stage)?` data-call-start="${esc(latest.occurred_at_et)}"`:'';
+      return `<p>${esc(domainName(task.domain))} · <span${clock}>${esc(ended?unfinished:attemptStatus(latest,now))}</span></p>`;
     }).join('')}</div></section>`).join('');
-    const final=progress.tasks.filter(task=>!task.symbol).map(task=>{
-      const done=progress.rows.some(row=>(task.task_id==='decision'?row.stage==='decision_complete':row.stage===task.task_id)&&row.status==='complete');
-      return `<span>${esc(domainName(task.task_id==='synthesis'?'decision':task.task_id))} · ${done?'已完成':ended?unfinished:'等待'}</span>`;
-    }).join(' · ');
-    return html+(final?`<p>${final}</p>`:'')||'<p>尚无已保存的分析报告。</p>';
+    return html||'<p>尚无已保存的分析报告。</p>';
   }
   function etDay(value) {
     const date = new Date(value);
@@ -59,9 +64,11 @@ const SHAQProgress = (() => {
   function currentJobs(jobs, now) {
     const day = etDay(now);
     const seen = new Set();
-    return jobs.filter(job => active(job) ||
+    return jobs.filter(job => job.status==='running' ||
+      (job.status==='queued' && day && etDay(job.queued_at_et || job.started_at_et)===day) ||
       (day && etDay(job.started_at_et) === day))
-      .sort((a,b) => Number(active(b))-Number(active(a)) || (Date.parse(b.started_at_et)||0)-(Date.parse(a.started_at_et)||0))
+      .sort((a,b) => ({running:2,queued:1}[b.status]||0)-({running:2,queued:1}[a.status]||0) ||
+        (Date.parse(b.started_at_et||b.queued_at_et)||0)-(Date.parse(a.started_at_et||a.queued_at_et)||0))
       .filter(job=>{const key=job.batch_id||job.job_id;if(seen.has(key))return false;seen.add(key);return true});
   }
   function failureText(failure) {
@@ -79,34 +86,87 @@ const SHAQProgress = (() => {
   }
   function retryVersions(job) {
     return Object.entries(job.variant_progress || {}).filter(([,status]) =>
-      status === 'failed' || (job.status === 'failed' && status !== 'complete'))
+      status === 'failed' || status === 'incomplete' || (['failed','incomplete'].includes(job.status) && status !== 'complete'))
       .map(([key]) => {const [author, ...rest] = key.split('/'); return {author,version_id:rest.join('/')};});
   }
   function scheduleText(value) {
     return value.enabled ? `自动运行已开启 · 美东 ${String(value.start_et || '').slice(0,5)}` : '自动运行未开启 · 当前不会每天自动跑';
   }
+  function dataRetry(job){
+    if(!active(job))return null;
+    const last=(job.research_progress||[]).filter(e=>String(e.stage||'').startsWith('data_')).at(-1);
+    return ['data_retry_scheduled','data_retry_started'].includes(last?.stage)?last:null;
+  }
+  function primaryAction(jobs, selections, now, profileId) {
+    const selected=new Set(selections||[]),day=etDay(now);
+    const job=currentJobs(jobs||[],now).find(row=>(active(row)||etDay(row.started_at_et)===day)&&
+      profileId&&row.model_profile_id===profileId&&selected.size&&
+      [...selected].every(key=>key in (row.variant_progress||{})));
+    if(!job)return {action:'start',label:'开始今日分析'};
+    if(active(job)){
+      const calls=new Map((job.research_progress||[]).filter(e=>e.call_id&&selected.has(e.variant_key)).map(e=>[e.call_id,e]));
+      if(dataRetry(job)||[...calls.values()].some(e=>e.stage==='model_retry_scheduled'))return {action:'retrying',label:'正在自动重试',job};
+      return {action:'progress',label:'查看进度',job};
+    }
+    if([...selected].every(key=>job.variant_progress[key]==='complete'))return {action:'results',label:'查看结果',job};
+    if(job.next_retry_at)return {action:'retrying',label:'正在自动重试',job};
+    return {action:'resume',label:'继续未完成分析',job};
+  }
+  function preparationHtml(job){
+    const latest=new Map((job.research_progress||[]).filter(e=>e.stage==='data_preparation').map(e=>[e.component,e]));
+    if(!latest.size)return '';
+    const names={universe:'股票池',history:'历史价格',premarket:'盘前价格',metadata:'股票资料',events:'公司公告',options:'期权资料',public_context:'公开市场资料'};
+    const retry=dataRetry(job);
+    const retryText=retry?`<p class="data-retry">正在自动重试 · ${esc(retry.source||'')} ${esc(retry.symbol||'')} · 第 ${esc(retry.attempt)} / ${esc(retry.max_attempts)} 次尝试${retry.stage==='data_retry_scheduled'&&retry.next_retry_at?' · 下次 '+esc(new Date(retry.next_retry_at).toLocaleTimeString('zh-CN',{hour12:false})):''}</p>`:'';
+    return `<section class="preparation-progress"><h4>1 · 准备数据</h4>${retryText}${[...latest].map(([component,e])=>{
+      const total=Number.isInteger(e.total)&&e.total>0?e.total:null;
+      const completed=Number.isInteger(e.completed)?e.completed:0;
+      const status=e.status==='complete'?'已准备':e.status==='failed'?'获取失败':e.status==='unavailable'?'资料不足':!active(job)?'未完成':e.status==='retrying'?'正在重试':'准备中';
+      const bar=total?`<progress max="${total}" value="${Math.min(total,completed)}" aria-label="${esc(names[component]||component)}"></progress> ${completed} / ${total}`:'';
+      return `<div data-view-key="prepare-${esc(component)}"><b>${esc(names[component]||component)}</b> · ${esc(status)} · ${esc(e.source||'')}${bar}<small>${esc(e.message||'')}</small></div>`;
+    }).join('')}</section>`;
+  }
   function applyTodayAvailability(button, clock, hasModel) {
     button.disabled = !hasModel || clock?.today_available !== true;
     button.title = clock?.today_message || '正在核验美东交易日与盘前时段';
   }
+  function finalizationHtml(job,names){
+    const rows=Object.entries(job.variant_progress||{}).map(([key,status])=>{
+      const progress=taskProgress(job.research_progress,key),ended=!active(job)||status==='complete';
+      const stages=progress.tasks.filter(t=>['adversary','synthesis','decision'].includes(t.task_id));
+      if(!stages.length&&status!=='complete')return `<div><b>${esc(names(key))}</b><p>等待任务清单；汇总结果尚未开始。</p></div>`;
+      const items=stages.map(task=>{
+        const stage=task.task_id==='decision'?'decision_complete':task.task_id;
+        const done=progress.rows.some(e=>e.stage===stage&&e.status==='complete');
+        const started=progress.rows.some(e=>e.domain===task.task_id||e.stage===stage);
+        return {name:task.task_id==='synthesis'?'综合取舍':domainName(task.task_id),done,text:done?'已完成':ended?'未完成':started?'进行中':'等待'};
+      });
+      items.push({name:'保存结果',done:status==='complete',text:status==='complete'?'已完成':ended?'未完成':'等待'});
+      return `<div><b>${esc(names(key))}</b><progress max="${items.length}" value="${items.filter(i=>i.done).length}" aria-label="汇总结果"></progress><p>${items.map(i=>`${esc(i.name)}：${i.text}`).join(' · ')}</p></div>`;
+    });
+    return rows.length?`<section class="finalization-progress"><h4>3 · 汇总结果</h4>${rows.join('')}</section>`:'';
+  }
   function overallHtml(job,now){
     const value=job.progress_summary;if(!value)return '';
     const known=Number.isInteger(value.total_tasks),done=job.status==='complete';
-    const amount=known?`${value.completed_tasks} / ${value.total_tasks} 项`:(done?'已完成':'任务数量确认中');
-    const values=done?'max="1" value="1"':known?`max="${Math.max(1,value.total_tasks)}" value="${value.completed_tasks}"`:'max="1" value="0"';
+    const amount=known?`${value.completed_tasks} / ${value.total_tasks} 项`:(done?'已完成':'等待任务清单');
+    const bar=done?'<progress max="1" value="1" aria-label="整体进度"></progress>':known?`<progress max="${Math.max(1,value.total_tasks)}" value="${value.completed_tasks}" aria-label="整体进度"></progress>`:'';
     const stage={preparation:'准备数据',screening:'筛选候选',domain_analysis:'六领域分析',adversary:'反方审查',decision:'最终决策',complete:'已完成',incomplete:'未完成'}[value.stage]||'准备中';
     const duration=seconds=>seconds<60?`${seconds}秒`:`${Math.floor(seconds/60)}分${seconds%60}秒`;
     const started=Date.parse(value.started_at),end=Date.parse(active(job)?now:value.completed_at);
     const elapsed=Number.isFinite(started)&&Number.isFinite(end)?` · ${active(job)?'已运行':'用时'} ${duration(Math.max(0,Math.floor((end-started)/1000)))}`:'';
     const observed=Date.parse(value.last_event_at),time=Date.parse(now);
     const age=active(job)&&Number.isFinite(observed)&&Number.isFinite(time)?` · 最近进展 ${duration(Math.max(0,Math.floor((time-observed)/1000)))}前`:'';
-    return `<section class="overall-progress"><b>${done?'今日研究已完成':`当前阶段：${esc(stage)}`}</b><label>整体进度 · ${esc(amount)}<progress ${values} aria-label="整体进度"></progress></label><small>${esc(stage+elapsed+age)}</small></section>`;
+    return `<section class="overall-progress"><b>${done?'今日研究已完成':`当前阶段：${esc(stage)}`}</b><label>整体进度 · ${esc(amount)}${bar}</label><small>${esc(stage+elapsed+age)}</small></section>`;
   }
   function updateClocks(jobs,now){
     for(const article of document.querySelectorAll('[data-progress-job]')){
       const job=jobs.find(row=>row.job_id===article.dataset.progressJob);
       const summary=article.querySelector('.overall-progress');
       if(job&&active(job)&&summary)summary.outerHTML=overallHtml(job,now);
+      if(job&&active(job))for(const node of article.querySelectorAll('[data-call-start]')){
+        node.textContent=attemptStatus({occurred_at_et:node.dataset.callStart},now);
+      }
     }
   }
   function progressHtml(jobs, versions, now) {
@@ -133,15 +193,12 @@ const SHAQProgress = (() => {
         const failure=job.variant_errors?.[key]||progress.rows.filter(row=>row.status==='failed').at(-1)||{};
         const reason=value==='failed'?`<p class="status bad">${esc(failureText(failure))}</p>`:'';
         const completed=executionState==='complete';
-        const running=job.status==='running'&&executionState==='running';
-        const text=completed?'已完成':progress.total===null?(running?'分析中，暂未记录任务总量':status(executionState)):`${progress.complete} / ${progress.total} 项`;
-        // A progress element without value animates indefinitely in native webviews.
-        // Use it only for genuinely running work, never for missing historical totals.
-        const values=completed?'max="1" value="1"':progress.total===null?(running?'':'max="1" value="0"'):`max="${Math.max(1,progress.total)}" value="${progress.complete}"`;
-        const bar=`<progress ${values} aria-label="${esc(names(key))}：${esc(text)}"></progress>`;
-        return `<details class="research-progress variant-progress" data-view-key="${esc(key)}" data-progress-variant="${esc(key)}"><summary><span>${esc(names(key))} · ${esc(status(executionState))}</span>${bar}<small>${text}</small></summary>${reason}${compactResearchHtml(progress,executionState)}</details>`;
+        const text=completed?'已完成':progress.total===null?'等待任务清单':`${progress.complete} / ${progress.total} 项`;
+        const bar=completed?`<progress max="1" value="1" aria-label="${esc(names(key))}：已完成"></progress>`:
+          progress.total===null?'':`<progress max="${Math.max(1,progress.total)}" value="${progress.complete}" aria-label="${esc(names(key))}：${esc(text)}"></progress>`;
+        return `<details class="research-progress variant-progress" data-view-key="${esc(key)}" data-progress-variant="${esc(key)}"><summary><span>${esc(names(key))} · ${esc(status(executionState))}</span>${bar}<small>${text}</small></summary>${reason}${compactResearchHtml(progress,executionState,now)}</details>`;
       }).join('');
-      return `<article class="progress-batch" data-progress-job="${esc(job.job_id)}"><header><span>${esc(previousDay?carry.slice(3):'本次运行')}</span><b>${esc(status(job.status))}</b></header>${overallHtml(job,now)}${versionsHtml}<div class="progress-actions">${job.batch_id ? `<button class="text-button" data-progress-result="${esc(job.batch_id)}">查看结果</button>` : ''}${retryVersions(job).length && !active(job) ? `<button class="secondary" data-progress-retry="${esc(job.job_id)}">${job.batch_id?'恢复原批次（仅补失败调用）':'选择失败版本重试'}</button>` : ''}</div></article>`;
+      return `<article class="progress-batch" data-progress-job="${esc(job.job_id)}"><header><span>${esc(previousDay?carry.slice(3):'本次运行')}</span><b>${esc(status(job.status))}</b></header>${overallHtml(job,now)}${preparationHtml(job)}${versionsHtml?'<h4>2 · 两版分析</h4>'+versionsHtml:''}${finalizationHtml(job,names)}<div class="progress-actions">${job.batch_id ? `<button class="text-button" data-progress-result="${esc(job.batch_id)}">查看结果</button>` : ''}${retryVersions(job).length && !active(job) ? `<button class="secondary" data-progress-retry="${esc(job.job_id)}">${job.batch_id?'继续未完成分析':'重试数据准备'}</button>` : ''}</div></article>`;
     }).join('');
   }
   function researchHtml(events, legacyReports, selection={}) {
@@ -162,6 +219,6 @@ const SHAQProgress = (() => {
     const versionLabel=key=>{const [author,...rest]=key.split('/'),id=rest.join('/');const item=(selection.versions||[]).find(v=>(v.author||'team')===author&&(v.version_id===id||(v.aliases||[]).includes(id)));return item?.method_name||item?.label||key};
     return `<section class="research-view"><label>版本 <select data-view-key="variant" data-research-variant>${variants.map(v=>option(v,chosen,'data-research-variant-option',versionLabel(v))).join('')}</select></label><label>候选 <select data-view-key="symbol" data-research-symbol>${symbols.map(s=>option(s,symbol,'data-research-symbol')).join('')}</select></label><p>${callText(counts)} · 实际耗时 ${elapsed.toFixed(1)} 秒</p><details data-research-section="timeline"${timelineOpen}><summary>执行时间线</summary><ol>${timeline}</ol></details>${sections||'<p>尚无已校验报告；原始无效输出不会显示为结论。</p>'}</section>`;
   }
-  return {etDay,currentJobs,retryVersions,scheduleText,progressHtml,researchHtml,callSummary,taskProgress,domainName,applyTodayAvailability,failureText,updateClocks};
+  return {etDay,currentJobs,retryVersions,scheduleText,progressHtml,researchHtml,callSummary,taskProgress,domainName,applyTodayAvailability,failureText,updateClocks,primaryAction};
 })();
 if (typeof module !== 'undefined') module.exports = SHAQProgress;

@@ -375,6 +375,7 @@ class ContentAddressedModelCache:
         schema: dict[str, Any],
         caller: Callable[..., tuple[dict[str, Any], dict[str, Any]]] = call_structured,
         on_model_start: Callable[[], None] | None = None,
+        on_attempt_event: Callable[..., None] | None = None,
         execution_policy: ExecutionPolicy | None = None,
         validate: Callable[[dict[str, Any]], None] | None = None,
         snapshot_root: Path | None = None,
@@ -458,6 +459,10 @@ class ContentAddressedModelCache:
             started = time.monotonic()
             for attempt in range(policy.transient_retries + 1):
                 self._wait_for_rate_slot(profile)
+                if attempt and on_attempt_event:
+                    safe_observe(on_attempt_event, stage='model_retry_started', attempt=attempt + 1,
+                                     max_attempts=policy.transient_retries + 1,
+                                     status='running')
                 if on_model_start:
                     on_model_start()
                 attempt_started = time.monotonic()
@@ -500,8 +505,18 @@ class ContentAddressedModelCache:
                             'cache_key': cache_key, 'input_bytes': len(prompt.encode('utf-8')),
                             'group_symbols': group_symbols or [], 'attempts': attempts,
                             'execution_policy': policy.public_dict()})
+                    if on_attempt_event:
+                        safe_observe(on_attempt_event, stage='model_attempt_failed', attempt=attempt + 1,
+                                         max_attempts=policy.transient_retries + 1,
+                                         status='failed', error_type=type(exc).__name__,
+                                         transient=transient)
                     if not transient or attempt == policy.transient_retries:
                         raise
+                    if on_attempt_event:
+                        safe_observe(on_attempt_event, stage='model_retry_scheduled', attempt=attempt + 2,
+                                         max_attempts=policy.transient_retries + 1,
+                                         status='scheduled',
+                                         waiting_for='rate_slot')
                     continue
                 attempts.append({'attempt': attempt + 1, 'started_at_et': timestamp,
                     'elapsed_seconds': time.monotonic() - attempt_started, 'status': 'complete'})
@@ -648,6 +663,16 @@ def _domain_prompt(
     )
 
 
+def _progress_call_id(profile: ModelProfile, prompt: str, schema: dict[str, Any]) -> str:
+    return sha256_payload({
+        "call_identity_version": 1,
+        "profile_sha256": profile.identity(),
+        "request_policy_sha256": profile.request_policy_identity(),
+        "prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+        "schema_sha256": sha256_payload(schema),
+    })
+
+
 def _run_domain(
     *,
     domain: str,
@@ -705,13 +730,7 @@ def _run_domain(
         schema['properties']['results']['items']['properties']['task_id']['enum'] = [task['task_id'] for task in group]
         prompt = _domain_prompt(domain=domain, tasks=group, documents=documents,
                                 prompt_format_version=prompt_format_version)
-        call_id = sha256_payload({
-            "call_identity_version": 1,
-            "profile_sha256": profile.identity(),
-            "request_policy_sha256": profile.request_policy_identity(),
-            "prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
-            "schema_sha256": sha256_payload(schema),
-        })
+        call_id = _progress_call_id(profile, prompt, schema)
         for task in group:
             call_by_task[task["task_id"]] = (call_id, None)
         started = time.monotonic()
@@ -722,11 +741,18 @@ def _run_domain(
         attempt = requested.get("attempt", 1) if isinstance(requested, dict) else 1
         for task in group:
             call_by_task[task["task_id"]] = (call_id, attempt)
+        current_attempt = 0
         def model_start() -> None:
+            nonlocal current_attempt
+            current_attempt += 1
             safe_observe(observer, stage="model_started", batch_id=batch_id,
                          variant_key=variant_key, domain=domain,
                          symbols=[task["symbol"] for task in group], call_id=call_id,
-                         attempt=attempt, status="running", elapsed_seconds=round(time.monotonic()-started, 3))
+                         attempt=current_attempt, status="running", elapsed_seconds=round(time.monotonic()-started, 3))
+        def attempt_event(**fields) -> None:
+            safe_observe(observer, batch_id=batch_id, variant_key=variant_key,
+                         domain=domain, symbols=[task['symbol'] for task in group],
+                         call_id=call_id, **fields)
         try:
             def validate_group(value):
                 group_rows = value.get('results') if isinstance(value, dict) else None
@@ -745,6 +771,7 @@ def _run_domain(
                         evidence.lineage['evidence_to_roots'], evidence_domains)
             result, audit, cache_hit = cache.call(profile=profile, secret=secret,
                 prompt=prompt, schema=schema, caller=caller, on_model_start=model_start,
+                on_attempt_event=attempt_event,
                 execution_policy=execution_policy, validate=validate_group,
                 allow_legacy_cache=prompt_format_version == 1,
                 recover_rejected_cache=recover_rejected_cache,
@@ -753,14 +780,14 @@ def _run_domain(
             safe_observe(observer, stage="failure", batch_id=batch_id,
                          variant_key=variant_key, domain=domain,
                          symbols=[task["symbol"] for task in group], call_id=call_id,
-                         attempt=attempt, status="failed", error_type=type(exc).__name__,
+                         attempt=current_attempt or attempt, status="failed", error_type=type(exc).__name__,
                          message=str(exc), elapsed_seconds=round(time.monotonic()-started, 3))
             failures.append(f'{domain}: {type(exc).__name__}: {exc}')
             continue
         safe_observe(observer, stage="cache_hit" if cache_hit else "model_returned", batch_id=batch_id,
                      variant_key=variant_key, domain=domain,
                      symbols=[task["symbol"] for task in group], call_id=call_id,
-                     attempt=attempt, status="cache_hit" if cache_hit else "complete",
+                     attempt=current_attempt or attempt, status="cache_hit" if cache_hit else "complete",
                      elapsed_seconds=round(time.monotonic() - started, 3))
         group_rows = result.get('results') if isinstance(result, dict) else None
         if not isinstance(group_rows, list):
@@ -1034,11 +1061,17 @@ def run_variant(
     )
     if reports_by_symbol:
         adversary_started = time.monotonic()
+        adversary_schema = _adversary_schema()
+        adversary_symbols = sorted(reports_by_symbol)
+        adversary_call_id = _progress_call_id(profile, adversary_prompt, adversary_schema)
         safe_observe(observer, stage="adversary", batch_id=batch_id,
                      variant_key=variant_key, symbols=sorted(reports_by_symbol), status="running")
         adversary_result, adversary_audit, cache_hit = cache.call(
             profile=profile, secret=secret, prompt=adversary_prompt,
-            schema=_adversary_schema(), caller=caller,
+            schema=adversary_schema, caller=caller,
+            on_attempt_event=lambda **fields: safe_observe(observer, batch_id=batch_id,
+                variant_key=variant_key, domain='adversary', symbols=adversary_symbols,
+                call_id=adversary_call_id, **fields),
             execution_policy=execution_policy, snapshot_root=output_root.parent / 'model_calls',
             group_symbols=sorted(reports_by_symbol),
             allow_legacy_cache=prompt_format_version == 1,
@@ -1067,15 +1100,21 @@ def run_variant(
     synthesis = None
     if mode == "synthesis" and reports_by_symbol:
         from .synthesis import synthesis_prompt, synthesis_schema, validate_synthesis
+        synthesis_symbols = sorted(reports_by_symbol)
+        synthesis_text = synthesis_prompt(reports=reports_by_symbol, adversary=adversary_by_symbol,
+            documents=documents, as_of_et=evidence.manifest["as_of_et"],
+            maximum_predictions=parameters["maximum_predictions"],
+            citation_contract_version=synthesis_citation_contract_version)
+        synthesis_shape = synthesis_schema(list(reports_by_symbol))
+        synthesis_call_id = _progress_call_id(profile, synthesis_text, synthesis_shape)
         safe_observe(observer, stage='synthesis', batch_id=batch_id, variant_key=variant_key,
                      symbols=sorted(reports_by_symbol), status='running')
         synthesis, synthesis_audit, cache_hit = cache.call(
             profile=profile, secret=secret, caller=caller,
-            prompt=synthesis_prompt(reports=reports_by_symbol, adversary=adversary_by_symbol,
-                documents=documents, as_of_et=evidence.manifest["as_of_et"],
-                maximum_predictions=parameters["maximum_predictions"],
-                citation_contract_version=synthesis_citation_contract_version),
-            schema=synthesis_schema(list(reports_by_symbol)),
+            prompt=synthesis_text, schema=synthesis_shape,
+            on_attempt_event=lambda **fields: safe_observe(observer, batch_id=batch_id,
+                variant_key=variant_key, domain='synthesis', symbols=synthesis_symbols,
+                call_id=synthesis_call_id, **fields),
             execution_policy=execution_policy, snapshot_root=output_root.parent / 'model_calls',
             group_symbols=sorted(reports_by_symbol),
             allow_legacy_cache=prompt_format_version == 1,

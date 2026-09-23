@@ -6,7 +6,7 @@ import json
 import math
 import time
 from dataclasses import asdict, dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
 from urllib.parse import urlparse
@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo
 
 from .hashing import sha256_file, sha256_payload
 from .data_retry import failure_diagnostic, failure_message, is_transient_diagnostic
+from .research_progress import safe_observe
 
 
 class DataProviderError(ValueError):
@@ -301,25 +302,46 @@ class YFinanceProvider:
         "daily_bars", "premarket_quotes", "market_and_sector_bars", "option_surface"
     }
 
-    def __init__(self, profile: DataProfile) -> None:
+    def __init__(self, profile: DataProfile, progress_observer=None) -> None:
         self.profile = profile
         self.history_checkpoint_root = None
+        self.progress_observer = progress_observer
 
-    def _request_with_retry(self, request, *, stage):
+    def _request_with_retry(self, request, *, stage, symbol=None):
         # Validate even directly constructed profiles before issuing any request.
         self.profile.validate()
-        for attempt in range(self.profile.yahoo_request_max_retries + 1):
+        max_attempts = self.profile.yahoo_request_max_retries + 1
+        safe_symbol = None
+        if self.progress_observer is not None and symbol is not None:
+            from .data_retry import sanitize_diagnostic
+            safe_symbol = sanitize_diagnostic({'symbol': symbol}).get('symbol')
+        for attempt in range(max_attempts):
             try:
                 return request()
             except Exception as exc:
                 diagnostic = failure_diagnostic(exc, stage)
                 if diagnostic['kind'] == 'no_data':
                     raise
+                if self.progress_observer is not None:
+                    progress = dict(source='yfinance', request_stage=stage,
+                                    attempt=attempt + 1, max_attempts=max_attempts,
+                                    failure_kind=diagnostic['kind'])
+                    if safe_symbol:
+                        progress['symbol'] = safe_symbol
+                    safe_observe(self.progress_observer, stage='data_request_failed', **progress)
                 if (not is_transient_diagnostic(diagnostic)
                         or attempt >= self.profile.yahoo_request_max_retries):
                     diagnostic.update(attempts=attempt + 1, retry_count=attempt)
                     raise DataProviderError(failure_message(diagnostic), diagnostic=diagnostic) from exc
-                time.sleep(self.profile.yahoo_retry_backoff_seconds * (attempt + 1))
+                delay = self.profile.yahoo_retry_backoff_seconds * (attempt + 1)
+                if self.progress_observer is not None:
+                    retry = {**progress, 'attempt': attempt + 2,
+                             'next_retry_at': (datetime.now(timezone.utc)
+                                               + timedelta(seconds=delay)).isoformat()}
+                    safe_observe(self.progress_observer, stage='data_retry_scheduled', **retry)
+                time.sleep(delay)
+                if self.progress_observer is not None:
+                    safe_observe(self.progress_observer, stage='data_retry_started', **retry)
 
     @staticmethod
     def _module():
@@ -344,7 +366,7 @@ class YFinanceProvider:
             'interval': interval, 'prepost': prepost,
             'history_checkpoint_root': str(self.history_checkpoint_root) if self.history_checkpoint_root else None,
             'history_source_identity': self.profile.history_identity(),
-        })
+        }, progress_observer=self.progress_observer)
 
     def _history_checkpoint(self, symbol, *, start, end, interval='1d', prepost=False):
         from .collection_checkpoint import HistoryCheckpoint
@@ -391,7 +413,7 @@ class YFinanceProvider:
                             start=start.isoformat(), end=end.isoformat(),
                             interval=interval, prepost=prepost, auto_adjust=False,
                             actions=False, timeout=self.profile.request_timeout_seconds,
-                        ), stage='history')
+                        ), stage='history', symbol=normalized[symbol])
                         if interval == '1d' and not prepost and not frames[symbol].empty:
                             daily = frames[symbol].copy()
                             daily.index = daily.index.tz_localize(None)
@@ -436,7 +458,7 @@ class YFinanceProvider:
 
     def fresh_history(self, *args: Any, **kwargs: Any) -> dict[str, list[dict[str, Any]]]:
         """A fresh child has no historical-response LRU from an earlier read."""
-        return YFinanceProvider(self.profile).history(*args, **kwargs)
+        return YFinanceProvider(self.profile, progress_observer=self.progress_observer).history(*args, **kwargs)
 
     def recent_intraday(
         self, symbols: list[str], *, cutoff: datetime
@@ -466,12 +488,13 @@ class YFinanceProvider:
 
     def option_surface(self, symbol: str) -> dict[str, Any]:
         from .collection_worker import call_in_worker
-        return call_in_worker('option_surface', self.profile, {'symbol': symbol})
+        return call_in_worker('option_surface', self.profile, {'symbol': symbol},
+                              progress_observer=self.progress_observer)
 
     def _option_surface_inline(self, symbol: str, *, session) -> dict[str, Any]:
         yf = self._module()
         ticker = yf.Ticker(_yahoo_symbol(symbol), session=session)
-        expiries = list(self._request_with_retry(lambda: ticker.options, stage='option_surface') or [])
+        expiries = list(self._request_with_retry(lambda: ticker.options, stage='option_surface', symbol=symbol) or [])
         if not expiries:
             return {
                 "symbol": symbol,
@@ -484,6 +507,9 @@ class YFinanceProvider:
                 "maximum_option_expiries": self.profile.maximum_option_expiries,
                 "expiry_selection": "nearest_configured_expiries",
                 "quality": _option_quality(source_contract_count=0, rows=[]),
+                "source_contract_count": 0,
+                "retained_contract_count": 0,
+                "valid_two_sided_price_count": 0,
                 "capture_timestamp_semantics": "provider_response_capture_not_exchange_quote_time",
                 "quote_timestamp_status": "unavailable",
                 "quote_freshness_eligible": False,
@@ -497,7 +523,7 @@ class YFinanceProvider:
         selected_expiries = expiries[:self.profile.maximum_option_expiries]
         for expiry in selected_expiries:
             try:
-                chain = self._request_with_retry(lambda: ticker.option_chain(expiry), stage='option_surface')
+                chain = self._request_with_retry(lambda: ticker.option_chain(expiry), stage='option_surface', symbol=symbol)
             except Exception as exc:
                 diagnostic = failure_diagnostic(exc, 'option_surface')
                 output[expiry] = {"status": "provider_error", "error": diagnostic.get('error_type'),
@@ -549,6 +575,9 @@ class YFinanceProvider:
         failed_expiry_count = sum(
             row.get("status") == "provider_error" for row in output.values()
         )
+        quality = _option_quality(
+            source_contract_count=aggregate_source_count, rows=aggregate_rows,
+        )
         return {
             "symbol": symbol,
             "status": (
@@ -562,9 +591,10 @@ class YFinanceProvider:
             "failed_expiry_count": failed_expiry_count,
             "maximum_option_expiries": self.profile.maximum_option_expiries,
             "expiry_selection": "nearest_configured_expiries",
-            "quality": _option_quality(
-                source_contract_count=aggregate_source_count, rows=aggregate_rows,
-            ),
+            "quality": quality,
+            "source_contract_count": quality["source_contract_count"],
+            "retained_contract_count": quality["retained_contract_count"],
+            "valid_two_sided_price_count": quality["contracts_with_valid_two_sided_price"],
             "capture_timestamp_semantics": "provider_response_capture_not_exchange_quote_time",
             "quote_timestamp_status": "unavailable",
             "quote_freshness_eligible": False,
