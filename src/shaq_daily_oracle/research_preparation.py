@@ -250,6 +250,8 @@ def prepare_research_history(paths, profile, *, now, deadline_et, observer=None)
             except (FileNotFoundError, ValueError, OSError):
                 previous_state = {}
             if (previous_state.get("status") in {"completed_with_gaps", "already_checked_incomplete"}
+                    and not any(quality_by_symbol[symbol]["reason"] == "missing_previous_session"
+                                for symbol in pending)
                     and previous_state.get("history_source_identity") == source_identity
                     and previous_state.get("universe_sha256") == state["universe_sha256"]
                     and previous_state.get("benchmark_sha256") == state["benchmark_sha256"]

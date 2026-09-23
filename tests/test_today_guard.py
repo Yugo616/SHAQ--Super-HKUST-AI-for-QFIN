@@ -18,6 +18,13 @@ ET = ZoneInfo('America/New_York')
 
 
 class MondayMarket(FakeMarket):
+    def history(self, symbols, **kwargs):
+        # Monday's true preceding sessions; the base fixture is for September 4.
+        return {s: [
+            {"timestamp": "2026-09-10T16:00:00-04:00", "open": 99, "close": 100, "volume": 1000},
+            {"timestamp": "2026-09-11T16:00:00-04:00", "open": 100, "close": 101, "volume": 1100},
+        ] for s in symbols}
+
     def recent_intraday(self, symbols, *, cutoff):
         return {s: [{"timestamp": "2026-09-14T08:40:00-04:00", "close": 110, "volume": 100}]
                 for s in symbols}

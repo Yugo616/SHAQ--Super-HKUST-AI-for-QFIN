@@ -208,6 +208,32 @@ class ResearchPreparationIntegrationTests(unittest.TestCase):
         self.assertEqual(result["history_quality_by_symbol"]["AAA"]["reason"],
                          "missing_previous_session")
 
+    def test_missing_previous_close_can_recover_on_later_preparation(self):
+        config_path = self.paths.package_root / "config/price-history.json"
+        config_path.write_text(json.dumps({"lookback_calendar_days": 7}))
+        repaired = False
+
+        class RevisedYahoo:
+            def __init__(self, profile):
+                pass
+
+            def history(self, symbols, **kwargs):
+                days = ["2026-09-15", "2026-09-16", "2026-09-17", "2026-09-18"]
+                return {s: [{"timestamp": d, "close": 100} for d in days] +
+                        [{"timestamp": "2026-09-21", "close": 101 if repaired else None}]
+                        for s in symbols}
+
+        with (patch("shaq_daily_oracle.research_preparation.YFinanceProvider", RevisedYahoo),
+              patch("shaq_daily_oracle.research_preparation._wall_now", return_value=NOW)):
+            first = prepare_research_history(self.paths, self.profile, now=NOW,
+                                             deadline_et=NOW + timedelta(seconds=12))
+            repaired = True
+            second = prepare_research_history(self.paths, self.profile, now=NOW,
+                                              deadline_et=NOW + timedelta(seconds=12))
+        self.assertEqual(first["status"], "completed_with_gaps")
+        self.assertEqual(second["status"], "completed")
+        self.assertEqual(second["complete_history_count"], 4)
+
     def test_empty_response_is_checked_but_not_complete_history(self):
         calls = []
 

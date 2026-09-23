@@ -68,7 +68,7 @@ class CollectionRecoveryTests(unittest.TestCase):
         calls = []
         def history(ticker, **kwargs):
             calls.append(kwargs['interval'])
-            return pd.DataFrame({'Open': [123]},
+            return pd.DataFrame({'Open': [123], 'Close': [124]},
                                 index=pd.DatetimeIndex(['2026-09-18T08:30'], tz='America/New_York'))
         with tempfile.TemporaryDirectory() as directory, patch.object(yf.Ticker, 'history', history):
             provider = YFinanceProvider(DataProfile('test', 'unused'))
@@ -98,7 +98,7 @@ class CollectionRecoveryTests(unittest.TestCase):
         empty = False
         def history(ticker, **kwargs):
             calls.append(ticker.ticker)
-            return pd.DataFrame() if empty else pd.DataFrame({'Open': [123]},
+            return pd.DataFrame() if empty else pd.DataFrame({'Open': [123], 'Close': [124]},
                 index=pd.DatetimeIndex(['2026-09-18'], tz='UTC'))
         with tempfile.TemporaryDirectory() as directory, patch.object(yf.Ticker, 'history', history):
             provider = YFinanceProvider(DataProfile('test', 'unused'))
@@ -168,7 +168,7 @@ from curl_cffi.curl import CurlError
 from shaq_daily_oracle.collection_worker import main
 def history(ticker, **kwargs):
     if ticker.ticker == 'BBB': raise CurlError('private', code=28)
-    return pd.DataFrame({'Open':[123]}, index=pd.DatetimeIndex(['2026-09-18'],tz='UTC'))
+    return pd.DataFrame({'Open':[123], 'Close':[124]}, index=pd.DatetimeIndex(['2026-09-18'],tz='UTC'))
 with patch.object(yf.Ticker, 'history', history): main()
 '''
         with tempfile.TemporaryDirectory() as directory:

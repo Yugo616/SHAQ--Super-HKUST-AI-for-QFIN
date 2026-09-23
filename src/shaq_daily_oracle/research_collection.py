@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import json
 import math
+from functools import lru_cache
 from datetime import date, datetime, time, timedelta
 from html.parser import HTMLParser
 from pathlib import Path
@@ -136,18 +137,28 @@ def _sorted(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(records, key=lambda row: str(row.get("timestamp", "")))
 
 
+@lru_cache()
+def _prior_daily_sessions(session_date: date) -> tuple[date, date]:
+    prior = previous_market_session(session_date).session_date
+    return prior, previous_market_session(prior).session_date
+
+
 def _daily_state(records: list[dict[str, Any]], session_date: date) -> dict[str, Any]:
     eligible = []
     for row in _sorted(records):
         observed = _timestamp(row.get("timestamp"))
         close = _number(row.get("close"))
-        if observed is not None and observed.date() < session_date and close is not None:
+        if observed is not None and observed.date() < session_date and close is not None and close > 0:
             eligible.append((observed, row, close))
-    closes = [item[2] for item in eligible]
+    by_date = {item[0].date(): item[2] for item in eligible}
+    prior_session, before_prior = _prior_daily_sessions(session_date)
+    prior_close = by_date.get(prior_session)
+    before_close = by_date.get(before_prior)
     return {
-        "previous_close": closes[-1] if closes else None,
+        "previous_close": prior_close,
         "previous_return": (
-            closes[-1] / closes[-2] - 1 if len(closes) >= 2 and closes[-2] else None
+            prior_close / before_close - 1
+            if prior_close is not None and before_close is not None else None
         ),
         "bars": [item[1] for item in eligible[-252:]],
     }

@@ -11,6 +11,7 @@ from shaq_daily_oracle.data_providers import DataProfile
 from shaq_daily_oracle.research_batch import _tasks_for_domain
 from shaq_daily_oracle.research_collection import (
     ResearchCollectionError,
+    _daily_state,
     _premarket_state,
     collect_research_evidence,
 )
@@ -61,6 +62,26 @@ class FakeEvents:
 
 
 class ResearchCollectionTests(unittest.TestCase):
+    def test_missing_prior_session_close_does_not_borrow_older_close(self):
+        from datetime import date
+        rows = [
+            {"timestamp": "2026-09-21T00:00:00", "close": 100},
+            {"timestamp": "2026-09-22T00:00:00", "close": None},
+        ]
+        result = _daily_state(rows, date(2026, 9, 23))
+        self.assertIsNone(result["previous_close"])
+        self.assertIsNone(result["previous_return"])
+        self.assertEqual(len(result["bars"]), 1)
+
+    def test_prior_session_uses_exchange_calendar_over_holiday(self):
+        from datetime import date
+        result = _daily_state([
+            {"timestamp": "2026-09-03T00:00:00", "close": 100},
+            {"timestamp": "2026-09-04T00:00:00", "close": 101},
+        ], date(2026, 9, 8))
+        self.assertEqual(result["previous_close"], 101)
+        self.assertAlmostEqual(result["previous_return"], .01)
+
     def test_collection_uses_configured_history_window(self):
         import shutil
         from datetime import date
