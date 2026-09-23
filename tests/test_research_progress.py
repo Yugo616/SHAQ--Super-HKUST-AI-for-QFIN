@@ -12,6 +12,20 @@ from shaq_daily_oracle.research_progress import ResearchProgressLog, safe_observ
 
 
 class ResearchProgressLogTests(unittest.TestCase):
+    def test_display_events_do_not_repeat_full_evidence_packets(self):
+        from shaq_daily_oracle.research_progress import display_events
+        event = {'stage': 'report_validated', 'report': {
+            'thesis': 'Observed pressure', 'evidence_ids': ['ev-1'],
+            'evidence': [{'observed': {'daily_bars': list(range(400))}}],
+            'original': {'thesis': 'Observed pressure'}}}
+        view = display_events([event])
+        self.assertNotIn('evidence', view[0]['report'])
+        self.assertEqual(view[0]['report']['evidence_ids'], ['ev-1'])
+        self.assertEqual(view[0]['report']['original'], event['report']['original'])
+        self.assertIn('evidence', event['report'])
+        self.assertEqual(display_events([{'stage': 'model_started'}]),
+                         [{'stage': 'model_started'}])
+
     def test_completed_and_failed_resume_jobs_and_events_survive_service_reload(self):
         from shaq_daily_oracle.lab_service import LabService
         def service(root):

@@ -14,6 +14,19 @@ ET = ZoneInfo("America/New_York")
 _FORBIDDEN = {"raw_output", "raw_result", "prompt", "schema"}
 
 
+def display_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep reports and references, not a full evidence copy per UI event.
+
+    The append-only log and frozen batch retain the complete packets. Sending
+    them repeatedly for every historical domain bloats the native GUI bridge;
+    the progress view uses conclusions and evidence IDs, while replay owns data.
+    """
+    return [dict(event, report={key: value for key, value in event['report'].items()
+                              if key != 'evidence'})
+            if isinstance(event.get('report'), dict) else dict(event)
+            for event in events]
+
+
 class ResearchProgressLog:
     """Append-only, display-only research events; never part of batch identity."""
 

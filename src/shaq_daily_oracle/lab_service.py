@@ -1515,7 +1515,7 @@ class LabService:
 
     def job_statuses(self) -> list[dict[str, Any]]:
         from .job_corrections import corrected_status, observed_job_status
-        from .research_progress import summarize_job
+        from .research_progress import summarize_job, display_events
         stored = {}
         jobs_root = self.paths.research_root / "jobs"
         if jobs_root.is_dir():
@@ -1536,9 +1536,9 @@ class LabService:
         for job_id, row in stored.items():
             row = observed_job_status(self.paths.research_root, corrected_status(self.paths.research_root, row))
             stored[job_id] = row
-            row["research_progress"] = ResearchProgressLog(
+            row["research_progress"] = display_events(ResearchProgressLog(
                 self.paths.research_root / "jobs" / f"{job_id}-research.jsonl"
-            ).read()
+            ).read())
             row['progress_summary'] = summarize_job(row)
         return sorted(stored.values(), key=lambda row: str(row.get("started_at_et") or ""), reverse=True)
 
