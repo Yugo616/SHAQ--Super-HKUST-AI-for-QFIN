@@ -99,7 +99,13 @@ def reviewed_notice(destination, name, version):
 
 def source_notices(destination, name, version=None, source=None):
     if source is None:
-        with urllib.request.urlopen(f'https://pypi.org/pypi/{name}/{version}/json') as response:
+        pins_path = Path(__file__).parent / 'license-sources.json'
+        pins = json.loads(pins_path.read_text(encoding='utf-8')) if pins_path.exists() else {}
+        pinned = pins.get(name, {})
+        if pinned.get('version') == version:
+            source = {key:pinned[key] for key in ('url','sha256')}
+    if source is None:
+        with urllib.request.urlopen(f'https://pypi.org/pypi/{name}/{version}/json', timeout=30) as response:
             releases = json.load(response)['urls']
         candidate = next(item for item in releases if item['packagetype'] == 'sdist')
         source = {'url': candidate['url'], 'sha256': candidate['digests']['sha256']}
@@ -107,7 +113,8 @@ def source_notices(destination, name, version=None, source=None):
     archives.mkdir(exist_ok=True)
     archive = archives / source['url'].rsplit('/', 1)[-1]
     if not archive.is_file():
-        urllib.request.urlretrieve(source['url'], archive)
+        with urllib.request.urlopen(source['url'], timeout=30) as response, archive.open('wb') as output:
+            shutil.copyfileobj(response, output)
     if hashlib.sha256(archive.read_bytes()).hexdigest() != source['sha256']:
         raise RuntimeError(f'Source digest mismatch: {archive.name}')
     notices = []

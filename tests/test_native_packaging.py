@@ -20,6 +20,23 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class NativePackagingTests(unittest.TestCase):
+    def test_pinned_license_archive_avoids_redundant_pypi_lookup(self):
+        import tarfile
+        spec=importlib.util.spec_from_file_location('pinned_notice_build',ROOT/'packaging/build_desktop.py')
+        build=importlib.util.module_from_spec(spec);spec.loader.exec_module(build)
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary);destination=root/'build'/'third-party'
+            archive=root/'build'/'license-sources'/'sample-1.2.3.tar.gz'
+            archive.parent.mkdir(parents=True)
+            content=b'Sample license'; info=tarfile.TarInfo('sample-1.2.3/LICENSE');info.size=len(content)
+            with tarfile.open(archive,'w:gz') as tar:tar.addfile(info,io.BytesIO(content))
+            source={'url':'https://example.org/sample-1.2.3.tar.gz','sha256':hashlib.sha256(archive.read_bytes()).hexdigest()}
+            (root/'license-sources.json').write_text(json.dumps({'sample':{'version':'1.2.3',**source}}))
+            with patch.object(build,'__file__',str(root/'build_desktop.py')),patch.object(build.urllib.request,'urlopen',side_effect=AssertionError('network lookup')):
+                paths,result=build.source_notices(destination,'sample','1.2.3')
+                self.assertEqual((destination/paths[0]).read_bytes(),content)
+                self.assertEqual(result['sha256'],source['sha256'])
+
     def test_missing_updater_stops_build_before_smoke_can_mask_it(self):
         spec = importlib.util.spec_from_file_location('startup_build_check', ROOT/'packaging/build_desktop.py')
         build = importlib.util.module_from_spec(spec)

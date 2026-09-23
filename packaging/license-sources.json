@@ -1,0 +1,57 @@
+{
+  "bcolz-zipline": {
+    "version": "1.13.0",
+    "url": "https://files.pythonhosted.org/packages/ea/31/d67d966443addd1c267b8bbbca86cbe44dc48e5873e6fe5ab6ba258e6f61/bcolz_zipline-1.13.0.tar.gz",
+    "sha256": "51166ad88e20ba70af7677b9402ffdecfe327ed4d0d15d59a9c249323bf11433"
+  },
+  "Cython": {
+    "version": "3.2.4",
+    "url": "https://files.pythonhosted.org/packages/91/85/7574c9cd44b69a27210444b6650f6477f56c75fee1b70d7672d3e4166167/cython-3.2.4.tar.gz",
+    "sha256": "84226ecd313b233da27dc2eb3601b4f222b8209c3a7216d8733b031da1dc64e6"
+  },
+  "iso4217": {
+    "version": "1.16.20260101",
+    "url": "https://files.pythonhosted.org/packages/43/98/a5f28006515c24de82c3d76f79e13dd3fbdf71431fdb158505ee45008908/iso4217-1.16.20260101.tar.gz",
+    "sha256": "6a5afba6acb01cad8045f81e2b96f6adbea04f0c524ae21f317ac4ca11c3bdd6"
+  },
+  "proxy_tools": {
+    "version": "0.1.0",
+    "url": "https://files.pythonhosted.org/packages/f2/cf/77d3e19b7fabd03895caca7857ef51e4c409e0ca6b37ee6e9f7daa50b642/proxy_tools-0.1.0.tar.gz",
+    "sha256": "ccb3751f529c047e2d8a58440d86b205303cf0fe8146f784d1cbcd94f0a28010"
+  },
+  "pyluach": {
+    "version": "2.3.0",
+    "url": "https://files.pythonhosted.org/packages/11/11/42568c1568a75f8803c59f26d29af01a0890352b7a8e03d41ecda8bfb5dd/pyluach-2.3.0.tar.gz",
+    "sha256": "ec6e30669d1df50c9ca160486da44a8195bb4c7a5d3d533990d0c5b03accd281"
+  },
+  "pyobjc-core": {
+    "version": "12.2.2",
+    "url": "https://files.pythonhosted.org/packages/a5/78/abc4ce5920305780aeb36b4067a86253378b36e29ba96673a3deb02eb03a/pyobjc_core-12.2.2.tar.gz",
+    "sha256": "3906452339cd06a3bb07df103c2511d4cb0f7a22d8771c0b802eba15d9a642b6"
+  },
+  "pyobjc-framework-Security": {
+    "version": "12.2.2",
+    "url": "https://files.pythonhosted.org/packages/c2/92/c304b7fc3a0fe7484a2a3cf25711e70c8fa2b6969d82f4010e35b9af2164/pyobjc_framework_security-12.2.2.tar.gz",
+    "sha256": "33efab1ff7d18570148f8f3ddd44eca305f733aee00b9115d5263bef81018f65"
+  },
+  "pyobjc-framework-UniformTypeIdentifiers": {
+    "version": "12.2.2",
+    "url": "https://files.pythonhosted.org/packages/70/c6/31ac40c4d918baa36ca06d196bfec0f47f804a74684988cf424060469d98/pyobjc_framework_uniformtypeidentifiers-12.2.2.tar.gz",
+    "sha256": "12f8ba77dcc949ffb9f0f48743cae326aebec8e69cb1ac55a1d1e04dca7bd59a"
+  },
+  "velopack": {
+    "version": "1.2.0",
+    "url": "https://files.pythonhosted.org/packages/28/be/2fd3634075bf22ca45ebf968d069c80ac3e254a48b46441daa5ddd065fd3/velopack-1.2.0.tar.gz",
+    "sha256": "800cb0bd27eed7bf82269e41e4d84c4131b93b21996724443b8f7a7e71238104"
+  },
+  "tables": {
+    "version": "3.11.1",
+    "url": "https://files.pythonhosted.org/packages/cc/a3/d213ebe7376d48055bd55a29cd9f99061afa0dcece608f94a5025d797b0a/tables-3.11.1.tar.gz",
+    "sha256": "78abcf413091bc7c1e4e8c10fbbb438d1ac0b5a87436c5b972c3e8253871b6fb"
+  },
+  "quickjs": {
+    "version": "1.19.4",
+    "url": "https://files.pythonhosted.org/packages/f1/a7/8fac2e213db8108d8108e9f1ee8d6c2abfcbe943238b0960585c26666862/quickjs-1.19.4.tar.gz",
+    "sha256": "1205953abc24ff757f4a795304d5d61e4bf1e555c9ef6ec96a132d4b95535484"
+  }
+}
