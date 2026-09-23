@@ -59,6 +59,7 @@ def warm_previous_daily_bars(
         raise ValueError("invalid prior daily history preparation request")
 
     completed = collected = no_data = 0
+    failed_symbols = []
 
     def result(status: str, **details) -> dict:
         return {
@@ -67,7 +68,7 @@ def warm_previous_daily_bars(
             "completed_count": completed,
             "collected_count": collected,
             "no_data_count": no_data,
-            "pending_symbols": symbols[completed:],
+            "pending_symbols": list(dict.fromkeys(failed_symbols + symbols[completed:])),
             **details,
         }
 
@@ -97,17 +98,21 @@ def warm_previous_daily_bars(
             return result("provider_error", failed_batch=group,
                           failure_kind="protocol_error")
         for symbol in group:
-            status = "collected" if rows.get(symbol) else "no_data"
+            errors = {d.get('symbol') for d in getattr(provider,'diagnostics',[])
+                      if d.get('status') == 'provider_error'}
+            status = "collected" if rows.get(symbol) else ("provider_error" if symbol in errors else "no_data")
+            if status == "provider_error":
+                failed_symbols.append(symbol)
             completed += 1
             if status == "collected":
                 collected += 1
-            else:
+            elif status == 'no_data':
                 no_data += 1
             if progress is not None:
                 progress({"status": status, "symbol": symbol,
                           "completed_count": completed,
                           "requested_count": len(symbols)})
-    return result("completed")
+    return result("partial_failure" if failed_symbols else "completed")
 
 
 def prepare_research_history(paths, profile, *, now, deadline_et, observer=None):
@@ -271,6 +276,21 @@ def prepare_research_history(paths, profile, *, now, deadline_et, observer=None)
             monotonic_deadline = _monotonic() + (deadline_et - now_et).total_seconds()
 
             class BudgetedDailyProvider:
+                diagnostics = []
+                market = None
+
+                @property
+                def supports_partial_history(self):
+                    return getattr(self.market,'supports_partial_history',False)
+
+                def recover_history(self, group, *, start, end):
+                    recover=getattr(self.market,'recover_history',None)
+                    return recover(group,start=start,end=end) if recover is not None else {}
+
+                def retain_history_sources(self, rows):
+                    if self.market and hasattr(self.market,'retain_history_sources'):
+                        self.market.retain_history_sources(rows)
+
                 def history(self, group, *, start, end, interval="1d", prepost=False):
                     remaining = min(
                         (deadline_et - _wall_now()).total_seconds(),
@@ -291,8 +311,15 @@ def prepare_research_history(paths, profile, *, now, deadline_et, observer=None)
                         paths.research_root / "cache/collection_requests"
                         / now_et.date().isoformat() / source_identity)
                     market.history_source_identity = source_identity
-                    return market.history(group, start=start, end=end,
-                                          interval=interval, prepost=prepost)
+                    from .public_history_recovery import wrap_public_recovery
+                    market = wrap_public_recovery(market, paths.package_root,
+                        checkpoint_root=market.history_checkpoint_root, etfs=benchmark_symbols)
+                    self.market = market
+                    try:
+                        return market.history(group, start=start, end=end,
+                                              interval=interval, prepost=prepost)
+                    finally:
+                        self.diagnostics.extend(getattr(market,'diagnostics',[]))
 
             cache.provider = BudgetedDailyProvider()
             state.update(status="running", updated_at_et=_wall_now().isoformat())
@@ -313,7 +340,7 @@ def prepare_research_history(paths, profile, *, now, deadline_et, observer=None)
                     ]
                     if event["status"] == "collected":
                         state["collected_count"] += 1
-                    else:
+                    elif event["status"] == "no_data":
                         state["no_data_count"] += 1
                 state["last_event"] = event
                 state["updated_at_et"] = _wall_now().isoformat()

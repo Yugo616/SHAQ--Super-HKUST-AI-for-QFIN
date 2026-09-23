@@ -35,6 +35,7 @@
     ,"REF-OPENBB-PROVIDERS-001": {"title": "OpenBB Provider Extensions", "url": "https://docs.openbb.co/odp/python/extensions/providers"}
     ,"REF-FINANCE-DATABASE-001": {"title": "FinanceDatabase Instrument Metadata", "url": "https://github.com/JerBouma/FinanceDatabase"}
     ,"REF-YFINANCE-001": {"title": "yfinance Python API", "url": "https://ranaroussi.github.io/yfinance/reference/yfinance.functions.html"}
+    ,"REF-NASDAQ-HISTORY-001": {"title": "Nasdaq Historical Data", "url": "https://www.nasdaq.com/market-activity/quotes/historical"}
   },
   "decisions": {
     "DEC-CUTOFF-001": "All formal evidence must exist by the configured premarket cutoff.",

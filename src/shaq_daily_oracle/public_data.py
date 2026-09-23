@@ -59,6 +59,7 @@ class DailyBarCache:
             return self.provider.history(symbols, start=start, end=end, interval=interval, prepost=prepost)
         from .data_providers import DataProviderError
         output, groups, cached_by_symbol = {}, {}, {}
+        last_failure = None
         for symbol in symbols:
             cached = self._read(symbol)
             cached_by_symbol[symbol] = cached
@@ -73,13 +74,19 @@ class DailyBarCache:
         for beginning, group in groups.items():
             try:
                 fresh = self.provider.history(group, start=beginning, end=end, interval="1d")
-            except DataProviderError:
+            except DataProviderError as exc:
+                partial = {}
                 recover = getattr(self.provider, 'recover_history', None)
                 if recover is not None:
                     partial = recover(group, start=beginning, end=end)
                     for symbol, rows in partial.items():
                         self._save(symbol, cached_by_symbol[symbol], rows, start=beginning, end=end)
-                raise
+                if not getattr(self.provider, 'supports_partial_history', False):
+                    raise
+                # A failed symbol must not invalidate independent successful symbols.
+                # Preserve its error in provider diagnostics and never return stale rows.
+                last_failure = exc
+                fresh = partial
             for symbol in group:
                 rows = fresh.get(symbol, [])
                 if not rows:
@@ -88,6 +95,11 @@ class DailyBarCache:
                     continue
                 full = self._save(symbol, cached_by_symbol[symbol], rows, start=beginning, end=end)
                 output[symbol] = [r for r in full if start.isoformat() <= r["timestamp"][:10] < end.isoformat()]
+        if last_failure is not None and not any(output.values()):
+            raise last_failure
+        retain = getattr(self.provider, 'retain_history_sources', None)
+        if retain is not None:
+            retain([row for rows in output.values() for row in rows])
         return output
 
 

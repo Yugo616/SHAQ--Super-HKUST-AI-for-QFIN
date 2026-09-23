@@ -123,7 +123,7 @@ def call_in_worker(operation, profile, payload, *, progress_observer=None):
 def execute_operation(operation, payload):
     if operation == 'ping':
         return {'worker': 'yahoo-collection', 'protocol_version': 1}
-    if operation not in {'history', 'option_surface'}:
+    if operation not in {'history', 'option_surface', 'public_history'}:
         raise ValueError('unsupported collection operation')
     from .data_providers import DataProfile, YFinanceProvider
     from curl_cffi.requests import Session
@@ -144,6 +144,15 @@ def execute_operation(operation, payload):
     provider = YFinanceProvider(profile, progress_observer=progress_observer)
     provider.history_checkpoint_root = payload.get('history_checkpoint_root')
     provider.history_source_identity = payload.get('history_source_identity', profile.history_identity())
+    if operation == 'public_history':
+        from .public_history_recovery import PublicHistoryRecovery
+        recovery = PublicHistoryRecovery(provider, payload['recovery_config'],
+            checkpoint_root=payload.get('history_checkpoint_root'), etfs=payload.get('etfs', []))
+        rows = recovery._history_inline(payload['symbols'],
+            start=date.fromisoformat(payload['start']), end=date.fromisoformat(payload['end']),
+            interval=payload.get('interval', '1d'), prepost=payload.get('prepost', False))
+        return {'rows': rows, 'diagnostics': recovery.diagnostics,
+                'source_documents': recovery.source_documents}
     yf = provider._module()
     # This directory is parent-independent and never contains a durable request.
     # ExitStack closes the session/databases before deleting it (also on Windows).
@@ -177,7 +186,7 @@ def main():
     stage = 'startup'
     try:
         request = json.load(incoming)
-        if request.get('operation') in {'history', 'option_surface', 'ping'}:
+        if request.get('operation') in {'history', 'option_surface', 'public_history', 'ping'}:
             stage = request['operation']
         # Provider prints must not corrupt the result channel; stderr is discarded
         # by the parent and never written into evidence or job records.

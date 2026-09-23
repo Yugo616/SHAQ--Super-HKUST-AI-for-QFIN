@@ -374,6 +374,10 @@ def collect_research_evidence(
         # One session only: a new trading day independently re-observes historical prices.
         market.history_checkpoint_root = (history_cache_root.parent / 'collection_requests'
                                           / session.session_date.isoformat() / profile.history_identity())
+    if market_provider is None and isinstance(market, YFinanceProvider):
+        from .public_history_recovery import wrap_public_recovery
+        market = wrap_public_recovery(market, package_root,
+            checkpoint_root=market.history_checkpoint_root, etfs=benchmark_symbols)
     public_config_path = package_root / "config/public-data.json"
     public_config = json.loads(public_config_path.read_text(encoding="utf-8")) if public_config_path.exists() else None
     if history_cache_root is not None and public_config:
@@ -527,6 +531,13 @@ def collect_research_evidence(
             for symbol in candidate_symbols
         }
     files: dict[str, bytes] = {}
+    # Recovery receipts are audit artifacts, not additional votes or model tasks.
+    for digest, source in getattr(market, 'source_documents', {}).items():
+        files[f'raw/provider_sources/{digest}.json'] = _json_bytes(source)
+    files['raw/market_collection_status.json'] = _json_bytes({
+        'observations': getattr(market, 'diagnostics', []),
+        'request_profile': profile.source_dict(),
+    })
     if screening_rules:
         files["raw/screening.json"] = _json_bytes({"pool": full_pool, "candidate_sets": candidate_sets})
     records: list[dict[str, Any]] = []

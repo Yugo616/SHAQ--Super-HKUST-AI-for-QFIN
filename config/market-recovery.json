@@ -1,0 +1,22 @@
+{
+  "enabled": true,
+  "parameter_bindings": {
+    "enabled": ["REF-YFINANCE-001", "DEC-DATA-PROVIDERS-001", "EXP-CROSS-PLATFORM-LAB-001"],
+    "chart_url": ["REF-YFINANCE-001", "DEC-DATA-PROVIDERS-001", "EXP-CROSS-PLATFORM-LAB-001"],
+    "daily_backup_url": ["REF-NASDAQ-HISTORY-001", "DEC-DATA-PROVIDERS-001", "EXP-CROSS-PLATFORM-LAB-001"],
+    "daily_backup_max_rows": ["REF-NASDAQ-HISTORY-001", "DEC-DATA-PROVIDERS-001", "EXP-CROSS-PLATFORM-LAB-001"],
+    "max_concurrency": ["REF-YFINANCE-001", "DEC-DATA-PROVIDERS-001", "EXP-CROSS-PLATFORM-LAB-001"],
+    "scope": ["REF-NASDAQ-HISTORY-001", "DEC-DATA-PROVIDERS-001", "EXP-CROSS-PLATFORM-LAB-001"],
+    "references": ["REF-NASDAQ-HISTORY-001", "DEC-DATA-PROVIDERS-001", "EXP-CROSS-PLATFORM-LAB-001"]
+  },
+  "schema_version": 1,
+  "chart_url": "https://query2.finance.yahoo.com/v8/finance/chart/{symbol}",
+  "daily_backup_url": "https://api.nasdaq.com/api/quote/{symbol}/historical",
+  "daily_backup_max_rows": 5000,
+  "max_concurrency": 4,
+  "scope": "research_history_and_chart_transport_only_not_labels_or_fills",
+  "references": [
+    "https://github.com/ranaroussi/yfinance/blob/main/yfinance/scrapers/history.py",
+    "https://www.nasdaq.com/market-activity/quotes/historical"
+  ]
+}
