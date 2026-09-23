@@ -149,7 +149,12 @@ def prepare_research_history(paths, profile, *, now, deadline_et, observer=None)
         universe_path = paths.package_root / universe_path
     universe_path = universe_path.resolve()
     package_root = paths.package_root.resolve()
-    if not universe_path.is_relative_to(package_root):
+    # PyInstaller's macOS bundle links Frameworks/config to Resources/config.
+    # Accept shipped configuration after resolving that link, but not a CSV
+    # symlink escaping either of the versioned resource roots.
+    config_root = (package_root / "config").resolve()
+    if not (universe_path.is_relative_to(package_root)
+            or universe_path.is_relative_to(config_root)):
         raise ValueError("preparation requires a versioned package universe")
     benchmark_path = package_root / "config/market-benchmarks.csv"
     members = load_versioned_universe(universe_path, cutoff=now_et)

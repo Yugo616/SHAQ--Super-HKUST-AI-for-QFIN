@@ -54,6 +54,33 @@ class ResearchPreparationIntegrationTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
+    def test_packaged_config_symlink_is_a_valid_universe(self):
+        # PyInstaller macOS relocates data from Frameworks into sibling Resources.
+        # Resolving the universe must not reject this shipped, versioned config.
+        package = self.paths.package_root
+        resources = package.parent / "Resources"
+        resources.mkdir()
+        (package / "config").rename(resources / "config")
+        (package / "config").symlink_to(resources / "config", target_is_directory=True)
+        with (patch("shaq_daily_oracle.research_preparation._wall_now", return_value=NOW),
+              patch("shaq_daily_oracle.research_preparation.warm_previous_daily_bars",
+                    return_value={"status": "deadline_exceeded", "completed_count": 0,
+                                  "collected_count": 0, "no_data_count": 0,
+                                  "pending_symbols": ["AAA", "BBB", "SPY", "XLK"]})):
+            result = prepare_research_history(self.paths, self.profile, now=NOW,
+                                             deadline_et=NOW + timedelta(seconds=12))
+        self.assertEqual(result["requested_count"], 4)
+        self.assertEqual(result["status"], "deadline_exceeded")
+
+    def test_config_universe_symlink_cannot_escape_packaged_config(self):
+        target = self.paths.package_root / "config/research-universe.csv"
+        outside = self.paths.package_root.parent / "outside.csv"
+        target.rename(outside)
+        target.symlink_to(outside)
+        with self.assertRaisesRegex(ValueError, "versioned package universe"):
+            prepare_research_history(self.paths, self.profile, now=NOW,
+                                     deadline_et=NOW + timedelta(seconds=12))
+
     def test_warms_only_versioned_prior_daily_cache_under_remaining_worker_budget(self):
         # Catches a current-session fetch, unbounded worker, wrong cache root or identity drift.
         calls = []
