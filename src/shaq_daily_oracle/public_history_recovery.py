@@ -184,6 +184,32 @@ class PublicHistoryRecovery:
                 output[symbol]=rows
         return output
 
+    def reuse_prepared_history(self, symbol, rows, *, start, end):
+        """Use verified T-1 bars already refreshed this morning, not stale caches.
+
+        Collection must not redownload every symbol just because preparation
+        advanced the last row and thereby changed the overlap request key.
+        Historical replays and next-day collections still perform their refresh.
+        """
+        now = datetime.now(ET)
+        if end != now.date() or not _daily_complete(rows, start, end):
+            return False
+        latest = max(rows, key=lambda row: row['timestamp'])
+        try:
+            captured = datetime.fromisoformat(latest.get('captured_at', ''))
+            if (captured.tzinfo is None or captured.astimezone(ET).date() != end
+                    or captured > now or not latest.get('source_response_sha256')):
+                return False
+            self.retain_history_sources(rows)
+        except (ValueError, TypeError, DataProviderError):
+            return False
+        detail = {'symbol': symbol, 'interval': '1d', 'status': 'reused'}
+        self.diagnostics.append(detail)
+        from .research_progress import safe_observe
+        safe_observe(self.primary.progress_observer, stage='data_symbol_checked',
+                     source='yahoo-chart+nasdaq-public-history', **detail)
+        return True
+
     def _fetch(self, url, params):
         from curl_cffi.requests import Session
         from .data_retry import failure_diagnostic, failure_message

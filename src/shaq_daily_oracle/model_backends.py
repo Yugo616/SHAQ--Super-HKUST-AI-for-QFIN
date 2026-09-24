@@ -428,6 +428,26 @@ def _local_call_failure(backend, completed, *, prompt=''):
                       r"usage limit reached|insufficient_quota|quota exceeded)\b", output)
     if quota:
         return ModelBackendError('quota exhausted', diagnostic={'kind': 'quota', 'backend': backend})
+    # Only explicit CLI error lines are transport authority, never generated
+    # model text. Publish an allowlisted description, not raw stderr/evidence.
+    errors = re.findall(r'(?im)^ERROR:\s*(.+)$', output)
+    for line in reversed(errors):
+        status_match = re.search(r'(?i)\b(?:unexpected status|HTTP(?:/\d(?:\.\d)?)?)\s+(\d{3})\b', line)
+        if status_match:
+            status = int(status_match.group(1))
+            description = ('登录失效，请重新连接' if status == 401 else
+                           '服务拒绝访问，请检查权限' if status == 403 else
+                           '请求限频，可稍后重试' if status == 429 else
+                           '服务暂时不可用' if 500 <= status <= 599 else
+                           '服务拒绝请求，请检查连接配置')
+            return ModelBackendError(f'{backend}：{description}（HTTP {status}）',
+                diagnostic={'kind': 'http', 'backend': backend, 'status': status,
+                            'returncode': completed.returncode})
+        if re.match(r'(?i)(?:stream disconnected before completion|error sending request|'
+                    r'connection (?:reset|refused)|request timed out)\b', line):
+            return ModelBackendError(f'{backend}：模型连接中断，可重试未完成任务',
+                diagnostic={'kind': 'connection', 'backend': backend,
+                            'returncode': completed.returncode})
     detail = f'退出码 {completed.returncode}'
     return ModelBackendError(f'{backend} 本地调用失败：{detail}',
         diagnostic={'kind': 'local_call', 'backend': backend, 'returncode': completed.returncode})

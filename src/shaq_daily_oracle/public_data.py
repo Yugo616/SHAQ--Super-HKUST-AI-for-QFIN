@@ -65,6 +65,13 @@ class DailyBarCache:
             cached_by_symbol[symbol] = cached
             # A later replay must not choose a fetch start after this request's end.
             rows = [r for r in cached.get('rows', []) if str(r['timestamp'])[:10] < end.isoformat()]
+            requested_rows = [r for r in rows if r['timestamp'][:10] >= start.isoformat()]
+            reuse = getattr(self.provider, 'reuse_prepared_history', None)
+            if (reuse is not None and cached.get('start', '9999') <= start.isoformat()
+                    and cached.get('end', '') >= end.isoformat()
+                    and reuse(symbol, requested_rows, start=start, end=end)):
+                output[symbol] = requested_rows
+                continue
             recent = max((str(r.get("timestamp", ""))[:10] for r in rows), default="")
             beginning = start
             if recent and cached.get("start", "9999") <= start.isoformat():
