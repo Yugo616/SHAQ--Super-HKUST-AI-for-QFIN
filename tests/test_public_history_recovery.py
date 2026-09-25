@@ -12,6 +12,38 @@ ET = ZoneInfo('America/New_York')
 
 
 class PublicHistoryRecoveryTests(unittest.TestCase):
+    def test_chart_transport_failover_retains_uri_and_reuses_working_host(self):
+        from shaq_daily_oracle.public_history_recovery import PublicHistoryRecovery
+        from shaq_daily_oracle.data_providers import DataProviderError
+        from unittest.mock import Mock
+        primary=Mock()
+        primary._request_with_retry.side_effect=lambda call, **kwargs: call()
+        provider=PublicHistoryRecovery(primary,{'chart_url':'https://primary.test/{symbol}',
+            'chart_backup_urls':['https://backup.test/{symbol}']})
+        provider._fetch=Mock(side_effect=[DataProviderError('TLS',diagnostic={'kind':'connection_error'}),
+            (self.chart(),'a'*64,'2026-09-23T08:00:00-04:00'),
+            (self.chart(),'b'*64,'2026-09-23T08:01:00-04:00')])
+        first=provider._chart('AAA',start=date(2026,9,22),end=date(2026,9,23),interval='1d',prepost=False)
+        second=provider._chart('AAA',start=date(2026,9,22),end=date(2026,9,23),interval='1d',prepost=False)
+        self.assertEqual(first[0]['source_uri'],'https://backup.test/AAA')
+        self.assertEqual(second[0]['source_response_sha256'],'b'*64)
+        self.assertEqual([c.args[0] for c in provider._fetch.call_args_list],
+                         ['https://primary.test/AAA','https://backup.test/AAA','https://backup.test/AAA'])
+
+    def test_chart_does_not_failover_permissions_rate_limit_or_bad_payload(self):
+        from shaq_daily_oracle.public_history_recovery import PublicHistoryRecovery
+        from shaq_daily_oracle.data_providers import DataProviderError
+        from unittest.mock import Mock
+        for kind in ('not_entitled','rate_limit','invalid_response'):
+            with self.subTest(kind=kind):
+                primary=Mock();primary._request_with_retry.side_effect=lambda call,**kwargs:call()
+                provider=PublicHistoryRecovery(primary,{'chart_url':'https://primary.test/{symbol}',
+                    'chart_backup_urls':['https://backup.test/{symbol}']})
+                provider._fetch=Mock(side_effect=DataProviderError('stop',diagnostic={'kind':kind}))
+                with self.assertRaises(DataProviderError):
+                    provider._chart('AAA',start=date(2026,9,22),end=date(2026,9,23),interval='5m',prepost=True)
+                self.assertEqual(provider._fetch.call_count,1)
+
     def test_recovery_identity_ignores_reference_annotations(self):
         from shaq_daily_oracle.public_history_recovery import PublicHistoryRecovery
         from shaq_daily_oracle.data_providers import DataProfile, YFinanceProvider

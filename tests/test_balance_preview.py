@@ -59,7 +59,7 @@ class BalancePreviewTests(unittest.TestCase):
         self.assertIsNone(result['results'][1]['account_balance'])
         self.assertFalse(result['results'][1]['balance_preview_counted'])
         accounts={r['method_identity']:r for r in result['accounts']}
-        self.assertIsNone(accounts['one']['equity'])
+        self.assertEqual(accounts['one']['equity'],10003)
         self.assertEqual(accounts['two']['equity'],10008)
         self.assertEqual(len(accounts['one']['curve']),1)
 

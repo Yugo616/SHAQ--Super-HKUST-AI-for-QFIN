@@ -136,6 +136,7 @@ class PublicHistoryRecovery:
         self.diagnostics = []
         self.source_documents = {}
         self.supports_partial_history = True
+        self._working_chart_url = config.get('chart_url')
 
     def __getattr__(self, name):
         return getattr(self.primary, name)
@@ -237,11 +238,28 @@ class PublicHistoryRecovery:
     def _chart(self, symbol, *, start, end, interval, prepost):
         left = int(datetime.combine(start, time.min, ET).timestamp())
         right = int(datetime.combine(end, time.min, ET).timestamp())
-        uri = self.config['chart_url'].format(symbol=quote(_yahoo_symbol(symbol), safe=''))
-        body, digest, captured = self.primary._request_with_retry(
-            lambda: self._fetch(uri, {'period1': left, 'period2': right, 'interval': interval,
-                                     'includePrePost': str(prepost).lower(), 'events': 'splits,div'}),
-            stage='history', symbol=symbol)
+        templates = list(dict.fromkeys([self._working_chart_url, self.config['chart_url'],
+                                        *self.config.get('chart_backup_urls', [])]))
+        params = {'period1': left, 'period2': right, 'interval': interval,
+                  'includePrePost': str(prepost).lower(), 'events': 'splits,div'}
+        for index, template in enumerate(templates):
+            uri = template.format(symbol=quote(_yahoo_symbol(symbol), safe=''))
+            try:
+                body, digest, captured = self.primary._request_with_retry(
+                    lambda: self._fetch(uri, params), stage='history', symbol=symbol)
+            except DataProviderError as exc:
+                # Alternate transport is not a way around authorization or rate
+                # limits, and cannot replace absent/invalid market observations.
+                if (exc.diagnostic.get('kind') not in {'connection_error', 'timeout', 'provider_unavailable'}
+                        or index == len(templates) - 1):
+                    raise
+                from .research_progress import safe_observe
+                safe_observe(self.primary.progress_observer, stage='data_source_fallback',
+                             source='yahoo-chart', symbol=symbol, interval=interval,
+                             failure_kind=exc.diagnostic.get('kind'), status='running')
+                continue
+            self._working_chart_url = template
+            break
         # Provider-declared absence is distinct from a transport failure.
         error = (body.get('chart') or {}).get('error') or {}
         if error.get('code') == 'Not Found':

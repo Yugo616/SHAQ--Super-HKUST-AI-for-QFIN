@@ -3,6 +3,7 @@
   "parameter_bindings": {
     "enabled": ["REF-YFINANCE-001", "DEC-DATA-PROVIDERS-001", "EXP-CROSS-PLATFORM-LAB-001"],
     "chart_url": ["REF-YFINANCE-001", "DEC-DATA-PROVIDERS-001", "EXP-CROSS-PLATFORM-LAB-001"],
+    "chart_backup_urls": ["REF-YFINANCE-001", "DEC-DATA-PROVIDERS-001", "EXP-CROSS-PLATFORM-LAB-001"],
     "daily_backup_url": ["REF-NASDAQ-HISTORY-001", "DEC-DATA-PROVIDERS-001", "EXP-CROSS-PLATFORM-LAB-001"],
     "daily_backup_max_rows": ["REF-NASDAQ-HISTORY-001", "DEC-DATA-PROVIDERS-001", "EXP-CROSS-PLATFORM-LAB-001"],
     "max_concurrency": ["REF-YFINANCE-001", "DEC-DATA-PROVIDERS-001", "EXP-CROSS-PLATFORM-LAB-001"],
@@ -11,6 +12,7 @@
   },
   "schema_version": 1,
   "chart_url": "https://query2.finance.yahoo.com/v8/finance/chart/{symbol}",
+  "chart_backup_urls": ["https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"],
   "daily_backup_url": "https://api.nasdaq.com/api/quote/{symbol}/historical",
   "daily_backup_max_rows": 5000,
   "max_concurrency": 4,

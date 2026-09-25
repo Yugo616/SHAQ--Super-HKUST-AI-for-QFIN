@@ -51,7 +51,6 @@ def project_saved_balances(saved, daily_rows):
                     and isinstance(pnl, (int, float)) and not isinstance(pnl, bool)
                     and math.isfinite(pnl))
         if not complete:
-            account['equity'] = None
             continue
         account['_pnls'].append(pnl)
         cumulative = math.fsum(account['_pnls'])
