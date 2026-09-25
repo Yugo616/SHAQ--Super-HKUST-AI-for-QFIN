@@ -311,11 +311,19 @@ class ResearchDashboardIndex:
             name = displayed.get((row.get('batch_id'), row.get('variant_key')))
             if name:
                 row['model'] = name
-        return {
+        result = {
             "generated_at_et": datetime.now(ZoneInfo("America/New_York")).isoformat(),
             "batches": batches, "versions": versions, "performance": performance,
             "latest": latest, "daily_results": daily_results, "virtual_accounts": accounts,
         }
+        # Local presentation preference only. The settlement view and official
+        # performance payload above remain unchanged for every caller.
+        preference = _read(self.batches_root.parent / 'balance_preview.json', {})
+        if isinstance(preference, dict) and preference.get('enabled') is True:
+            from .balance_preview import project_saved_balances
+            if accounts.get('rules'):
+                result['balance_preview'] = project_saved_balances(accounts, daily_results)
+        return result
 
     def account_rows(self, daily_results):
         """Join minute observations only at the execution/account boundary."""

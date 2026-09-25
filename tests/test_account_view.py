@@ -5,6 +5,17 @@ import subprocess
 
 
 class AccountViewTests(unittest.TestCase):
+    def test_local_preview_chart_includes_saved_late_results_without_extra_notice(self):
+        html=self.render('compactOverviewHtml',dict(local_balance_preview=True,
+            accounts=[dict(account_id='a',equity=10005,label='甲方法',curve=[])],
+            results=[dict(account_id='a',trade_date='2026-09-09',status='final',scope='late',
+                          balance_preview_counted=True,account_balance=10005,net_pnl=5)]))
+        self.assertIn('$10,005.00',html)
+        self.assertIn('$5.00',html)
+        self.assertIn('<circle',html)
+        self.assertNotIn('尚无已计入',html)
+        self.assertNotIn('预览',html)
+
     def test_single_balance_point_is_explained_not_invented_history(self):
         html = self.render('plot', [{'method_name':'Example', 'curve':[
             {'date':'2026-09-16', 'equity':10054.57}]}])

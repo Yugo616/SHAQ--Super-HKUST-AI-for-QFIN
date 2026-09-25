@@ -67,7 +67,7 @@ if(typeof document!=='undefined'){
 
   renderHistory=function(){
     const all=state.data.dashboard.daily_results||[],versions=state.data.versions||[];
-    const accounts=state.data.dashboard.virtual_accounts||{},filters=wb.filters;
+    const accounts=state.data.dashboard.balance_preview||state.data.dashboard.virtual_accounts||{},filters=wb.filters;
     const identities=new Map(all.map(row=>{const meta=historyIdentity(row);return [meta.filter_key,meta.method_name]}));
     const models=[...new Set(all.map(row=>row.model||'未记录模型'))];
     const rows=all.filter(row=>(!filters.from||row.trade_date>=filters.from)&&(!filters.to||row.trade_date<=filters.to)&&(!filters.version||historyIdentity(row).filter_key===filters.version)&&(!filters.model||(row.model||'未记录模型')===filters.model));

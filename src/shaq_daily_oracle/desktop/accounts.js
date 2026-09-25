@@ -228,20 +228,22 @@ const SHAQAccounts = (() => {
   }
 
   function compactOverviewHtml(data,versions=[],filters={}){
+    const isCounted=row=>data.local_balance_preview?row.balance_preview_counted===true:
+      ['historical','forward'].includes(row.scope)&&['final','provisional','empty'].includes(row.status)&&Number.isFinite(row.account_balance);
     const linked=(data.accounts||[]).map(account=>{
       const rows=(data.results||[]).filter(row=>account.account_id&&row.account_id===account.account_id).sort((a,b)=>String(b.trade_date).localeCompare(String(a.trade_date)));
       const known=rows.find(row=>methodMeta(row,versions).installed);
       return known?{...account,variant_key:known.variant_key}:account;
     });
     const accounts=linked.filter(account=>(!filters.version||historyIdentity(account,versions).filter_key===filters.version)&&(!filters.model||account.model===filters.model||(data.results||[]).some(row=>row.account_id===account.account_id&&row.model===filters.model))).map(account=>{
-      const counted=(data.results||[]).filter(row=>row.account_id===account.account_id&&['historical','forward'].includes(row.scope)&&['final','provisional','empty'].includes(row.status)&&Number.isFinite(row.account_balance));
+      const counted=(data.results||[]).filter(row=>row.account_id===account.account_id&&isCounted(row));
       const byDate=new Map(counted.map(row=>[row.trade_date,{date:row.trade_date,equity:row.account_balance}]));
       const curve=(byDate.size?[...byDate.values()].sort((a,b)=>a.date.localeCompare(b.date)):account.curve||[]).filter(point=>(!filters.from||point.date>=filters.from)&&(!filters.to||point.date<=filters.to));
       return {...account,method_name:methodMeta(account,versions).method_name,curve};
     });
     const cards=accounts.map(account=>{
       const rows=(data.results||[]).filter(row=>account.account_id?row.account_id===account.account_id:(account.series_key?row.series_key===account.series_key:row.variant_key===account.variant_key)).sort((a,b)=>String(b.trade_date).localeCompare(String(a.trade_date)));
-      const counted=rows.filter(row=>['historical','forward'].includes(row.scope)&&['final','provisional','empty'].includes(row.status)&&Number.isFinite(row.account_balance));
+      const counted=rows.filter(isCounted);
       const latest=counted[0],notCounted=rows.some(row=>!counted.includes(row)&&(!latest||row.trade_date>=latest.trade_date));
       const status=latest?`已累计至 ${latest.trade_date}${notCounted?'；后续记录未计入，原因见每日结果':''}`:'尚无已计入的交易结果';
       return `<article class="balance-card" data-view-key="${e(account.account_id||account.series_key||account.variant_key||account.label)}"><h3>${method(account,versions)}</h3><small>${e(status)}</small><p>当前余额 <b>${usd(account.equity)}</b></p><p>${e(latest?.trade_date||'已计入日')} 净盈亏 <b>${amount(latest,'net_pnl')}</b></p></article>`;

@@ -25,6 +25,17 @@ for(const file of scripts)vm.runInContext(fs.readFileSync(path.join(desktop,file
 
 
 class ReviewViewTests(unittest.TestCase):
+    def test_local_preview_is_used_for_daily_balance_without_changing_formal_payload(self):
+        value=self.bundle(r'''
+vm.runInContext(`state.data={versions:[],jobs:[],dashboard:{daily_results:[
+ {batch_id:'b',variant_key:'team/main',trade_date:'2026-09-16',status:'empty',predictions:[]}],
+ virtual_accounts:{accounts:[],results:[{batch_id:'b',variant_key:'team/main',status:'empty',net_pnl:0,account_balance:10000}]},
+ balance_preview:{accounts:[],results:[{batch_id:'b',variant_key:'team/main',status:'empty',net_pnl:0,account_balance:10005}]}}};renderHistory()`,ctx);
+console.log(JSON.stringify(nodes['#history'].innerHTML));
+''')
+        self.assertIn('$10,005.00',value)
+        self.assertNotIn('$10,000.00',value)
+
     def test_history_retains_resume_action_for_old_failed_batch(self):
         value = self.bundle(r'''
 vm.runInContext(`state.data={versions:[],jobs:[{job_id:'old',batch_id:'LAB-old',
