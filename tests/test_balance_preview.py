@@ -78,3 +78,14 @@ class BalancePreviewTests(unittest.TestCase):
         self.assertEqual(len(result['accounts']),1)
         self.assertEqual(result['accounts'][0]['equity'],10010)
         self.assertFalse(result['results'][2]['balance_preview_counted'])
+
+    def test_new_pending_row_uses_frozen_method_identity_not_an_extra_account(self):
+        old=self.row('2026-09-09',4)
+        pending=self.row('2026-09-10',None,status='pending')
+        del pending['method_identity']
+        pending['variant_key']='team/one'
+        daily=[dict(batch_id=pending['batch_id'],variant_key='team/one',method_identity='one')]
+        result=self.project([old,pending],daily)
+        self.assertEqual(len(result['accounts']),1)
+        self.assertEqual(result['accounts'][0]['equity'],10004)
+        self.assertIsNone(result['results'][1]['account_balance'])

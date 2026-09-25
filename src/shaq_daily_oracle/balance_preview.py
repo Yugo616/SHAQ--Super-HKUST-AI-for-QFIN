@@ -34,7 +34,9 @@ def project_saved_balances(saved, daily_rows):
                    account_cumulative_net_pnl=None)
         if row.get('status') == 'duplicate':
             continue
-        method = row.get('method_identity') or row.get('series_key') or row['variant_key']
+        info = metadata.get((row['batch_id'], row['variant_key']), {})
+        method = (row.get('method_identity') or info.get('method_identity')
+                  or row.get('series_key') or info.get('series_key') or row['variant_key'])
         account_id = 'local-preview:' + method
         row['account_id'] = account_id
         key = method, row['trade_date']
