@@ -43,14 +43,18 @@ async function loadBatch(id,key,symbol,quiet=false){
   const modal=q('#replay-modal'),target=q('#batch-detail');
   const request=(loadBatch.request||0)+1;loadBatch.request=request;
   const previousReplay=state.replay,previousGeneration=state.replayGeneration||0;
+  const cache=typeof SHAQReplayCache==='undefined'?null:SHAQReplayCache;
+  const cached=cache?.peek(id);
   if(!quiet){state.replay=null;state.replayGeneration=(state.replayGeneration||0)+1;}
-  if(!quiet){target.innerHTML='<section class="card operation-loading" role="status"><b>正在加载分析详情…</b><progress aria-label="正在读取已保存的分析"></progress><p>读取已保存的报告与价格，不会重新调用模型。关闭即可返回。</p></section>';target.scrollTop=0;}
+  if(!quiet&&!cached){target.innerHTML='<section class="card operation-loading" role="status"><b>正在准备已保存的详情…</b><progress aria-label="正在读取已保存的分析"></progress><p>后台预加载尚未完成；不会获取行情或重新调用模型。</p></section>';target.scrollTop=0;}
   const invalidateReplay=()=>{loadBatch.request=(loadBatch.request||0)+1;state.replay=null;state.replayGeneration=(state.replayGeneration||0)+1};
   modal.oncancel=invalidateReplay;modal.onclose=invalidateReplay;
   q('#replay-close').onclick=()=>{invalidateReplay();modal.close()};
   if(!modal.open)modal.showModal();
   try{
-    const batch=await api('get_shadow_batch',id);
+    const saved=cached||(cache?await cache.get(id):await api('get_shadow_batch',id));
+    const accounts=state.data?.dashboard?.virtual_accounts;
+    const batch=accounts?{...saved,virtual_accounts:{...accounts,results:(accounts.results||[]).filter(row=>row.batch_id===id)}}:saved;
     if(loadBatch.request!==request||!modal.open)return;
     if(quiet&&(state.replay!==previousReplay||(state.replayGeneration||0)!==previousGeneration))return;
     if(quiet&&JSON.stringify(state.selectedBatch)===JSON.stringify(batch))return;
@@ -113,6 +117,7 @@ async function load(showError=true){
     const pageChanged=pageSnapshot(state.data,state.page)!==pageSnapshot(value,state.page);
     const settingsChanged=JSON.stringify(state.data?.settings)!==JSON.stringify(value.settings);
     state.data=value;render(pageChanged,settingsChanged);restore();restoreSetup();
+    if(typeof SHAQReplayCache!=='undefined')void SHAQReplayCache.warm(value.dashboard);
     if(typeof refreshRunProgress==='function')refreshRunProgress();
     window.scrollTo?.(0,pageScroll);
     if(replay&&state.replay===replay&&state.replayGeneration===replayGeneration&&q('#replay-modal')?.open){
@@ -123,7 +128,10 @@ async function load(showError=true){
 }
 function pageSnapshot(data,page){
   if(!data)return '';
-  if(page==='history')return JSON.stringify([data.dashboard,data.versions]);
+  if(page==='history'){
+    const {generated_at_et,...dashboard}=data.dashboard||{};
+    return JSON.stringify([dashboard,data.versions]);
+  }
   if(page==='run'){
     const {et,local,...clock}=data.clock||{};
     return JSON.stringify([data.settings,data.versions,data.formal_operator,clock]);

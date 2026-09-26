@@ -35,6 +35,46 @@ const SHAQResults=(()=>{
   return {dailyHtml,outcome};
 })();
 
+// Cache only verified, saved reports. No model or market-data acquisition here.
+const SHAQReplayCache=(()=>{
+  function create(read){
+    const entries=new Map(),revisions=new Map();let warming=null;
+    const peek=id=>{const entry=entries.get(id);return entry?.revision===revisions.get(id)?entry?.value:null};
+    async function get(id){
+      const revision=revisions.get(id),previous=entries.get(id);
+      if(previous?.revision===revision&&previous.value)return previous.value;
+      if(previous?.revision===revision&&previous.promise)return previous.promise;
+      const entry={revision};entries.set(id,entry);
+      entry.promise=Promise.resolve().then(()=>read(id)).then(value=>{
+        if(revisions.get(id)!==revision)return get(id);
+        entry.value=value;return value;
+      }).catch(error=>{entry.error=error;throw error}).finally(()=>{entry.promise=null});
+      return entry.promise;
+    }
+    async function warm(dashboard={}){
+      const rows=dashboard.daily_results||[],ids=[...new Set(rows.map(row=>row.batch_id))];
+      for(const id of ids)revisions.set(id,JSON.stringify([
+        rows.filter(row=>row.batch_id===id),
+        (dashboard.batches||[]).find(row=>row.batch_id===id),
+        (dashboard.virtual_accounts?.results||[]).filter(row=>row.batch_id===id)]));
+      for(const id of revisions.keys())if(!ids.includes(id)){revisions.delete(id);entries.delete(id)}
+      if(warming)return warming;
+      warming=(async()=>{
+        // Sequential reads keep background preparation from saturating disk/bridge.
+        for(const id of revisions.keys()){
+          const entry=entries.get(id);
+          if(entry?.revision===revisions.get(id)&&(entry.value||entry.error))continue;
+          try{await get(id)}catch(_){/* Click permits a retry; never cache fake content. */}
+        }
+      })();
+      try{await warming}finally{warming=null}
+    }
+    return {get,peek,warm};
+  }
+  const cache=create(id=>api('get_shadow_batch',id,false));
+  return {create,...cache};
+})();
+
 if(typeof document!=='undefined'){
   const beforeBatch=renderBatch;
   renderBatch=function(batch,key,symbol){
@@ -61,7 +101,10 @@ if(typeof document!=='undefined'){
     const prediction=variant?.predictions?.find(row=>row.symbol===symbol)||{};
     const value=SHAQResults.outcome(batch?.labels?.labels?.[symbol],prediction);
     const panel=q('#candidate-analysis .aftermarket');
-    if(panel)panel.innerHTML=`<b>盘后方向成绩</b><p>未复权开盘 ${SHAQAccounts.usd(value.opening)} · 收盘 ${SHAQAccounts.usd(value.closing)} · 开收涨跌幅 ${value.change===null?'—':value.change.toFixed(2)+'%'} · ${value.correct===null?'—':value.correct?'正确':'错误'}</p>`;
+    const day=batch?.virtual_accounts?.results?.find(row=>row.variant_key===key);
+    const trade=day?.trades?.find(row=>row.symbol===symbol);
+    const clock=value=>value?String(value).slice(11,16)+' ET':'时间未记录';
+    if(panel)panel.innerHTML=`<b>盘后方向成绩</b><div class="replay-price-grid"><section><b>官方开盘 → 收盘</b><p>开盘 ${SHAQAccounts.usd(value.opening)} · 收盘 ${SHAQAccounts.usd(value.closing)}</p><p>开收涨跌幅 ${value.change===null?'—':value.change.toFixed(2)+'%'} · ${value.correct===null?'—':value.correct?'正确':'错误'}</p></section><section><b>模拟开仓 → 平仓</b>${trade?`<p>${esc(clock(trade.entry_reference_at_et||day.entry_reference_at_et))} 参考价 ${SHAQAccounts.usd(trade.entry_reference_open)} · 模拟成交价 ${SHAQAccounts.usd(trade.entry_price)}</p><p>${esc(clock(trade.exit_reference_at_et||day.exit_reference_at_et))} 参考价 ${SHAQAccounts.usd(trade.exit_reference_open)} · 模拟成交价 ${SHAQAccounts.usd(trade.exit_price)}</p><p>${esc(trade.quantity??'—')} 股 · 净盈亏 ${SHAQAccounts.usd(trade.status==='closed'?trade.net_pnl:null)}</p>`:'<p>尚无模拟成交记录</p>'}</section></div>`;
     qa('#candidate-analysis .domain h4').forEach((heading,index)=>{const report=variant?.reports_by_symbol?.[symbol]?.[index];if(report)heading.textContent=moduleName(report.domain)+' · '+dir(report.verdict)});
   };
 
@@ -71,7 +114,7 @@ if(typeof document!=='undefined'){
     const identities=new Map(all.map(row=>{const meta=historyIdentity(row);return [meta.filter_key,meta.method_name]}));
     const models=[...new Set(all.map(row=>row.model||'未记录模型'))];
     const rows=all.filter(row=>(!filters.from||row.trade_date>=filters.from)&&(!filters.to||row.trade_date<=filters.to)&&(!filters.version||historyIdentity(row).filter_key===filters.version)&&(!filters.model||(row.model||'未记录模型')===filters.model));
-    q('#history').innerHTML=`<div class="history-filters"><label>开始日期<input id="history-from" type="date" value="${esc(filters.from||'')}"></label><label>结束日期<input id="history-to" type="date" value="${esc(filters.to||'')}"></label><label>版本<select id="history-version"><option value="">全部版本</option>${[...identities].map(([key,name])=>`<option value="${esc(key)}"${filters.version===key?' selected':''}>${esc(name)}</option>`).join('')}</select></label><label>模型<select id="history-model"><option value="">全部模型</option>${models.map(model=>`<option${filters.model===model?' selected':''}>${esc(model)}</option>`).join('')}</select></label></div><section class="sheet balance-overview">${SHAQAccounts.compactOverviewHtml(accounts,versions,filters)}</section><section class="sheet"><h2>每日结果</h2>${SHAQResults.dailyHtml(rows,accounts.results||[],versions)}</section>`;
+    q('#history').innerHTML=`<div class="history-filters"><label>开始日期<input id="history-from" type="date" value="${esc(filters.from||'')}"></label><label>结束日期<input id="history-to" type="date" value="${esc(filters.to||'')}"></label><label>版本<select id="history-version"><option value="">全部版本</option>${[...identities].map(([key,name])=>`<option value="${esc(key)}"${filters.version===key?' selected':''}>${esc(name)}</option>`).join('')}</select></label><label>模型<select id="history-model"><option value="">全部模型</option>${models.map(model=>`<option${filters.model===model?' selected':''}>${esc(model)}</option>`).join('')}</select></label></div><section class="sheet balance-overview">${SHAQAccounts.compactOverviewHtml(accounts,versions,filters,all)}</section><section class="sheet"><h2>每日结果</h2>${SHAQResults.dailyHtml(rows,accounts.results||[],versions)}</section>`;
     for(const [id,key] of [['history-from','from'],['history-to','to'],['history-version','version'],['history-model','model']])q('#'+id).onchange=event=>{filters[key]=event.target.value;renderHistory()};
     const jobs=state.data.jobs||[], unfinished=new Map();
     for(const job of jobs)if(job.batch_id&&['failed','partial_failure'].includes(job.status)&&

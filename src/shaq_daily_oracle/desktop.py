@@ -373,8 +373,8 @@ class DesktopBridge:
             selections=selections, model_profile_id=model_profile_id,
         )
 
-    def get_shadow_batch(self, batch_id: str) -> dict[str, Any]:
-        return self._result(self.lab.batch_detail, batch_id)
+    def get_shadow_batch(self, batch_id: str, include_accounts: bool = True) -> dict[str, Any]:
+        return self._result(self.lab.batch_detail, batch_id, include_accounts=include_accounts)
 
     def resume_shadow_batch(self, batch_id: str) -> dict[str, Any]:
         return self._result(self.lab.resume_batch, batch_id)

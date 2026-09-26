@@ -25,6 +25,75 @@ for(const file of scripts)vm.runInContext(fs.readFileSync(path.join(desktop,file
 
 
 class ReviewViewTests(unittest.TestCase):
+    def test_opening_preloaded_detail_renders_immediately_without_another_read(self):
+        value=self.bundle(r'''
+(async()=>{
+ const calls=[];
+ ctx.window.pywebview={api:{get_shadow_batch:async(id,accounts)=>{calls.push([id,accounts]);return {ok:true,value:{batch_id:id}}}}};
+ nodes['#replay-modal']={open:false,showModal(){this.open=true},close(){this.open=false}};
+ await vm.runInContext(`SHAQReplayCache.warm({daily_results:[{batch_id:'ready'}]})`,ctx);
+ vm.runInContext(`renderBatch=(batch,key,symbol)=>{q('#batch-detail').innerHTML='saved:'+batch.batch_id+':'+symbol};
+ loadBatch('ready','v','BBB')`,ctx);
+ console.log(JSON.stringify({calls,html:nodes['#batch-detail'].innerHTML,open:nodes['#replay-modal'].open}));
+})().catch(error=>{console.error(error);process.exitCode=1});
+''')
+        self.assertEqual(value['calls'],[['ready',False]])
+        self.assertEqual(value['html'],'saved:ready:BBB')
+        self.assertTrue(value['open'])
+
+    def test_preload_inflight_is_shared_and_revision_change_cannot_restore_old_detail(self):
+        value=self.bundle(r'''
+(async()=>{
+ const result=await vm.runInContext(`(async()=>{
+  const pending=[],cache=SHAQReplayCache.create(id=>new Promise(resolve=>pending.push(resolve)));
+  const warm=cache.warm({daily_results:[{batch_id:'a',status:'old'}]});
+  await Promise.resolve();const click=cache.get('a');
+  const changed=cache.warm({daily_results:[{batch_id:'a',status:'new'}]});
+  const count=pending.length;pending[0]({price:1});
+  for(let i=0;i<8;i++)await Promise.resolve();
+  pending[1]({price:2});await warm;await changed;
+  return {count,value:await click,ready:cache.peek('a')};
+ })()`,ctx);console.log(JSON.stringify(result));
+})().catch(error=>{console.error(error);process.exitCode=1});
+''')
+        self.assertEqual(value,{'count':1,'value':{'price':2},'ready':{'price':2}})
+
+    def test_candidate_price_panel_uses_saved_minutes_not_fixed_exit_clock(self):
+        value=self.bundle(r'''
+vm.runInContext(`state.selectedBatch={batch_id:'b',evidence:{candidates:[{symbol:'X'}],catalog:[]},
+ labels:{labels:{X:{status:'final',official_unadjusted_open:100,official_unadjusted_close:99}}},
+ virtual_accounts:{results:[{variant_key:'v',trades:[{symbol:'X',status:'closed',quantity:3,
+ entry_reference_at_et:'2026-09-09T09:32:00-04:00',exit_reference_at_et:'2026-09-09T15:55:00-04:00',
+ entry_reference_open:101,exit_reference_open:98,entry_price:101.05,exit_price:97.95,net_pnl:-9.6}]}]},
+ variants:{v:{reports_by_symbol:{},predictions:[{symbol:'X',direction:'bullish'}],integration_audit:{},adversary_by_symbol:{}}}};
+window.showCandidate('b','v','X')`,ctx);
+console.log(JSON.stringify(nodes['#candidate-analysis .aftermarket'].innerHTML));
+''')
+        for text in ['$100.00','$99.00','09:32','15:55','$101.00','$98.00','$101.05','$97.95']:
+            self.assertIn(text,value)
+        self.assertNotIn('15:59',value)
+
+    def test_preload_reuses_calls_invalidates_changed_batch_and_recovers_failure(self):
+        value=self.bundle(r'''
+(async()=>{
+ const result=await vm.runInContext(`(async()=>{
+  const calls=[];let fail=true;
+  const cache=SHAQReplayCache.create(async id=>{calls.push(id);if(id==='bad'&&fail)throw Error('offline');return {batch_id:id,n:calls.length}});
+  const rows=[{batch_id:'a',status:'final'},{batch_id:'b',status:'final'},{batch_id:'bad',status:'final'}];
+  await cache.warm({daily_results:rows});
+  const first=await cache.get('a');await cache.get('a');
+  await cache.warm({daily_results:rows});const stable=calls.slice();
+  await cache.warm({daily_results:[{batch_id:'a',status:'revised'},rows[1],rows[2]]});
+  fail=false;await cache.get('bad');
+  return {stable,calls,first,ready:cache.peek('a')?.batch_id};
+ })()`,ctx);
+ console.log(JSON.stringify(result));
+})().catch(error=>{console.error(error);process.exitCode=1});
+''')
+        self.assertEqual(value['stable'],['a','b','bad'])
+        self.assertEqual(value['calls'],['a','b','bad','a','bad'])
+        self.assertEqual(value['ready'],'a')
+
     def test_local_preview_is_used_for_daily_balance_without_changing_formal_payload(self):
         value=self.bundle(r'''
 vm.runInContext(`state.data={versions:[],jobs:[],dashboard:{daily_results:[

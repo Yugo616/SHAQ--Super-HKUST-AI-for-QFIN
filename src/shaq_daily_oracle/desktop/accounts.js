@@ -183,7 +183,12 @@ const SHAQAccounts = (() => {
     const axis=dates.map((date,i)=>i===0||i===dates.length-1||i%Math.max(1,Math.ceil(dates.length/7))===0?`<text x="${x({date})}" y="219" text-anchor="middle">${e(date)}</text>`:'').join('');
     const grid=[0,.5,1].map(f=>{const price=lo+(hi-lo)*f,py=y({equity:price});return `<line x1="85" y1="${py}" x2="840" y2="${py}" stroke="#e5e7eb"/><text x="73" y="${py+4}" text-anchor="end">${usd(price)}</text>`}).join('');
     const legend=`<div class="balance-legend">${accounts.map((account,index)=>`<span><i style="background:${colors[index%colors.length]}"></i>${e(account.method_name||account.label||'未标明版本')}${account.curve?.length===1?'（仅有一天结算记录）':''}</span>`).join('')}</div>`;
-    return `<h3>余额变化</h3>${legend}<svg class="pnl-chart" viewBox="0 0 900 250" role="img" aria-label="各版本余额变化（收盘净值）；纵轴美元余额，横轴交易日期"><text x="85" y="16">余额（美元）</text>${grid}${accounts.map((account,index)=>`<polyline fill="none" stroke="${colors[index%colors.length]}" stroke-width="2.5" points="${(account.curve||[]).map(point=>`${x(point)},${y(point)}`).join(' ')}"/>${(account.curve||[]).map(point=>`<circle cx="${x(point)}" cy="${y(point)}" r="4" fill="${colors[index%colors.length]}"><title>${e(account.method_name || account.label)} ${e(point.date)} ${usd(point.equity)}</title></circle>`).join('')}`).join('')}${axis}<text x="450" y="246" text-anchor="middle">日期（交易日）</text></svg>`;
+    const signed=value=>Number.isFinite(value)?`${value>=0?'+':'−'}${usd(Math.abs(value))}`:'—';
+    const hovers=accounts.flatMap(account=>(account.curve||[]).map(point=>{
+      const lines=(point.trades||[]).map(trade=>`<span class="balance-tip-stock"><b>${e(trade.symbol)}</b><span>${e({bullish:'看涨',bearish:'看跌',neutral:'中性'}[trade.direction]||'—')}</span><span>${trade.status==='closed'?signed(trade.net_pnl):['unavailable_entry','open_incomplete'].includes(trade.status)?'缺少行情':'—'}</span></span>`).join('');
+      return `<button type="button" tabindex="0" class="balance-hit ${x(point)>600?'tip-left':''}" style="left:${x(point)/9}%;top:${y(point)/2.5}%" aria-label="${e(account.method_name||account.label)} ${e(point.date)} 余额 ${usd(point.equity)} 当日变化 ${signed(point.net_pnl)}"><span class="balance-tip" role="tooltip"><b>${e(point.date)} · ${e(account.method_name||account.label)}</b><span>余额 ${usd(point.equity)} · 当日变化 ${signed(point.net_pnl)}</span>${lines||'<span>无预测标的</span>'}</span></button>`;
+    })).join('');
+    return `<h3>余额变化</h3>${legend}<div class="balance-plot"><svg class="pnl-chart" viewBox="0 0 900 250" role="img" aria-label="各版本余额变化（收盘净值）；纵轴美元余额，横轴交易日期"><text x="85" y="16">余额（美元）</text>${grid}${accounts.map((account,index)=>`<polyline fill="none" stroke="${colors[index%colors.length]}" stroke-width="2.5" points="${(account.curve||[]).map(point=>`${x(point)},${y(point)}`).join(' ')}"/>${(account.curve||[]).map(point=>`<circle cx="${x(point)}" cy="${y(point)}" r="4" fill="${colors[index%colors.length]}"><title>${e(account.method_name || account.label)} ${e(point.date)} ${usd(point.equity)}</title></circle>`).join('')}`).join('')}${axis}<text x="450" y="246" text-anchor="middle">日期（交易日）</text></svg>${hovers}</div>`;
   }
 
   function resultRows(rows, versions) {
@@ -227,7 +232,7 @@ const SHAQAccounts = (() => {
       <details class="account-secondary"><summary>旧版已保存结果（只读） · ${e(legacy.status === 'saved_only' ? 'saved-only' : legacy.status || 'unavailable')}</summary><p>旧引擎记录仅显示已保存文件，不重算、不并入 Zipline 分钟账户。</p><div class="account-scroll"><table class="table"><thead><tr><th>日期</th><th>旧引擎</th><th>保存状态</th><th>净盈亏</th></tr></thead><tbody>${legacyRows || '<tr><td colspan="4">没有可核验的旧版已保存结果。</td></tr>'}</tbody></table></div></details>`;
   }
 
-  function compactOverviewHtml(data,versions=[],filters={}){
+  function compactOverviewHtml(data,versions=[],filters={},dailyRows=[]){
     const isCounted=row=>data.local_balance_preview?row.balance_preview_counted===true:
       ['historical','forward'].includes(row.scope)&&['final','provisional','empty'].includes(row.status)&&Number.isFinite(row.account_balance);
     const linked=(data.accounts||[]).map(account=>{
@@ -237,7 +242,11 @@ const SHAQAccounts = (() => {
     });
     const accounts=linked.filter(account=>(!filters.version||historyIdentity(account,versions).filter_key===filters.version)&&(!filters.model||account.model===filters.model||(data.results||[]).some(row=>row.account_id===account.account_id&&row.model===filters.model))).map(account=>{
       const counted=(data.results||[]).filter(row=>row.account_id===account.account_id&&isCounted(row));
-      const byDate=new Map(counted.map(row=>[row.trade_date,{date:row.trade_date,equity:row.account_balance}]));
+      const byDate=new Map(counted.map(row=>{
+        const predictions=dailyRows.find(day=>day.batch_id===row.batch_id&&day.variant_key===row.variant_key)?.predictions||[];
+        const trades=predictions.length?predictions.map(prediction=>({...prediction,...(row.trades||[]).find(trade=>trade.symbol===prediction.symbol)})):row.trades||[];
+        return [row.trade_date,{date:row.trade_date,equity:row.account_balance,net_pnl:row.net_pnl,trades}];
+      }));
       const curve=(byDate.size?[...byDate.values()].sort((a,b)=>a.date.localeCompare(b.date)):account.curve||[]).filter(point=>(!filters.from||point.date>=filters.from)&&(!filters.to||point.date<=filters.to));
       return {...account,method_name:methodMeta(account,versions).method_name,curve};
     });

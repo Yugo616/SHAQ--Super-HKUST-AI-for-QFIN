@@ -1549,10 +1549,11 @@ class LabService:
             trade_date=trade_date, job_sha256=job_sha256,
             automatic_run_sha256=automatic_run_sha256)
 
-    def batch_detail(self, batch_id: str) -> dict[str, Any]:
+    def batch_detail(self, batch_id: str, include_accounts: bool = True) -> dict[str, Any]:
         detail = self.dashboard.batch_detail(batch_id)
-        accounts = self.dashboard.overview()['virtual_accounts']
-        detail['virtual_accounts'] = dict(accounts, results=[r for r in accounts['results'] if r['batch_id'] == batch_id])
+        if include_accounts:
+            accounts = self.dashboard.overview()['virtual_accounts']
+            detail['virtual_accounts'] = dict(accounts, results=[r for r in accounts['results'] if r['batch_id'] == batch_id])
         detail["research_progress"] = [
             event for job in self.job_statuses() if job.get("batch_id") == batch_id
             for event in job.get("research_progress", []) if event.get("batch_id") == batch_id

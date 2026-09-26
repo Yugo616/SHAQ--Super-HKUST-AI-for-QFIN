@@ -5,6 +5,22 @@ import subprocess
 
 
 class AccountViewTests(unittest.TestCase):
+    def test_curve_hover_uses_same_daily_trades_and_preserves_missing_pnl(self):
+        html=self.render('compactOverviewHtml',dict(local_balance_preview=True,
+            accounts=[dict(account_id='a',equity=10005,label='甲方法')],
+            results=[dict(account_id='a',trade_date='2026-09-09',status='final',
+                balance_preview_counted=True,account_balance=10005,net_pnl=5,
+                trades=[dict(symbol='AAA',direction='bullish',status='closed',net_pnl=5),
+                        dict(symbol='BBB',direction='bearish',status='unavailable_entry',net_pnl=0)])]))
+        self.assertIn('role="tooltip"',html)
+        self.assertIn('AAA',html)
+        self.assertIn('看涨',html)
+        self.assertIn('BBB',html)
+        self.assertIn('缺少行情',html)
+        self.assertIn('当日变化',html)
+        self.assertIn('+$5.00',html)
+        self.assertIn('tabindex="0"',html)
+
     def test_local_preview_chart_includes_saved_late_results_without_extra_notice(self):
         html=self.render('compactOverviewHtml',dict(local_balance_preview=True,
             accounts=[dict(account_id='a',equity=10005,label='甲方法',curve=[])],

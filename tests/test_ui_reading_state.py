@@ -7,6 +7,18 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ReadingStateTests(unittest.TestCase):
+    def test_overview_timestamp_alone_does_not_remove_hover_card(self):
+        self.run_js(r'''
+let renders=0;
+const data={versions:[],dashboard:{generated_at_et:'old',daily_results:[]}};
+const ctx={state:{page:'history',data,replay:null},q:()=>({open:false}),
+ window:{scrollY:0,scrollTo(){}},api:async()=>({...data,dashboard:{...data.dashboard,generated_at_et:'new'}}),
+ render(changed){if(changed)renders++},notice(){}};
+vm.createContext(ctx);vm.runInContext(fn,ctx);
+(async()=>{await ctx.load(false);assert.equal(renders,0,'poll timestamp cannot replace hovered chart points')})()
+ .catch(e=>{console.error(e);process.exitCode=1});
+''')
+
     def run_js(self, body):
         prefix = r'''
 const fs=require('fs'),vm=require('vm'),assert=require('assert/strict');
