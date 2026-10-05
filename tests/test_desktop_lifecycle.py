@@ -7,6 +7,19 @@ from shaq_daily_oracle.desktop import desktop_api
 
 
 class DesktopLifecycleTests(unittest.TestCase):
+    def test_smoke_price_refresh_updates_dashboard_and_detail_together(self):
+        from types import SimpleNamespace
+        from shaq_daily_oracle.desktop import _bind_gui_smoke_fixture
+        bridge = SimpleNamespace()
+        state = {'dashboard': {'daily_results': [
+            {'batch_id': 'fixture', 'labels': {}}
+        ]}}
+        detail = {'batch_id': 'fixture', 'labels': {'labels': {}}}
+        _bind_gui_smoke_fixture(bridge, state, detail)
+        self.assertTrue(bridge.refresh_prices_and_results()['ok'])
+        self.assertEqual(state['dashboard']['daily_results'][0]['labels']['MSFT'],
+                         detail['labels']['labels']['MSFT'])
+
     def test_shared_smoke_fixture_publishes_real_restart_confirmation(self):
         import json
         from test_research_lab_foundation import ResearchLabFoundationTests
@@ -25,6 +38,9 @@ class DesktopLifecycleTests(unittest.TestCase):
                 # As in installed-update acceptance, disable only external checks.
                 bridge._software_updater().start_automatic_checks = lambda: None
                 _bind_gui_smoke_fixture(bridge, {}, {})
+                self.assertEqual(desktop_api(bridge).get_shadow_batch('fixture', False),
+                                 {'ok': True, 'value': {}},
+                                 'native replay fixture must accept the preload API contract')
                 self.assertTrue(desktop_api(bridge).confirm_desktop_ready()['ok'])
                 self.assertFalse((gate.root / 'installing.json').exists(),
                                  'shared fixture swallowed real GUI ready confirmation')

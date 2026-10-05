@@ -617,7 +617,7 @@ def _bind_gui_smoke_fixture(bridge, fixture_state, fixture_detail):
         fixture_state['jobs'] = [row for row in fixture_state['jobs'] if row['job_id'] != job['job_id']] + [job]
         return {'ok': True, 'value': job}
 
-    def fixture_batch_api(self, batch_id):
+    def fixture_batch_api(self, batch_id, include_accounts=True):
         return {"ok": True, "value": fixture_detail}
 
     def fixture_refresh_api(self):
@@ -627,6 +627,11 @@ def _bind_gui_smoke_fixture(bridge, fixture_state, fixture_detail):
             "confirmed_by_independent_reobservation": True,
             "last_checked_at_et": "2026-09-10T09:00:00-04:00",
         }
+        # The real refresh rebuilds these rows from the same saved labels.
+        # Mirror that here so the replay cache observes a changed dashboard.
+        for row in fixture_state.get("dashboard", {}).get("daily_results", []):
+            if row.get("batch_id") == fixture_detail.get("batch_id"):
+                row["labels"] = fixture_detail["labels"]["labels"]
         fixture_state["result_refresh"] = {
             "status": "complete", "completed_at": "2026-09-10T09:00:00-04:00",
             "failure_count": 0,
