@@ -21,7 +21,9 @@ def observed_job_status(root, row):
     path = root / 'jobs' / (job_id + '.lock')
     # Legacy snapshots without an execution lock have no liveness proof.
     # Do not infer an exit from a missing older protocol artifact.
-    if not path.is_file():
+    # Windows FileLock removes its file after release. New jobs explicitly
+    # declare this protocol so absence cannot leave them "running" forever.
+    if not path.is_file() and row.get('execution_lock_protocol') != 1:
         return row
     try:
         with FileLock(str(path), timeout=0):

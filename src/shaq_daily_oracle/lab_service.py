@@ -1281,6 +1281,7 @@ class LabService:
                 return dict(existing)
             self.jobs[job_id] = {
                 "job_id": job_id, "status": "queued", "started_at_et": None,
+                "execution_lock_protocol": 1,
                 "queued_at_et": datetime.now(ET).isoformat(),
                 "completed_at_et": None, "message": "等待开始",
                 "model_profile_id": profile.profile_id,
@@ -1440,6 +1441,7 @@ class LabService:
             saved_status = json.loads((root / 'batch_status.json').read_text(encoding='utf-8'))
             completed = set(saved_status.get('completed_variants', []))
             self._set_job(job_id, batch_id=batch_id, status='queued',
+                execution_lock_protocol=1,
                 message='已恢复，正在继续未完成分析',
                 model_profile_id=profile.profile_id,
                 queued_at_et=datetime.now(ET).isoformat(),

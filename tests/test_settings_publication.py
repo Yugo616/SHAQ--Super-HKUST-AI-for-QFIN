@@ -13,6 +13,20 @@ _atomic_json = partial(_settings_atomic_json, retry_windows_readers=True)
 
 
 class SettingsPublicationTests(unittest.TestCase):
+    def test_atomic_json_uses_canonical_newlines_on_all_platforms(self):
+        from shaq_daily_oracle import settings
+        with tempfile.TemporaryDirectory() as name:
+            path = Path(name) / 'document.json'
+            fdopen = settings.os.fdopen
+            def windows_text(descriptor, mode, **kwargs):
+                kwargs.setdefault('newline', '\r\n')
+                return fdopen(descriptor, mode, **kwargs)
+            value = {'symbol': 'AAA', 'rows': [1, 2]}
+            with patch.object(settings.os, 'fdopen', side_effect=windows_text):
+                _atomic_json(path, value)
+            self.assertEqual(path.read_bytes(),
+                             (json.dumps(value, sort_keys=True, indent=2) + '\n').encode('utf-8'))
+
     def test_temporary_windows_read_denial_is_retried(self):
         from shaq_daily_oracle import settings
         with tempfile.TemporaryDirectory() as directory:

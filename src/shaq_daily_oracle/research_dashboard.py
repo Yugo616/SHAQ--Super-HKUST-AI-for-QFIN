@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from .hashing import sha256_payload
+from .hashing import sha256_payload, file_revision
 from .research_batch import ResearchBatchError, load_frozen_evidence
 from .research_timing import assess_timing
 
@@ -173,8 +173,8 @@ class ResearchDashboardIndex:
     def _detail_signature(self, batch_id):
         """Reuse verified data only while every dependency is unchanged.
 
-        ctime and inode detect same-size edits with restored mtime and atomic
-        replacements. This is a disposable process-local display cache, not a
+        Platform-aware file revisions detect same-size edits with restored mtime
+        and atomic replacements. This disposable display cache is not a
         replacement for hashes: any changed dependency gets full verification.
         """
         root = self.batches_root / batch_id
@@ -189,9 +189,7 @@ class ResearchDashboardIndex:
         paths.extend(self.batches_root.glob('*/variants/*/variant_result.json'))
         stamps = []
         for path in sorted(set(paths)):
-            stat = path.stat()
-            stamps.append((str(path), stat.st_size, stat.st_mtime_ns,
-                           stat.st_ctime_ns, stat.st_ino, stat.st_dev))
+            stamps.append(file_revision(path))
         return tuple(stamps)
 
     def _connect(self) -> sqlite3.Connection:

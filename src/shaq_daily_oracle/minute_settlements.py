@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 
 from filelock import FileLock
 
-from .hashing import sha256_payload
+from .hashing import sha256_payload, file_revision
 from .market_calendar import market_session, next_market_session
 from .settings import _atomic_json
 
@@ -73,9 +73,7 @@ class MinuteStore:
     def _observation_signature(self):
         result = []
         for path in sorted(self.root.glob('*/observations/*.json')):
-            stat = path.stat()
-            result.append((str(path), stat.st_size, stat.st_mtime_ns,
-                           stat.st_ctime_ns, stat.st_ino, stat.st_dev))
+            result.append(file_revision(path))
         return tuple(result)
 
     def observe(self, trade_date, symbols, records, *, provider, observed_at,

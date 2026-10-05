@@ -5,6 +5,11 @@ import unittest
 
 
 TESTS = (
+    'test_file_revisions',
+    'test_metadata_transport',
+    'test_background_lifecycle.BackgroundLifecycleTests.test_existing_job_lock_is_authority_not_stale_running_json',
+    'test_background_lifecycle.BackgroundLifecycleTests.test_released_windows_lock_may_be_deleted_but_legacy_record_is_not_inferred',
+    'test_collection_failure_state.CollectionFailureStateTests.test_correction_is_append_only_hash_bound_and_shown_after_restart',
     'test_windows_shortcuts',
     'test_public_base_update_acceptance',
     'test_update_smoke.InstalledAcceptanceContractTests.test_windows_restart_confirmation_survives_exclusive_receipt_publish_window',

@@ -126,7 +126,7 @@ with patch.object(yf.Ticker, 'history', exhaust):
                     self.assertEqual(saved['error_diagnostic']['error_type'],'OSError')
 
     def correction_fixture(self, root):
-        job = {'job_id':'job-fixture','status':'running',
+        job = {'job_id':'job-fixture','status':'running','execution_lock_protocol':1,
                'started_at_et':'2026-09-14T08:39:23.440295-04:00',
                'completed_at_et':None, 'variant_progress':{'team/main':'queued'}}
         failed = {**job,'status':'failed','completed_at_et':'2026-09-14T08:39:33.058359-04:00',

@@ -95,7 +95,8 @@ class BackgroundLifecycleTests(unittest.TestCase):
         from shaq_daily_oracle.job_corrections import observed_job_status
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);(root/'jobs').mkdir()
-            job={'job_id':'job-x','status':'running','variant_progress':{'a':'complete','b':'running'}}
+            job={'job_id':'job-x','status':'running','execution_lock_protocol':1,
+                 'variant_progress':{'a':'complete','b':'running'}}
             lock=FileLock(str(root/'jobs/job-x.lock'))
             with lock:
                 self.assertEqual(observed_job_status(root,job)['status'],'running')
@@ -103,6 +104,15 @@ class BackgroundLifecycleTests(unittest.TestCase):
             self.assertEqual(row['status'],'incomplete')
             self.assertEqual(row['variant_progress'],{'a':'complete','b':'incomplete'})
             self.assertEqual(job['status'],'running')
+
+    def test_released_windows_lock_may_be_deleted_but_legacy_record_is_not_inferred(self):
+        from shaq_daily_oracle.job_corrections import observed_job_status
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name); (root/'jobs').mkdir()
+            legacy = {'job_id': 'job-x', 'status': 'running'}
+            self.assertEqual(observed_job_status(root, legacy), legacy)
+            current = {**legacy, 'execution_lock_protocol': 1}
+            self.assertEqual(observed_job_status(root, current)['status'], 'incomplete')
 
     def test_price_refresh_failure_does_not_fail_finished_research(self):
         from test_collection_failure_state import CollectionFailureStateTests

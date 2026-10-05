@@ -2,8 +2,19 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sys
 from pathlib import Path
 from typing import Any
+
+
+def file_revision(path: Path) -> tuple:
+    """Display-cache identity; Windows ctime is creation, not change time."""
+    stat = path.stat()
+    stamp = (str(path), stat.st_size, stat.st_mtime_ns,
+             stat.st_ctime_ns, stat.st_ino, stat.st_dev)
+    # A restored mtime can hide a rewrite on Windows. Hash bytes there rather
+    # than trusting creation time; keep POSIX's cheaper metadata-change check.
+    return (*stamp, sha256_file(path)) if sys.platform == 'win32' else stamp
 
 
 def sha256_file(path: Path) -> str:
