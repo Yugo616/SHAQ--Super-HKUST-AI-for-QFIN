@@ -1,0 +1,11 @@
+{
+  "references": {
+    "REF-FILING-INPUT-001": "BeautifulSoup HTML parser (https://www.crummy.com/software/BeautifulSoup/bs4/doc/), SQLite FTS5 BM25 retrieval (https://www.sqlite.org/fts5.html#the_bm25_function), and Docling hierarchical chunking with repeated table headers (https://docling-project.github.io/docling/concepts/chunking/). Uses BeautifulSoup and SQLite; does not integrate Docling or claim its benchmarks."
+  },
+  "decisions": {
+    "DEC-FILING-INPUT-001": "Replace prefix truncation with offline full HTML block extraction and balanced performance/outlook/risk/funding retrieval. One original-text budget per filing including attachments; retain all blocks and original bytes. Chunk length, leading table context and neighbouring blocks are explicit engineering defaults, not fitted predictive parameters or a guarantee of full semantic recall. Merged-cell geometry stays in archived blocks; visible CSV retains original cell order. No generated summary, new prediction rule, historic-label access or PDF decoding."
+  },
+  "experiments": {
+    "EXP-FILING-INPUT-001": "Regression fixtures cover end-of-document guidance, risks, exact values, repeated headers, hidden metadata, shared exhibit budgets and unsupported PDFs. ACN SEC 000146737326000037 earnings exhibit: 640078 original bytes; all 105 extracted blocks fit the configured 60000-character text budget. Synthetic 40002-block input also tested. These are extraction and resource checks, not strategy performance or exhaustive recall validation."
+  }
+}

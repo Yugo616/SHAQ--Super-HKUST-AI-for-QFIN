@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -22,7 +23,8 @@ class DmgCreationTests(unittest.TestCase):
             root = Path(directory).resolve(); (root/'packaging').mkdir(); (root/'dist').mkdir()
             shutil.copy2(ROOT/'packaging/build_macos.sh', root/'packaging/build_macos.sh')
             fake = root/'build-python'
-            fake.write_text('''#!'''+sys.executable+'''
+            implementation = root/'build-python.py'
+            implementation.write_text('''
 import json, os, pathlib, sys
 args=sys.argv[1:]; root=pathlib.Path(os.environ['TEST_BUILD_ROOT'])
 with (root/'calls.jsonl').open('a') as stream: stream.write(json.dumps(args)+'\\n')
@@ -33,6 +35,10 @@ if args[0].endswith('build_desktop.py') and '--manage-existing' not in args:
 if args[0].endswith('create_dmg.py'):
     pathlib.Path(args[args.index('--output')+1]).write_bytes(b'fixture DMG')
 ''')
+            # A kernel shebang cannot quote a Python executable with spaces.
+            # Keep the test's runner path realistic without breaking the fixture.
+            fake.write_text('#!/bin/sh\nexec ' + shlex.quote(sys.executable) + ' '
+                            + shlex.quote(str(implementation)) + ' "$@"\n')
             fake.chmod(0o755)
             shell = '''function /usr/bin/codesign() { return 0; }
 function /usr/bin/xattr() { return 0; }

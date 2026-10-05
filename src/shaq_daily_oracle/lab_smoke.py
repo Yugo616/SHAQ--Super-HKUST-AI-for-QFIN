@@ -223,6 +223,21 @@ def _contract_trade(result: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def filing_input_smoke(package_root: Path) -> bool:
+    from .filing_documents import document_policy, parse_document, select_documents
+    policy = document_policy(package_root)
+    source = ('<head><meta name="fixture"/></head><p>Company background.</p>' * 200
+              + '<h2>USD millions</h2><table><tr><th>Metric</th><th>2026</th></tr>'
+              + '<tr><td>Revenue</td><td>120</td></tr></table>'
+              + '<p>Revenue guidance reduced to 110.</p>').encode()
+    document = parse_document(source, source_uri='fixture:filing', policy=policy)
+    view = select_documents([document], maximum_characters=1600, policy=policy)[0]
+    return (len(view['document_text']) <= 1600
+            and 'Revenue,120' in view['document_text']
+            and 'guidance reduced to 110' in view['document_text']
+            and not view['document_coverage']['complete_document'])
+
+
 def run_lab_smoke(*, package_root: Path, output_root: Path) -> dict[str, Any]:
     """Run the two shipped methods and genuine Zipline minute ledger in isolation."""
     package_root = package_root.resolve()
@@ -374,6 +389,7 @@ def run_lab_smoke(*, package_root: Path, output_root: Path) -> dict[str, Any]:
         "reserved_short": short_contract,
     }
     contract_checks = {
+        "filing_input_dependencies_and_budget": filing_input_smoke(package_root),
         "exact_rules": account_contract["rules"] == {
             "initial_cash": 10000, "per_prediction_budget": 1000,
             "commission_rate": 0.0005, "slippage_rate": 0.0005,

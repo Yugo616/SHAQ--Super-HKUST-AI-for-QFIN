@@ -1,5 +1,36 @@
 # Software updates
 
+## 0.7.9: consolidated data, recovery and replay improvements
+
+- Prepare reusable history before scheduled research. Save successful work and
+  retry transient acquisition failures with bounded waits and verified backup
+  sources; recovery never silently changes frozen evidence.
+- Optional Alpaca Basic delayed SIP minute volume and quote observations retain
+  their actual timestamps. Recent comparable quotes can support limited quote
+  pressure; older quotes are liquidity context, not current directional flow.
+  OCC supplies contract open interest, not reliable quotes or trade direction.
+- SEC collection follows earnings exhibits within the same filing. Long HTML
+  filings use source-linked sections and table blocks with a shared input budget;
+  original files remain available. PDF/OCR is not implied.
+- Results use dates, completion times and method names instead of batch hashes.
+  Balance points show stock-level outcomes on hover. Saved replay details preload,
+  and refresh preserves the open stock, expanded sections and reading position.
+- Daily totals, stock-level profit/loss, direction labels and actual simulation
+  minute reference prices remain distinct. Missing prices do not become zero.
+  Existing local balance previews remain opt-in and do not rewrite account ledgers.
+- Codex discovery and input-capacity checks support current local installations.
+  Local model selections remain explicit; a software update does not select a model.
+
+Two methods, frozen forecasts, sizing, fees and individual account records are
+unchanged. API credentials and private run data are not included in this release.
+Each platform's published acceptance receipt distinguishes fixture checks,
+installed update checks and any real provider verification.
+
+Upgrading an older data profile may require one check in Connection Settings
+because added provider settings change its readiness identity. Existing model,
+credentials, schedule and records are retained; no fresh model selection is
+implied. Complete this data check before the next automatic research window.
+
 ## 0.7.8: settlement recovery and current-day progress
 
 Windows and macOS use the same release. Retain the last saved settlement while observations are rechecked, shorten index write

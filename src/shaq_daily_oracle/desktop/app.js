@@ -72,7 +72,7 @@ async function loadBatch(id,key,symbol,quiet=false){
   }
 }
 function screeningReason(c){const method=c.selection_method==='premarket_stock_minus_sector_absolute_residual'?'盘前走势与本行业差距较大':'盘前资料不足，按上一交易日相对行业变化筛选';const figures=[c.premarket_return!==null&&c.premarket_return!==undefined?`盘前 ${(Number(c.premarket_return)*100).toFixed(2)}%`:null,c.sector_premarket_return!==null&&c.sector_premarket_return!==undefined?`行业 ${(Number(c.sector_premarket_return)*100).toFixed(2)}%`:null,c.captured_primary_event?'已捕获公司一手事件':null].filter(Boolean);return `${method}${figures.length?' · '+figures.join(' · '):''}`}
-function renderBatch(batch,initialKey){const target=q('#batch-detail');if(!target)return;const variants=Object.entries(batch.variants||{}),key=initialKey&&batch.variants[initialKey]?initialKey:variants[0]?.[0],v=batch.variants?.[key],labels=batch.labels?.labels||{},candidates=batch.evidence?.candidates||[];if(!v){target.innerHTML='<div class="card empty">该次运行没有可查看的完整版本结果。</div>';return}state.selectedBatch=batch;const candidateButtons=candidates.map(c=>`<button class="candidate-button" data-variant="${esc(key)}" data-symbol="${esc(c.symbol)}">${esc(c.symbol)}<small>${v.integration_audit?.[c.symbol]?.published?'已发布':'候选'} · ${esc(screeningReason(c))}</small></button>`).join('');target.innerHTML=`<div class="card batch-head"><p class="eyebrow">${esc(batch.evidence.cutoff_status)}</p><h2>${esc(v.variant?.label||key)} · ${esc(batch.batch_id)}</h2><p>模型：${esc(batch.model_calls?.[0]?.response_model||'已记录模型')} · 所有版本使用同一份盘前冻结资料。</p><div class="pills">${(v.predictions||[]).map(p=>`<span class="pill ${p.direction}">${esc(p.symbol)} · ${dir(p.direction)}</span>`).join('')||'<span class="pill neutral">空榜</span>'}</div></div><div class="card"><h3>如何筛出候选</h3><p>这一步只决定哪些股票值得做完整分析，不是涨跌预测。</p><div class="candidate-mini">${candidateButtons}</div></div><div id="candidate-analysis"></div>`;const first=candidates.find(c=>v.integration_audit?.[c.symbol])||candidates[0];if(first)window.showCandidate(batch.batch_id,key,first.symbol)}
+function renderBatch(batch,initialKey){const target=q('#batch-detail');if(!target)return;const variants=Object.entries(batch.variants||{}),key=initialKey&&batch.variants[initialKey]?initialKey:variants[0]?.[0],v=batch.variants?.[key],labels=batch.labels?.labels||{},candidates=batch.evidence?.candidates||[];if(!v){target.innerHTML='<div class="card empty">该次运行没有可查看的完整版本结果。</div>';return}state.selectedBatch=batch;const caption=SHAQRunCaption.describe({...batch,completed_at_et:v.completed_at_et});const candidateButtons=candidates.map(c=>`<button class="candidate-button" data-variant="${esc(key)}" data-symbol="${esc(c.symbol)}">${esc(c.symbol)}<small>${v.integration_audit?.[c.symbol]?.published?'已发布':'候选'} · ${esc(screeningReason(c))}</small></button>`).join('');target.innerHTML=`<div class="card batch-head"><h2>${esc(caption.title)} · ${esc(v.variant?.label||key)}</h2><div class="run-completion">${esc(caption.completion)}</div><p>模型：${esc(batch.model_calls?.[0]?.response_model||'已记录模型')} · 所有版本使用同一份盘前冻结资料。</p><div class="pills">${(v.predictions||[]).map(p=>`<span class="pill ${p.direction}">${esc(p.symbol)} · ${dir(p.direction)}</span>`).join('')||'<span class="pill neutral">空榜</span>'}</div></div><div class="card"><h3>如何筛出候选</h3><div class="candidate-mini">${candidateButtons}</div></div><div id="candidate-analysis"></div>`;const first=candidates.find(c=>v.integration_audit?.[c.symbol])||candidates[0];if(first)window.showCandidate(batch.batch_id,key,first.symbol)}
 window.showCandidate=function(batchId,key,symbol){const batch=state.selectedBatch,v=batch?.variants?.[key];if(!v)return;state.replay={batchId,key,symbol};const candidate=(batch.evidence?.candidates||[]).find(row=>row.symbol===symbol)||{},reports=v.reports_by_symbol?.[symbol]||[],audit=v.integration_audit?.[symbol]||{},prediction=(v.predictions||[]).find(row=>row.symbol===symbol),catalog=Object.fromEntries((batch.evidence?.catalog||[]).map(row=>[row.evidence_id,row])),used=[...new Set(reports.flatMap(r=>r.evidence_ids||[]))],label=batch.labels?.labels?.[symbol]||{},direction=prediction?.direction;const pnl=label.status==='final'&&direction?(direction==='bearish'?Number(label.official_unadjusted_open)-Number(label.official_unadjusted_close):Number(label.official_unadjusted_close)-Number(label.official_unadjusted_open)):null;const checked=label.last_checked_at_et?`最近检查 ${label.last_checked_at_et.replace('T',' ').slice(0,22)}`:'尚未取得收盘价';const eligible=label.earliest_eligible_confirmation_trading_day?`最早可确认交易日 ${label.earliest_eligible_confirmation_trading_day}`:'';const after=label.status==='final'?`已跨交易日复核：官方未复权开盘 $${Number(label.official_unadjusted_open).toFixed(2)}，收盘 $${Number(label.official_unadjusted_close).toFixed(2)}；实际${dir(label.actual_direction)}。${audit.published?`该票一股方向回放 ${money(pnl)}。`:'未发布，不计入方向回放。'} ${checked}`:(label.corrections||[]).length?`价格修订，等待重新跨交易日复核。${eligible}；${checked}`:label.official_unadjusted_close!=null?`暂定结果，等待跨交易日复核。${eligible}；${checked}`:`等待收盘或正在获取缺失价格。${eligible}；${checked}`;q('#candidate-analysis').innerHTML=`<div class="card"><div class="section-head"><div><p class="eyebrow">${esc(screeningReason(candidate))}</p><h2>${esc(symbol)} · ${audit.published?`发布${dir(direction)}`:'未入选'}</h2></div><span class="status ${audit.published?'ok':''}">${esc((audit.rejection_reasons||[]).join('；')||'通过程序门禁')}</span></div><div class="domains">${reports.map(r=>`<article class="domain"><h4>${esc(r.domain)} · ${dir(r.verdict)}</h4><p><b>支持理由：</b>${esc(r.thesis)}</p><p class="counter"><b>最强反方：</b>${esc(r.antithesis)}</p><p><b>还不知道：</b>${esc((r.unknowns||[]).join('；')||'无')}</p><p><b>何时失效：</b>${esc((r.invalidation||[]).join('；')||'未列明')}</p></article>`).join('')}</div><div class="adversary"><b>反方审查：</b>${esc(v.adversary_by_symbol?.[symbol]?.strongest_countercase||'—')}</div><div class="adversary"><b>决策规则：</b>${esc(audit.decision_reason||(audit.rejection_reasons||[]).join('；')||'通过')}</div><div class="aftermarket"><b>盘后成绩（盘前分析当时不可见）</b><p>${esc(after)}</p></div><details><summary>技术核验：来源、哈希与模型记录</summary>${used.map(id=>{const e=catalog[id]||{};return `<p><b>${esc(id)}</b> · ${esc(e.provider||'未知来源')}<br><small>${esc(e.source_uri||'')}<br>采集 ${esc(e.captured_at||'—')} · ${esc((e.raw_sha256||'').slice(0,12))}</small></p>`}).join('')||'<p>该候选没有引用合格证据。</p>'}</details></div>`;qa('#batch-detail .candidate-button').forEach(button=>{button.classList.toggle('active',button.dataset.symbol===symbol);button.onclick=()=>window.showCandidate(batchId,key,button.dataset.symbol)})}
 
 const renderBatchWithDefaultCandidate=renderBatch;
@@ -90,6 +90,7 @@ async function saveDataSettings(e){e.preventDefault();const x=Object.fromEntries
 function applyProtocolPreset(){const form=q('#model-form'),protocol=form.elements.protocol.value,relay=q('#relay-url-field'),context=q('#relay-context-field');relay.classList.toggle('hidden',protocol!=='openai-chat-completions');context.classList.toggle('hidden',protocol!=='openai-chat-completions');form.elements.relay_base_url.required=protocol==='openai-chat-completions';if(protocol==='anthropic-messages'){form.elements.base_url.value='https://api.anthropic.com';form.elements.auth_style.value='x-api-key';form.elements.output_mode.value='strict';form.elements.model.placeholder='例如 claude-sonnet-4-5'}else if(protocol==='openai-responses'){form.elements.base_url.value='https://api.openai.com/v1';form.elements.auth_style.value='bearer';form.elements.output_mode.value='strict';form.elements.model.placeholder='例如 gpt-5-mini'}else{form.elements.base_url.value=form.elements.relay_base_url.value.trim();form.elements.auth_style.value='bearer';form.elements.output_mode.value='local_validated';form.elements.model.placeholder='填写中转服务提供的模型名'}}
 function bindSetup() {
   renderGithubSetup();bindModelConnections();
+  renderDataConnections();
   const researchForm=q('#research-form');
   researchForm.elements.sec_identity.value=state.data.settings.sec_identity||'';
   researchForm.onsubmit=async event=>{
@@ -104,13 +105,73 @@ function bindSetup() {
   applyProtocolPreset();
 }
 function showPage(page){state.page=page;qa('.page,.nav').forEach(e=>e.classList.remove('active'));q('#'+page).classList.add('active');q(`.nav[data-page="${page}"]`).classList.add('active');q('#page-title').textContent={run:'运行今日 Shadow',editor:'编辑方法',upload:'上传 Shadow 版本',updates:'检查团队更新',history:'历史与比较',data:'数据状态',settings:'系统设置',operator:'Mac 操作员'}[page];renderPage()}
-function renderPage(){({run:renderRun,editor:renderEditor,upload:renderUpload,updates:renderUpdates,history:renderHistory,data:renderData,settings:renderSettings,operator:renderOperator}[state.page]||renderRun)()}
+function renderDataConnections(){
+  const s=state.data.settings,d=s.data_profile||{},host=q('#data-connections');
+  if(!host||q('#supplemental-data-form'))return;
+  const active=d.alpaca_premarket_enabled||d.alpaca_orderflow_enabled;
+  const tested=!!s.alpaca_connection?.checked_at;
+  const section=document.createElement('div');section.className='data-connection-list';
+  section.innerHTML=`<section class="data-connection-row"><div><strong>期权持仓资料 · OCC</strong><p>查看各合约的持仓量。免费，无需注册。</p></div><span>${d.occ_open_interest_enabled?'已启用':'未启用'}</span><button type="button" class="secondary" id="toggle-occ">${d.occ_open_interest_enabled?'停用':'启用'}</button></section>
+    <section class="data-connection-row"><div><strong>盘前成交量与买卖报价 · Alpaca</strong><p>补充延迟成交量；IEX 报价不足时自动使用延迟全市场报价。当天覆盖以运行结果为准。</p></div><span>${active?(tested?'已连接':'已保存，待测试'):'未连接'}</span><button type="button" class="secondary" id="show-alpaca">${s.alpaca_credentials_saved?'检查／修改连接':'连接 Alpaca'}</button></section>
+    <form id="supplemental-data-form" class="form-grid compact-form hidden">
+    <div class="wide"><p>1. 在 Alpaca 免费注册，进入控制台生成 API 密钥。</p><button type="button" class="text-button" id="open-alpaca">打开 Alpaca 控制台</button><p>2. 将控制台的两项密钥填到下面，然后测试连接。</p></div>
+    <label>Key ID<input name="alpaca_key_id" type="password" autocomplete="new-password" placeholder="${s.alpaca_credentials_saved?'已保存；两项均留空可重新测试':'粘贴 Key ID'}"></label>
+    <label>Secret Key<input name="alpaca_secret_key" type="password" autocomplete="new-password" placeholder="${s.alpaca_credentials_saved?'更换密钥时，两项都要填写':'粘贴 Secret Key'}"></label>
+    <p class="wide">仅用于读取行情，不下单。测试通过的数据会自动启用。</p>
+    <div class="wide data-connection-actions"><button type="submit" class="primary">测试并连接</button>${active?'<button type="button" class="secondary" id="disable-alpaca">停用 Alpaca 数据</button>':''}</div></form>
+    <p class="inline-status" role="status" id="supplemental-data-status"></p>`;
+  host.append(section);
+  q('#show-alpaca').onclick=()=>q('#supplemental-data-form').classList.toggle('hidden');
+  q('#open-alpaca').onclick=async()=>{try{await api('open_external_url','https://app.alpaca.markets')}catch(error){q('#supplemental-data-status').textContent=error.message}};
+  const refresh=async message=>{await api('check_research_environment');await load(false);host.replaceChildren();renderDataConnections();q('#supplemental-data-status').textContent=message};
+  q('#toggle-occ').onclick=async event=>{
+    event.target.disabled=true;
+    try{await api('save_lab_setup',{data_profile:{occ_open_interest_enabled:!d.occ_open_interest_enabled}});await refresh(d.occ_open_interest_enabled?'OCC 已停用。':'OCC 已启用，无需填写密钥。')}
+    catch(error){q('#supplemental-data-status').textContent=error.message;event.target.disabled=false}
+  };
+  if(q('#disable-alpaca'))q('#disable-alpaca').onclick=async event=>{
+    event.target.disabled=true;
+    try{await api('save_lab_setup',{data_connection_action:'disable_alpaca'});await refresh('Alpaca 数据已停用，已保存密钥保留。')}
+    catch(error){q('#supplemental-data-status').textContent=error.message;event.target.disabled=false}
+  };
+  q('#supplemental-data-form').onsubmit=async event=>{
+    event.preventDefault();const form=event.target,button=form.querySelector('[type="submit"]');button.disabled=true;
+    q('#supplemental-data-status').textContent='正在测试成交量和买卖盘连接…';
+    const value=new FormData(form);
+    try{
+      const saved=await api('save_lab_setup',{data_connection_action:'connect_alpaca',alpaca_key_id:value.get('alpaca_key_id'),alpaca_secret_key:value.get('alpaca_secret_key')});
+      form.elements.alpaca_key_id.value='';form.elements.alpaca_secret_key.value='';
+      const feeds=saved.alpaca_connection?.feeds||{};
+      await refresh(dataConnectionSummary(feeds));
+    }catch(error){q('#supplemental-data-status').textContent=error.message;}finally{button.disabled=false;}
+  };
+}
+function dataConnectionSummary(feeds={}){
+  const labels={sip:'盘前成交量',iex:'IEX 报价',sip_quotes:'延迟 SIP 报价'};
+  return Object.entries(feeds).map(([key,row])=>`${labels[key]||'补充数据'}：${row.message||(row.status==='available'?'已连接':'未连接')}`).join('；');
+}
+function renderPage(){({run:renderRun,editor:renderEditor,upload:renderUpload,updates:renderUpdates,history:renderHistory,data:renderData,settings:renderSettings,operator:renderOperator}[state.page]||renderRun)();if(state.page==='settings')renderDataConnections()}
 function render(pageChanged=true,settingsChanged=true){q('#operator-nav').classList.toggle('hidden',!state.data.operator_mode.safety_ready);q('#service-text').textContent=state.data.settings.setup_complete?'本地研究工作台已连接':'等待首次设置';q('#service-dot').className='dot '+(state.data.settings.setup_complete?'ok':'');const status=state.data.result_refresh||{};q('#refresh-status').textContent=refreshStatusText(status);q('#refresh-button').disabled=['running','already_running'].includes(status.status);renderRefreshControls(status);if(pageChanged)renderPage();if(settingsChanged)bindSetup();if(!state.data.settings.setup_complete)q('#setup').classList.remove('hidden')}
 async function load(showError=true){
+  if(load.pending){load.again=true;return load.pending;}
+  load.pending=loadState(showError).finally(()=>{
+    load.pending=null;
+    if(load.again){load.again=false;void load(false);}
+  });
+  return load.pending;
+}
+async function loadState(showError=true){
   const request=(load.request||0)+1;load.request=request;
+  const activityRevision=state.activityRevision;
   const replay=q('#replay-modal')?.open?state.replay:null,replayGeneration=state.replayGeneration||0;
   try{
     const value=await api('get_lab_state');if(load.request!==request)return;
+    // Lightweight progress can advance while the history files are verified.
+    // Keep that live state without discarding the completed history response.
+    if(state.activityRevision!==activityRevision&&state.data){
+      value.jobs=state.data.jobs;value.result_refresh=state.data.result_refresh;
+      value.clock={...value.clock,...state.data.clock};
+    }
     // Read user-owned view state after the asynchronous response, not before it.
     const pageScroll=window.scrollY||0,restore=preserveReadingView(q('#'+state.page));
     const restoreSetup=preserveReadingView(q('#setup'));
@@ -221,7 +282,6 @@ async function pollDesktopActivity(){
     const previous=state.data.jobs||[], oldRefresh=state.data.result_refresh;
     const pageScroll=window.scrollY||0,restore=preserveReadingView(q('#'+state.page));
     state.activityRevision=value.revision;
-    load.request=(load.request||0)+1;
     state.data.jobs=value.jobs;state.data.result_refresh=value.result_refresh;
     state.data.clock={...state.data.clock,...value.clock,et:value.observed_at};
     if(typeof updateRunClockStatus==='function')updateRunClockStatus();

@@ -4,6 +4,9 @@ import html
 import hashlib
 import json
 import sqlite3
+import threading
+from copy import deepcopy
+from collections import OrderedDict
 from contextlib import closing
 from datetime import datetime
 from pathlib import Path
@@ -156,10 +159,40 @@ def _verified_batch_status(value: dict[str, Any], batch_id: str) -> dict[str, An
 class ResearchDashboardIndex:
     """SQLite is only a view; immutable batch files remain the source of truth."""
 
-    def __init__(self, *, batches_root: Path, database: Path) -> None:
+    def __init__(self, *, batches_root: Path, database: Path, cache_capacity: int = 64) -> None:
         self.batches_root = batches_root.resolve()
         self.database = database.resolve()
         self.database.parent.mkdir(parents=True, exist_ok=True)
+        self._detail_cache = OrderedDict()
+        self._cache_capacity = cache_capacity
+        self._cache_guard = threading.Lock()
+        self._detail_locks = {}
+        from .minute_settlements import MINUTE_NAMESPACE, MinuteStore
+        self._minute_store = MinuteStore(self.batches_root.parent / MINUTE_NAMESPACE)
+
+    def _detail_signature(self, batch_id):
+        """Reuse verified data only while every dependency is unchanged.
+
+        ctime and inode detect same-size edits with restored mtime and atomic
+        replacements. This is a disposable process-local display cache, not a
+        replacement for hashes: any changed dependency gets full verification.
+        """
+        root = self.batches_root / batch_id
+        manifest = _read(root / 'batch_manifest.json', {})
+        evidence = self._find_evidence(manifest.get('batch_identity', {}).get('evidence_hash', ''))
+        paths = list(root.rglob('*.json'))
+        if evidence:
+            paths.extend(p for p in evidence.rglob('*') if p.is_file())
+        for folder in ('model_annotations', 'model_identity_links'):
+            paths.extend((self.batches_root.parent / folder).glob('*.json'))
+        # Model identity links may authenticate anchors in other batches.
+        paths.extend(self.batches_root.glob('*/variants/*/variant_result.json'))
+        stamps = []
+        for path in sorted(set(paths)):
+            stat = path.stat()
+            stamps.append((str(path), stat.st_size, stat.st_mtime_ns,
+                           stat.st_ctime_ns, stat.st_ino, stat.st_dev))
+        return tuple(stamps)
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.database)
@@ -327,8 +360,7 @@ class ResearchDashboardIndex:
 
     def account_rows(self, daily_results):
         """Join minute observations only at the execution/account boundary."""
-        from .minute_settlements import MINUTE_NAMESPACE, MinuteStore
-        store = MinuteStore(self.batches_root.parent / MINUTE_NAMESPACE)
+        store = self._minute_store
         from .model_identity_links import read_model_links
         model_links = read_model_links(self.batches_root.parent)
         output = []
@@ -491,6 +523,32 @@ class ResearchDashboardIndex:
         return sorted(output, key=lambda row: (str(row["trade_date"]), str(row["variant_key"])), reverse=True)
 
     def batch_detail(self, batch_id: str) -> dict[str, Any]:
+        if Path(batch_id).name != batch_id or batch_id in {'.', '..'}:
+            raise ResearchDashboardError('invalid batch id')
+        try:
+            (self.batches_root / batch_id).resolve().relative_to(self.batches_root)
+        except ValueError as exc:
+            raise ResearchDashboardError('batch path escapes research storage') from exc
+        with self._cache_guard:
+            lock = self._detail_locks.setdefault(batch_id, threading.Lock())
+        with lock:
+            signature = self._detail_signature(batch_id)
+            with self._cache_guard:
+                previous = self._detail_cache.get(batch_id)
+                if previous and previous[0] == signature:
+                    self._detail_cache.move_to_end(batch_id)
+                    return deepcopy(previous[1])
+                self._detail_cache.pop(batch_id, None)
+            value = self._verified_batch_detail(batch_id)
+            if signature != self._detail_signature(batch_id):
+                raise ResearchDashboardError('research files changed during verification; retry')
+            with self._cache_guard:
+                self._detail_cache[batch_id] = (signature, deepcopy(value))
+                while len(self._detail_cache) > self._cache_capacity:
+                    self._detail_cache.popitem(last=False)
+            return value
+
+    def _verified_batch_detail(self, batch_id: str) -> dict[str, Any]:
         if Path(batch_id).name != batch_id:
             raise ResearchDashboardError("invalid batch id")
         root = (self.batches_root / batch_id).resolve()

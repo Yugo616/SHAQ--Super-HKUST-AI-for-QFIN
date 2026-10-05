@@ -25,6 +25,110 @@ for(const file of scripts)vm.runInContext(fs.readFileSync(path.join(desktop,file
 
 
 class ReviewViewTests(unittest.TestCase):
+    def test_comparison_titles_use_dates_and_names_not_internal_batch_identifiers(self):
+        value = self.bundle(r'''
+console.log(JSON.stringify(vm.runInContext(`SHAQComparison.html({
+ left:{batch_id:'LAB-2026-10-02-hidden-left',variant_key:'team/a',label:'独立证据门禁版',trade_date:'2026-10-02'},
+ right:{batch_id:'LAB-2026-10-02-hidden-right',variant_key:'team/b',label:'跨域综合研判版',trade_date:'2026-10-02'}
+})`,ctx)));
+''')
+        self.assertIn('独立证据门禁版', value)
+        self.assertIn('跨域综合研判版', value)
+        self.assertIn('2026-10-02', value)
+        self.assertNotIn('hidden-left', value)
+        self.assertNotIn('hidden-right', value)
+
+    def test_overlapping_refreshes_render_completed_response_before_followup(self):
+        value=self.bundle(r'''
+(async()=>{
+ const pending=[];
+ ctx.window.pywebview={api:{get_lab_state:()=>new Promise(resolve=>pending.push(resolve))}};
+ vm.runInContext(`state.data={jobs:[],dashboard:{marker:'old'},clock:{},settings:{},result_refresh:{status:'idle'}};
+ state.page='history';render=()=>{};refreshRunProgress=()=>{};preserveReadingView=()=>()=>{};`,ctx);
+ const first=vm.runInContext('load(false)',ctx),second=vm.runInContext('load(false)',ctx);
+ const active=pending.length;
+ pending[0]({ok:true,value:{jobs:[],dashboard:{marker:'new'},clock:{},settings:{},result_refresh:{status:'idle'}}});
+ await first;
+ const marker=vm.runInContext('state.data.dashboard.marker',ctx);
+ if(pending[1])pending[1]({ok:true,value:{jobs:[],dashboard:{marker:'newest'},clock:{},settings:{},result_refresh:{status:'idle'}}});
+ await second;
+ console.log(JSON.stringify({active,marker}));
+})().catch(error=>{console.error(error);process.exitCode=1});
+''')
+        self.assertEqual(value,{'active':1,'marker':'new'})
+
+    def test_activity_poll_does_not_discard_completed_history_refresh(self):
+        value=self.bundle(r'''
+(async()=>{
+ let finish;
+ ctx.window.pywebview={api:{
+  get_lab_state:()=>new Promise(resolve=>{finish=resolve}),
+  get_lab_activity:async()=>({ok:true,value:{changed:true,revision:'new',
+   jobs:[{job_id:'active',status:'running',message:'new progress'}],
+   result_refresh:{status:'idle'},clock:{trade_date:'today'},observed_at:'now'}})
+ }};
+ vm.runInContext(`state.data={jobs:[],dashboard:{marker:'old'},clock:{},settings:{},result_refresh:{status:'idle'}};
+ state.page='history';state.activityRevision='old';render=()=>{};refreshRunProgress=()=>{};
+ updateRunClockStatus=()=>{};preserveReadingView=()=>()=>{};`,ctx);
+ const pending=vm.runInContext('load(false)',ctx);
+ await vm.runInContext('pollDesktopActivity()',ctx);
+ finish({ok:true,value:{jobs:[],dashboard:{marker:'new'},clock:{},settings:{},result_refresh:{status:'idle'}}});
+ await pending;
+ console.log(vm.runInContext('JSON.stringify({dashboard:state.data.dashboard.marker,jobs:state.data.jobs})',ctx));
+})().catch(error=>{console.error(error);process.exitCode=1});
+''')
+        self.assertEqual(value['dashboard'],'new')
+        self.assertEqual(value['jobs'][0]['message'],'new progress')
+
+    def test_failed_batch_detail_is_read_again_after_recovery(self):
+        value=self.bundle(r'''
+(async()=>{
+ const result=await vm.runInContext(`(async()=>{
+  let reads=0;const cache=SHAQReplayCache.create(async()=>++reads===1
+   ? {status:{all_variants_completed:false},variants:{}}
+   : {status:{all_variants_completed:true},variants:{v:{predictions:['AAA']}}});
+  await cache.get('recover');const before=cache.peek('recover');
+  const saved=await cache.get('recover');await cache.get('recover');
+  return {reads,before,saved};
+ })()`,ctx);console.log(JSON.stringify(result));
+})().catch(error=>{console.error(error);process.exitCode=1});
+''')
+        self.assertEqual(value['reads'],2)
+        self.assertFalse(value.get('before'))
+        self.assertEqual(value['saved']['variants']['v']['predictions'],['AAA'])
+
+    def test_opening_unwarmed_detail_reads_saved_report(self):
+        value=self.bundle(r'''
+(async()=>{
+ const calls=[];
+ ctx.window.pywebview={api:{get_shadow_batch:async(id,accounts)=>{calls.push([id,accounts]);return {ok:true,value:{batch_id:id}}}}};
+ nodes['#replay-modal']={open:false,showModal(){this.open=true},close(){this.open=false}};
+ await vm.runInContext(`renderBatch=(batch,key,symbol)=>{q('#batch-detail').innerHTML='saved:'+batch.batch_id+':'+symbol};
+ loadBatch('new-today','v','BBB')`,ctx);
+ console.log(JSON.stringify({calls,html:nodes['#batch-detail'].innerHTML,open:nodes['#replay-modal'].open}));
+})().catch(error=>{console.error(error);process.exitCode=1});
+''')
+        self.assertEqual(value['calls'],[['new-today',False]])
+        self.assertEqual(value['html'],'saved:new-today:BBB')
+        self.assertTrue(value['open'])
+
+    def test_unwarmed_concurrent_reads_share_request_and_failure_can_retry(self):
+        value=self.bundle(r'''
+(async()=>{
+ const result=await vm.runInContext(`(async()=>{
+  let reads=0,finish;
+  const cache=SHAQReplayCache.create(()=>{reads++;return new Promise(resolve=>{finish=resolve})});
+  const first=cache.get('new'),second=cache.get('new');await Promise.resolve();
+  finish({batch_id:'new'});await first;await second;await cache.get('new');
+  let attempts=0;
+  const retry=SHAQReplayCache.create(async()=>{if(++attempts===1)throw Error('offline');return {batch_id:'retry'}});
+  try{await retry.get('retry')}catch(_){}
+  return {reads,attempts: (await retry.get('retry'),attempts),saved:cache.peek('new')};
+ })()`,ctx);console.log(JSON.stringify(result));
+})().catch(error=>{console.error(error);process.exitCode=1});
+''')
+        self.assertEqual(value,{'reads':1,'attempts':2,'saved':{'batch_id':'new'}})
+
     def test_opening_preloaded_detail_renders_immediately_without_another_read(self):
         value=self.bundle(r'''
 (async()=>{

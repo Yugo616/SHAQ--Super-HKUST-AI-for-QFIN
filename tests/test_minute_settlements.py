@@ -18,6 +18,24 @@ def records(day='2026-09-09', opening=100, closing=110):
 
 
 class MinuteStoreTests(unittest.TestCase):
+    def test_cached_snapshot_keeps_validation_and_detects_tampering(self):
+        import os
+        from unittest.mock import patch
+        from shaq_daily_oracle.hashing import sha256_payload
+        first = self.observe()
+        with patch('shaq_daily_oracle.minute_settlements.sha256_payload', wraps=sha256_payload) as digest:
+            second = self.store.snapshot('2026-09-09', ['AAA'])
+            self.assertEqual(second, first)
+            self.assertEqual(digest.call_count, 0)
+        second['targets'].clear()
+        self.assertTrue(self.store.snapshot('2026-09-09', ['AAA'])['targets'])
+        path = next(Path(self.tmp.name).glob('*/observations/*.json'))
+        stat = path.stat()
+        path.write_bytes(path.read_bytes().replace(b'100', b'200'))
+        os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+        with self.assertRaisesRegex(ValueError, 'hash mismatch'):
+            self.store.snapshot('2026-09-09', ['AAA'])
+
     def setUp(self):
         self.assertIsNotNone(importlib.util.find_spec('shaq_daily_oracle.minute_settlements'),
                              'Dedicated immutable minute observation store is missing')

@@ -4,7 +4,7 @@ window.SHAQUpdateExit=(()=>{
   const dirty=group=>groups.set(group,++generation);
   const groupForSave=(name,args)=>({
     save_lab_model_profile:()=>`connection:${args[0].protocol}`,
-    save_lab_setup:()=>args[0].data_profile?'data':'research',
+    save_lab_setup:()=>args[0].data_profile||args[0].data_connection_action?'data':'research',
     save_skill_package_draft:()=>`skill:${args[0]}`,
     save_module_draft:()=>`module:${args[0]}`,
     save_decision_draft:()=> 'decision',
@@ -15,7 +15,7 @@ window.SHAQUpdateExit=(()=>{
     const field=event.target;
     if(field.closest?.('#model-form')){
       if(field.name!=='protocol')dirty(`connection:${document.querySelector('#model-form').elements.protocol.value}`);
-    }else if(field.closest?.('#data-form'))dirty('data');
+    }else if(field.closest?.('#data-form')||field.closest?.('#supplemental-data-form'))dirty('data');
     else if(field.closest?.('#research-form'))dirty('research');
     else if(field.closest?.('#automatic-settings'))dirty('automatic-run');
     else if(field.closest?.('#editor')){

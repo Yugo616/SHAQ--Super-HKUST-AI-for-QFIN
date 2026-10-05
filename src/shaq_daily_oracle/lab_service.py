@@ -657,9 +657,9 @@ class LabService:
         event_rows = domain_rows("event")
         if run_status != "fresh":
             event_status, event_note = run_status, run_note
-        elif any(row.get("status") == "provider_error" for row in event_rows):
+        elif any(row.get("status") == "provider_error" or row.get('partial_failure') for row in event_rows):
             event_status = "partial_failure" if any(row.get("status") == "collected" for row in event_rows) else "provider_error"
-            event_note = "公司公告来源出现错误；不能确认今日事件情况。"
+            event_note = "部分公告或附件未取得；已取得正文保留，不能把封面当作完整财报。"
         elif any(row.get("status") == "collected" for row in event_rows):
             event_status, event_note = "fresh", "今日一手公告已采集；其余无适用事件的标的单独记录。"
         elif event_rows and all(row.get("status") == "not_applicable" for row in event_rows):
@@ -682,11 +682,15 @@ class LabService:
             f"有效双边价{option_count('valid_two_sided_price_count')}"
             if evidence_manifest else "将在运行时检查"
         )
+        if any(row.get('open_interest_context_available') for row in option_rows):
+            option_coverage += f"；OCC 标准合约 {option_count('open_interest_context_contracts')}"
         if run_status != "fresh":
             option_status, option_note = run_status, run_note
         elif any(row.get("status") == "provider_error" for row in option_rows):
             option_status = "partial_failure" if any(row.get("status") != "provider_error" for row in option_rows) else "provider_error"
             option_note = "期权来源出现接口故障；不可当作无合约或有效报价。"
+        elif any(row.get('reason') == 'open_interest_context_only' for row in option_rows):
+            option_status, option_note = 'limited', '已取得 OCC 期权未平仓量结构；不包含报价、隐含波动率或主动买卖方向。'
         elif any(row.get("reason") == "missing_exchange_quote_timestamp" for row in option_rows):
             option_status = "limited"
             option_note = "已取得部分期权链，但缺少交易所报价时间，不能验证报价新鲜度或推断方向。"
@@ -707,6 +711,11 @@ class LabService:
         market_note = run_note
         if unknown_volume:
             market_note += f" {unknown_volume}只股票的供应商盘前量字段全为0，真实成交量未知。"
+        supplemental_volume = provider_manifest.get('supplemental_premarket_volume') or {}
+        volume_symbols = supplemental_volume.get('symbols') or {}
+        delayed_count = sum(row.get('volume_status') == 'observed_positive' for row in volume_symbols.values())
+        if delayed_count:
+            market_note += f" 其中 {delayed_count} 只候选已补充 Alpaca 延迟全市场成交量；实际覆盖时间见依据。"
         market_coverage = (
             f"{sum(row.get('status') == 'collected' for row in observations.values() if isinstance(row, dict))}只股票有盘前价格柱；"
             f"{unknown_volume}只股票盘前成交量不可验证"
@@ -741,8 +750,8 @@ class LabService:
                 "note": event_note,
             },
             {
-                "name": "基础期权表面",
-                "source": profile.market_provider,
+                "name": "期权报价与持仓结构",
+                "source": profile.market_provider + (' + OCC' if any(row.get('open_interest_context_available') for row in option_rows) else ''),
                 "updated_at": captured_at,
                 "status": option_status,
                 "coverage": option_coverage,
@@ -765,12 +774,12 @@ class LabService:
                 "note": "当前为版本化研究快照；成分变化只从被记录的已知时间起生效。",
             },
             {
-                "name": "逐笔主动买卖与盘口深度",
-                "source": "免费源未提供",
-                "updated_at": "",
-                "status": "unavailable",
-                "coverage": "0",
-                "note": "资金领域不会用聚合大单或成交量猜测主动买卖方向。",
+                "name": "盘口变化与买卖压力",
+                "source": provider_manifest.get('capabilities', {}).get('order_flow', 'unavailable'),
+                "updated_at": captured_at,
+                "status": source_status('capital', empty='unavailable'),
+                "coverage": f"{sum(r.get('status')=='collected' for r in domain_rows('capital'))}只候选有盘口记录",
+                "note": "Alpaca IEX 为单交易所盘口队列变化，不是全市场资金流或主动成交方向。",
             },
             {
                 "name": "期权主动交易与开平仓",
@@ -838,6 +847,37 @@ class LabService:
 
     def save_setup(self, submitted: dict[str, Any]) -> dict[str, Any]:
         sanitized = dict(submitted)
+        action = sanitized.pop('data_connection_action', '')
+        alpaca_key = str(sanitized.pop('alpaca_key_id', '')).strip()
+        alpaca_secret = str(sanitized.pop('alpaca_secret_key', '')).strip()
+        if action == 'connect_alpaca':
+            from .alpaca_bars import probe_data_connection
+            profile = DataProfile.from_dict(self.settings.load()['data_profile'])
+            if not alpaca_key and not alpaca_secret:
+                alpaca_key, alpaca_secret = self.settings.get_alpaca_credentials()
+            universe = Path(profile.universe_file)
+            if not universe.is_absolute(): universe = self.paths.package_root / universe
+            now = datetime.now(ET)
+            members = load_versioned_universe(universe, cutoff=now)
+            if not members:
+                raise LabServiceError('请先配置股票池，再测试数据连接。')
+            receipt = probe_data_connection(key_id=alpaca_key, secret_key=alpaca_secret,
+                symbol=members[0].symbol.removeprefix('US.'), now=now,
+                timeout_seconds=profile.request_timeout_seconds,
+                delay_seconds=profile.alpaca_sip_delay_seconds + profile.alpaca_safety_margin_seconds)
+            # Do not replace a working connection when the proposed keys fail.
+            self.settings.set_alpaca_credentials(alpaca_key, alpaca_secret)
+            self.settings.save_research_setup({'data_profile': {
+                'alpaca_premarket_enabled': receipt['premarket_available'],
+                'alpaca_orderflow_enabled': receipt['orderflow_available']}})
+            return self.settings.save_alpaca_connection_receipt(receipt)
+        if action == 'disable_alpaca':
+            return self.settings.save_research_setup({'data_profile': {
+                'alpaca_premarket_enabled': False, 'alpaca_orderflow_enabled': False}})
+        if action:
+            raise LabServiceError('无法识别的数据连接操作。')
+        if alpaca_key or alpaca_secret:
+            self.settings.set_alpaca_credentials(alpaca_key, alpaca_secret)
         openbb_secret = str(sanitized.pop("openbb_api_key", "")).strip()
         if openbb_secret:
             self.settings.set_openbb_secret(openbb_secret)
@@ -1454,6 +1494,7 @@ class LabService:
                 root=temporary, package_root=self.paths.package_root,
                 profile=profile, sec_identity=sec_identity,
                 openbb_api_key=openbb_api_key,
+                alpaca_credentials=self.settings.get_alpaca_credentials() if (profile.alpaca_premarket_enabled or profile.alpaca_orderflow_enabled) else None,
                 screening_rules=screening_rules or None,
                 history_cache_root=self.paths.research_root / "cache/daily_bars",
                 allow_replay=False,
@@ -1513,9 +1554,9 @@ class LabService:
                 continue
         return versions
 
-    def job_statuses(self) -> list[dict[str, Any]]:
+    def job_statuses(self, *, batch_id: str | None = None) -> list[dict[str, Any]]:
         from .job_corrections import corrected_status, observed_job_status
-        from .research_progress import summarize_job, display_events
+        from .research_progress import summarize_job
         stored = {}
         jobs_root = self.paths.research_root / "jobs"
         if jobs_root.is_dir():
@@ -1533,12 +1574,14 @@ class LabService:
                     continue
         with self.jobs_lock:
             stored.update({key: dict(value) for key, value in self.jobs.items()})
+        if batch_id is not None:
+            stored = {key: row for key, row in stored.items() if row.get('batch_id') == batch_id}
         for job_id, row in stored.items():
             row = observed_job_status(self.paths.research_root, corrected_status(self.paths.research_root, row))
             stored[job_id] = row
-            row["research_progress"] = display_events(ResearchProgressLog(
+            row["research_progress"] = ResearchProgressLog(
                 self.paths.research_root / "jobs" / f"{job_id}-research.jsonl"
-            ).read())
+            ).read_display()
             row['progress_summary'] = summarize_job(row)
         return sorted(stored.values(), key=lambda row: str(row.get("started_at_et") or ""), reverse=True)
 
@@ -1555,7 +1598,7 @@ class LabService:
             accounts = self.dashboard.overview()['virtual_accounts']
             detail['virtual_accounts'] = dict(accounts, results=[r for r in accounts['results'] if r['batch_id'] == batch_id])
         detail["research_progress"] = [
-            event for job in self.job_statuses() if job.get("batch_id") == batch_id
+            event for job in self.job_statuses(batch_id=batch_id)
             for event in job.get("research_progress", []) if event.get("batch_id") == batch_id
         ]
         return detail

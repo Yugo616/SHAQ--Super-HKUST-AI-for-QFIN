@@ -1,4 +1,24 @@
 // Display only: prices and predictions are read from their saved records.
+const SHAQRunCaption=(()=>{
+  function describe(row={},timeZone=Intl.DateTimeFormat().resolvedOptions().timeZone){
+    const raw=String(row.trade_date||row.manifest?.trade_date||row.evidence?.as_of_et||'');
+    const day=/^(\d{4})-(\d{2})-(\d{2})/.exec(raw);
+    const title=day?`${day[1]}年${Number(day[2])}月${Number(day[3])}日运行`:'运行日期未记录';
+    const stamp=row.completed_at_et;
+    if(stamp&&/(Z|[+-]\d{2}:\d{2})$/.test(stamp)){
+      const date=new Date(stamp);
+      if(Number.isFinite(date.getTime())){
+        const parts=Object.fromEntries(new Intl.DateTimeFormat('zh-CN',{timeZone,
+          year:'numeric',month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit',
+          second:'2-digit',hourCycle:'h23'}).formatToParts(date).map(p=>[p.type,p.value]));
+        return {title,completion:`结束于 ${parts.year}年${parts.month}月${parts.day}日 ${parts.hour}:${parts.minute}:${parts.second}（本机时间）`};
+      }
+    }
+    return {title,completion:['running','queued'].includes(row.status)?'运行中':
+      ['engineering_failure','failed','partial_failure'].includes(row.status)?'未完成':'结束时间未记录'};
+  }
+  return {describe};
+})();
 const SHAQResults=(()=>{
   const esc=value=>SHAQAccounts.escape(value),usd=value=>SHAQAccounts.usd(value);
   const direction=value=>({bullish:'看涨',bearish:'看跌',neutral:'中性'}[value]||'—');
@@ -16,11 +36,12 @@ const SHAQResults=(()=>{
       const predictions=row.predictions?.length?row.predictions:[{}];
       const account=accounts.find(value=>value.batch_id===row.batch_id&&value.variant_key===row.variant_key);
       const meta=SHAQAccounts.historyIdentity(row,versions),model=SHAQAccounts.modelCaption([],row.model);
+      const caption=SHAQRunCaption.describe(row);
       const phase=row.status==='engineering_failure'?'运行失败':row.score_eligible===false?'过时结果，仅供参考':row.status==='empty'?'空榜':'已正常运行';
       const complete=['final','provisional','empty'].includes(account?.status);
       const total=complete?signed(account.net_pnl):'—';
       const retry=account?.reconciliation_pending?'<span>上次结算 · 待重新核对</span> <button class="text-button" data-reconcile-results>重新核对</button>':['unavailable','incomplete','error'].includes(account?.status)?` <button class="text-button" data-retry-minute-date="${esc(row.trade_date)}">补取缺失行情</button>`:'';
-      const header=`<tr class="result-group" data-comparison-group="true" data-batch="${esc(row.batch_id)}" data-variant-key="${esc(row.variant_key)}"><td colspan="9"><div class="result-group-heading"><span class="result-group-choice"></span><b>${esc(row.trade_date)} · ${esc(meta.method_name)}</b><span>${esc(model?model+' · ':'')}${esc(phase)}</span><span class="result-group-total">当日合计 ${total} · 余额 ${usd(account?.account_balance)}</span>${retry}</div></td></tr>`;
+      const header=`<tr class="result-group" data-comparison-group="true" data-batch="${esc(row.batch_id)}" data-variant-key="${esc(row.variant_key)}"><td colspan="9"><div class="result-group-heading"><span class="result-group-choice"></span><b>${esc(caption.title)} · ${esc(meta.method_name)}</b><span class="run-completion">${esc(caption.completion)}</span><span>${esc(model?model+' · ':'')}${esc(phase)}</span><span class="result-group-total">当日合计 ${total} · 余额 ${usd(account?.account_balance)}</span>${retry}</div></td></tr>`;
       return [header,...predictions.map(prediction=>{
         const value=outcome(row.labels?.[prediction.symbol],prediction);
         const trade=account?.trades?.find(item=>item.symbol===prediction.symbol);
@@ -42,12 +63,15 @@ const SHAQReplayCache=(()=>{
     const peek=id=>{const entry=entries.get(id);return entry?.revision===revisions.get(id)?entry?.value:null};
     async function get(id){
       const revision=revisions.get(id),previous=entries.get(id);
-      if(previous?.revision===revision&&previous.value)return previous.value;
-      if(previous?.revision===revision&&previous.promise)return previous.promise;
+      if(previous&&previous.revision===revision&&previous.value)return previous.value;
+      if(previous&&previous.revision===revision&&previous.promise)return previous.promise;
       const entry={revision};entries.set(id,entry);
       entry.promise=Promise.resolve().then(()=>read(id)).then(value=>{
         if(revisions.get(id)!==revision)return get(id);
-        entry.value=value;return value;
+        // A failed or running batch may gain results when it is resumed.
+        // Share its in-flight read, but do not freeze the incomplete response.
+        if(value?.status?.all_variants_completed!==false)entry.value=value;
+        return value;
       }).catch(error=>{entry.error=error;throw error}).finally(()=>{entry.promise=null});
       return entry.promise;
     }

@@ -1,5 +1,8 @@
 """Immutable execution observations, never prediction evidence or daily labels."""
 from datetime import date, datetime, timedelta
+from collections import OrderedDict
+from copy import deepcopy
+import threading
 import json
 import math
 from pathlib import Path
@@ -64,6 +67,16 @@ class MinuteStore:
     """One content-addressed collection per date/provider/symbol set and read time."""
     def __init__(self, root: Path):
         self.root = root
+        self._snapshot_cache = OrderedDict()
+        self._snapshot_lock = threading.Lock()
+
+    def _observation_signature(self):
+        result = []
+        for path in sorted(self.root.glob('*/observations/*.json')):
+            stat = path.stat()
+            result.append((str(path), stat.st_size, stat.st_mtime_ns,
+                           stat.st_ctime_ns, stat.st_ino, stat.st_dev))
+        return tuple(result)
 
     def observe(self, trade_date, symbols, records, *, provider, observed_at,
                 fresh_provider_read=True):
@@ -125,6 +138,25 @@ class MinuteStore:
         return result
 
     def snapshot(self, trade_date, symbols, *, provider='yfinance', _entry_times=None, _observation_hashes=None):
+        symbols = sorted(set(symbols))
+        key = (trade_date, tuple(symbols), provider, tuple(sorted((_entry_times or {}).items())),
+               None if _observation_hashes is None else tuple(sorted(_observation_hashes)))
+        with self._snapshot_lock:
+            signature = self._observation_signature()
+            saved = self._snapshot_cache.get(key)
+            if saved and saved[0] == signature:
+                self._snapshot_cache.move_to_end(key)
+                return deepcopy(saved[1])
+            self._snapshot_cache.pop(key, None)
+            result = self._verified_snapshot(trade_date, symbols, provider=provider,
+                _entry_times=_entry_times, _observation_hashes=_observation_hashes)
+            if signature == self._observation_signature():
+                self._snapshot_cache[key] = (signature, deepcopy(result))
+                while len(self._snapshot_cache) > 64:
+                    self._snapshot_cache.popitem(last=False)
+            return result
+
+    def _verified_snapshot(self, trade_date, symbols, *, provider='yfinance', _entry_times=None, _observation_hashes=None):
         symbols = sorted(set(symbols))
         if not symbols:
             return dict(status='not_required', trade_date=trade_date, symbols=[],

@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "processor": "html-blocks-sqlite-bm25-v1",
+  "block_characters": 4000,
+  "table_context_rows": 3,
+  "neighbour_blocks": 1,
+  "topics": {
+    "performance": "revenue OR sales OR earnings OR EPS OR margin OR profit OR income",
+    "outlook": "guidance OR outlook OR forecast OR expects OR bookings OR backlog",
+    "risks": "risk OR impairment OR loss OR decline OR litigation OR uncertainty OR cancellation OR restructuring",
+    "funding": "cash OR liquidity OR debt OR covenant OR financing OR dilution OR repurchase OR dividend"
+  },
+  "sources": [
+    "https://www.sqlite.org/fts5.html#the_bm25_function",
+    "https://www.crummy.com/software/BeautifulSoup/bs4/doc/",
+    "https://docling-project.github.io/docling/concepts/chunking/",
+    "https://www.sec.gov/search-filings/edgar-application-programming-interfaces"
+  ],
+  "parameter_bindings": {
+    "processor": ["REF-FILING-INPUT-001", "DEC-FILING-INPUT-001", "EXP-FILING-INPUT-001"],
+    "block_characters": ["REF-FILING-INPUT-001", "DEC-FILING-INPUT-001", "EXP-FILING-INPUT-001"],
+    "table_context_rows": ["REF-FILING-INPUT-001", "DEC-FILING-INPUT-001", "EXP-FILING-INPUT-001"],
+    "neighbour_blocks": ["REF-FILING-INPUT-001", "DEC-FILING-INPUT-001", "EXP-FILING-INPUT-001"],
+    "topics": ["REF-FILING-INPUT-001", "DEC-FILING-INPUT-001", "EXP-FILING-INPUT-001"],
+    "sources": ["REF-FILING-INPUT-001", "DEC-FILING-INPUT-001", "EXP-FILING-INPUT-001"]
+  }
+}

@@ -10,10 +10,10 @@ const SHAQComparison = {
     const direction={bullish:'看涨',bearish:'看跌',neutral:'中性',not_published:'未发布'};
     const usd=x=>x==null?'—':`${Number(x)<0?'-':''}$${Math.abs(Number(x)).toFixed(2)}`;
     const reason=x=>x?.decision_reason || (x?.rejection_reasons||[]).join('；') || '见原始分析';
-    const label=x=>escape(x?.label || x?.variant_key || '未记录版本');
+    const label=x=>escape(x?.label || '未记录版本');
     const outcome=x=>`${escape({final:'已复核',provisional:'初步',pending:'等待行情',empty:'空榜',failed:'失败'}[x?.status]||x?.status||'尚无账户回放')} · 净盈亏 ${usd(x?.net_pnl)}`;
     return `<h3>${label(value.left)} ↔ ${label(value.right)}</h3>
-      <p class="muted">左：${escape(value.left?.trade_date||'未记录日期')} · ${escape(value.left?.batch_id||'未记录批次')}<br>右：${escape(value.right?.trade_date||'未记录日期')} · ${escape(value.right?.batch_id||'未记录批次')}</p>
+      <p class="muted">左：${escape(value.left?.trade_date||'未记录日期')} · ${label(value.left)}<br>右：${escape(value.right?.trade_date||'未记录日期')} · ${label(value.right)}</p>
       <p class="comparison-verdict">${value.controlled_method_comparison
         ? '数据、模型、候选、日期与交易规则一致，可以对照方法输出；单次差异不代表效果已经得到证明。'
         : '存在不同或未记录的输入，结果差异不能单独归因于方法。'}</p>

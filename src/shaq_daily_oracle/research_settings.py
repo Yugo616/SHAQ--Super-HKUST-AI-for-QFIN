@@ -17,12 +17,14 @@ GITHUB_TOKEN_NAME = "github-user-token"
 GITHUB_REFRESH_TOKEN_NAME = "github-user-refresh-token"
 MODEL_SECRET_PREFIX = "model-profile:"
 OPENBB_SECRET_NAME = "openbb-rest-api-key"
+ALPACA_SECRET_NAME = "alpaca-market-data"
 
 
 def _data_profile_hash(value: dict[str, Any]) -> str:
-    # Runtime deadline is not part of source readiness or frozen data identity.
-    return sha256_payload({key: item for key, item in value.items()
-                           if key != 'yahoo_worker_timeout_seconds'})
+    # Canonical defaults must match collection identity when an older saved
+    # profile predates a new optional provider setting.
+    from .data_providers import DataProfile
+    return DataProfile.from_dict(value).identity()
 
 
 def _repository_defaults(package_root: Path) -> dict[str, Any]:
@@ -92,6 +94,8 @@ def default_research_settings(package_root: Path) -> dict[str, Any]:
             "maximum_event_characters": 60000,
             "maximum_option_expiries": 3,
             "maximum_option_contracts_per_side": 40,
+            "occ_open_interest_enabled": True,
+            "alpaca_premarket_enabled": False,
         },
         "sec_identity": "",
         "research_readiness": {
@@ -234,6 +238,25 @@ class ResearchSettingsStore:
         return os.environ.get("SHAQ_OPENBB_API_KEY", "").strip() or self._get_secret(
             OPENBB_SECRET_NAME
         )
+
+    def set_alpaca_credentials(self, key_id: str, secret_key: str) -> None:
+        if not key_id.strip() or not secret_key.strip():
+            raise SettingsError('Alpaca Key ID 和 Secret Key 都需要填写')
+        self._set_secret(ALPACA_SECRET_NAME, json.dumps({'key_id': key_id.strip(), 'secret_key': secret_key.strip()}))
+        self._record_secret_state('alpaca_credentials_saved', present=True)
+
+    def get_alpaca_credentials(self) -> tuple[str, str]:
+        value = self._get_secret(ALPACA_SECRET_NAME)
+        if not value:
+            return '', ''
+        parsed = json.loads(value)
+        return str(parsed['key_id']), str(parsed['secret_key'])
+
+    def save_alpaca_connection_receipt(self, receipt: dict[str, Any]) -> dict[str, Any]:
+        settings = self.load()
+        settings['alpaca_connection'] = receipt
+        self._save(settings)
+        return self.public_settings()
 
     def save_model_profile(
         self, profile_value: dict[str, Any], *, secret: str | None = None
@@ -487,6 +510,7 @@ class ResearchSettingsStore:
                 bool(os.environ.get("SHAQ_OPENBB_API_KEY", "").strip())
                 or state.get("openbb_secret_saved") is True
             ),
+            "alpaca_credentials_saved": state.get('alpaca_credentials_saved') is True,
         }
 
     def _save(self, settings: dict[str, Any]) -> None:

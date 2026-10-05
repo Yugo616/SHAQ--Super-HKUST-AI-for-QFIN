@@ -14,29 +14,26 @@ SHAQ brings six specialist research domains, adversarial review and a brokerless
 
 ## Download
 
-The primary downloads below target **0.7.8**. A platform is available only when its page contains the matching installer, checksum and acceptance record. If those assets are absent, do not treat this source page as a release announcement; use the clearly labelled previous release below.
+The downloads below target **0.7.9**. Choose your operating system and, on Mac, your chip. Each platform page contains its installer, checksums and acceptance record.
 
-0.7.8 preserves settled balances during price rechecks, retries temporary database locks, and keeps older unfinished runs in history instead of today's progress. Windows and Mac share the same fixes; saved predictions, methods and account rules stay unchanged.
+This update consolidates data preparation, bounded failure recovery and readable results. Successful work is retained; dates and completion times replace batch hashes in titles. Hover balance points for stock-level outcomes, open preloaded replay details, and retain reading position during refresh.
 
 This update groups daily selections, separates per-stock P&L from daily totals, connects counted balance history and displays recorded model names. Research evidence must be frozen by 08:50 ET and inference finished before the regular session opens; original forecasts and timestamps remain intact. See the [timing and replay policy](docs/research-timing.md).
 
 Choose your connection, then an explicit model in **Connection Settings**. Change it there at any time: a successful save applies to subsequent manual and scheduled runs, not an in-progress batch. Local model lists come from Codex/Claude Code; APIs can list models when supported or accept an explicit identifier. Older default-model connections require selection once. No model is silently chosen for you.
 
-0.7.4 explains which daily results contribute to the balance, adds date-specific missing-minute retrieval, and stops completed progress bars. Replay details show recorded model names instead of internal placeholders. No prediction or account rules change.
-
-In 0.7.3, model calls have a configurable 600-second total deadline and one transient retry by default (**Connection Settings → Advanced call settings**). **Resume original batch** fills only unfinished calls using the same frozen evidence; late recovery remains research, not on-time formal performance. Automatic research uses the native Windows/macOS scheduler. Progress refresh preserves expanded sections and selections, and isolated data collection releases its own resources. Model identity, methods, fees, balances and historical records are unchanged. See the [update guide](docs/software-updates.md).
+Optional free Alpaca market data is configured in Connection Settings. SEC earnings exhibits, long HTML filing handling and OCC contract open interest are also integrated. Sources retain actual timestamps and coverage; older quotes are not presented as live directional flow. See the [update guide](docs/software-updates.md).
 
 | Your computer | Download |
 |---|---|
-| Windows 10/11, x64 | [Windows 0.7.8 installer](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.8-windows) |
-| Mac with Apple Silicon (M series), macOS 15+ | [Apple Silicon 0.7.8 DMG](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.8-macos) |
-| Intel Mac, macOS 15+ | [Intel 0.7.8 DMG](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.8-macos) |
+| Windows 10/11, x64 | [Windows 0.7.9 installer](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.9-windows) |
+| Mac with Apple Silicon (M series), macOS 15+ | [Apple Silicon 0.7.9 DMG](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.9-macos) |
+| Intel Mac, macOS 15+ | [Intel 0.7.9 DMG](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.9-macos) |
 
-Previous managed release: [Windows 0.7.7](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.7-windows), [macOS 0.7.7](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.7-macos).
+Previous managed release: [Windows 0.7.8](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.8-windows), [macOS 0.7.8](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.8-macos). Use the previous release if a new platform's assets have not yet appeared.
 
 Download the **`.exe`** or **`.dmg`** only. Other assets serve the updater, checksum verification and third-party notices. Installers include Python and the simulation engine: Git, Python, Futu and a brokerage account are not end-user prerequisites. Windows requires WebView2; the installer checks it. These are internally tested prereleases without commercial signing or notarization. Check the release page before accepting an operating-system source warning.
 
-**Legacy fallback, not 0.7.3:** [Windows 0.7.1](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.1-windows) ([source `bc144f1`](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/commit/bc144f1c4135b7b009e07d009f73724f95848bb7)); [Mac 0.7.0](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.0-macos) (Apple Silicon source [`56d6467`](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/commit/56d64679bb8a9291e229e29743c9be29a7a16517), Intel source [`97384db`](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/commit/97384db94f4ccf1c85b046c4c82bc170f0c9a8d0)). Releases supply per-platform acceptance records and checksums; old artifacts remain unchanged.
 
 ## Your first run
 

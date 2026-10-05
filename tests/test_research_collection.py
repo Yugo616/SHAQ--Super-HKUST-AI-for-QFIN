@@ -62,6 +62,195 @@ class FakeEvents:
 
 
 class ResearchCollectionTests(unittest.TestCase):
+    def test_primary_and_exhibits_share_one_budget_and_archive_full_blocks(self):
+        from dataclasses import replace
+        class Earnings(FakeEvents):
+            def recent_events(self, members, **kwargs):
+                return {m.symbol: [{'status':'collected','form':'8-K','accession_number':'one-filing',
+                    'acceptance_time':'2026-09-04T07:00:00-04:00',
+                    'source_url':'https://www.sec.gov/Archives/edgar/data/123/00012326000001/main.htm'}]
+                    if m.symbol=='AAPL' else [] for m in members}
+            def download_primary_document(self, url):
+                if url.endswith('main.htm'):
+                    return (b'<p>Company history.</p>' * 400 + b'<tr><td>99</td><td><a href="earnings.htm">News release</a></td></tr>')
+                return b'<p>Fiscal results discussion.</p>' * 400 + b'<h2>Guidance</h2><p>Revenue outlook cut to $81 million.</p>'
+        with tempfile.TemporaryDirectory() as directory:
+            evidence = collect_research_evidence(root=Path(directory)/'evidence', package_root=PACKAGE_ROOT,
+                profile=replace(self.profile(), maximum_event_characters=2000),
+                sec_identity='Research test@example.edu', observed_at=datetime(2026,9,4,8,45,tzinfo=ZoneInfo('America/New_York')),
+                market_provider=FakeMarket(), metadata_provider=FakeMetadata(), event_provider=Earnings())
+            view=json.loads((evidence.root/'raw/events/AAPL/0.json').read_text())
+            docs=[view,*view['exhibits']]
+            self.assertLessEqual(sum(len(d['document_text']) for d in docs),2000)
+            self.assertIn('$81 million', view['exhibits'][0]['document_text'])
+            for doc in docs:
+                self.assertIn('document_coverage',doc)
+                archive=json.loads((evidence.root/doc['document_coverage']['archive_path']).read_text())
+                self.assertEqual(len(archive['blocks']),doc['document_coverage']['total_blocks'])
+                self.assertGreater(len(archive['blocks']),doc['document_coverage']['selected_blocks'])
+
+    def test_current_occ_cannot_be_backdated_using_historical_observed_at(self):
+        from dataclasses import replace
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as directory, patch(
+            'shaq_daily_oracle.occ_options.fetch_occ_series_search', return_value=b'not used'):
+            evidence = collect_research_evidence(root=Path(directory)/'evidence', package_root=PACKAGE_ROOT,
+                profile=replace(self.profile(), occ_open_interest_enabled=True),
+                sec_identity='Research test@example.edu',
+                observed_at=datetime(2026,9,4,8,45,tzinfo=ZoneInfo('America/New_York')),
+                collection_clock=lambda:datetime(2026,9,8,8,45,tzinfo=ZoneInfo('America/New_York')),
+                market_provider=FakeMarket(),metadata_provider=FakeMetadata(),event_provider=FakeEvents())
+            tasks = _tasks_for_domain(evidence,'derivatives')
+            self.assertFalse(any(r['provider']=='occ' for t in tasks for r in t['evidence']))
+
+    def test_iex_quote_evidence_reaches_capital_only_when_on_time_and_computed(self):
+        from dataclasses import replace
+        from unittest.mock import patch
+        response={'provider':'Alpaca Market Data','feed':'iex','source_uri':'https://data.alpaca.markets/v2/stocks/quotes',
+            'capture_completed_at':'2026-09-04T12:45:00Z','scope':'IEX single venue',
+            'symbols':{'AAPL':{'status':'computed','formal_cutoff_eligible':True,'calculation':{'ofi_round_lots':4},
+                'raw_pages':[{'body_utf8':'{"quotes":{"AAPL":[]}}','request_uri':'https://data.alpaca.markets/v2/stocks/quotes?feed=iex&symbols=AAPL'}]}}}
+        with tempfile.TemporaryDirectory() as directory, patch('shaq_daily_oracle.alpaca_iex_quotes.collect_iex_quotes',return_value=response):
+            evidence=collect_research_evidence(root=Path(directory)/'evidence', package_root=PACKAGE_ROOT,
+                profile=replace(self.profile(),alpaca_orderflow_enabled=True),alpaca_credentials=('private-key','private-secret'),
+                collection_clock=lambda:datetime(2026,9,4,8,45,tzinfo=ZoneInfo('America/New_York')),
+                sec_identity='Research test@example.edu',observed_at=datetime(2026,9,4,8,45,tzinfo=ZoneInfo('America/New_York')),
+                market_provider=FakeMarket(),metadata_provider=FakeMetadata(),event_provider=FakeEvents())
+            task=next(t for t in _tasks_for_domain(evidence,'capital') if t['symbol']=='AAPL')
+            self.assertEqual(task['collection_status'],'collected')
+            self.assertIn('IEX single venue',json.dumps(task))
+            self.assertNotIn('private-secret',json.dumps(task))
+
+    def test_delayed_sip_liquidity_context_reaches_capital_without_fake_recent_pressure(self):
+        from dataclasses import replace
+        from unittest.mock import patch
+        response={'provider':'Alpaca Market Data','feed':'iex-with-delayed-sip-fallback',
+            'source_uri':'https://data.alpaca.markets/v2/stocks/quotes',
+            'capture_completed_at':'2026-09-04T12:45:00Z',
+            'symbols':{'AAPL':{'status':'liquidity_context','formal_cutoff_eligible':True,'feed':'sip',
+                'requested_start':'2026-09-04T12:27:00Z','requested_end':'2026-09-04T12:29:00Z',
+                'delay_seconds':900,'scope':'Delayed SIP consolidated best bid/ask',
+                'calculation':{'ofi_quote_size':None,'unit':'shares','native_trade_aggressor':False,
+                    'recent_pressure_available':False,'last_quote_time':'2026-09-04T12:01:00Z'},
+                'fallback_raw_pages':[{'body_utf8':'{"quotes":{}}'}],
+                'raw_pages':[{'body_utf8':'{"quotes":{"AAPL":[]}}',
+                    'request_uri':'https://data.alpaca.markets/v2/stocks/quotes?feed=sip&symbols=AAPL'}]}}}
+        with tempfile.TemporaryDirectory() as directory, patch(
+                'shaq_daily_oracle.alpaca_iex_quotes.collect_quote_pressure',return_value=response):
+            evidence=collect_research_evidence(root=Path(directory)/'evidence', package_root=PACKAGE_ROOT,
+                profile=replace(self.profile(),alpaca_orderflow_enabled=True),alpaca_credentials=('key','secret'),
+                collection_clock=lambda:datetime(2026,9,4,8,45,tzinfo=ZoneInfo('America/New_York')),
+                sec_identity='Research test@example.edu',observed_at=datetime(2026,9,4,8,45,tzinfo=ZoneInfo('America/New_York')),
+                market_provider=FakeMarket(),metadata_provider=FakeMetadata(),event_provider=FakeEvents())
+            task=next(t for t in _tasks_for_domain(evidence,'capital') if t['symbol']=='AAPL')
+            self.assertEqual(task['collection_status'],'collected')
+            self.assertIn('Delayed SIP',json.dumps(task))
+            view=json.loads((evidence.root/'raw/alpaca/AAPL-quote-context.json').read_text())
+            self.assertEqual(view['feed'],'sip')
+            self.assertEqual(view['requested_end'],'2026-09-04T12:29:00Z')
+            self.assertFalse(view['calculation']['recent_pressure_available'])
+            self.assertIsNone(view['calculation']['ofi_quote_size'])
+            self.assertIn('historical liquidity context only',view['interpretation_boundary'])
+            self.assertNotIn('fallback_raw_pages',view)
+            self.assertTrue((evidence.root/'raw/alpaca/AAPL-quote-attempt-0.json').exists())
+            self.assertTrue(any(r['provider']=='alpaca-sip' for r in task['evidence']))
+
+    def test_delayed_volume_is_separate_from_newer_yahoo_price(self):
+        from dataclasses import replace
+        from unittest.mock import patch
+        import hashlib
+        raw = b'{"bars":{"AAPL":[{"t":"2026-09-04T12:20:00Z","v":123}]}}'
+        payload={'raw_pages':[raw], 'metadata':{'source_uri':'https://data.alpaca.markets/v2/stocks/bars',
+            'captured_at_et':'2026-09-04T08:45:00-04:00','response_sha256':[hashlib.sha256(raw).hexdigest()],
+            'delay_seconds':900,'last_complete_minute_end_et':'2026-09-04T08:21:00-04:00'},
+            'symbols':{'AAPL':{'observed_volume':123,'volume_status':'observed_positive'}}}
+        with tempfile.TemporaryDirectory() as directory, patch('shaq_daily_oracle.alpaca_bars.collect_premarket_volume',return_value=payload):
+            evidence = collect_research_evidence(root=Path(directory)/'evidence', package_root=PACKAGE_ROOT,
+                profile=replace(self.profile(),alpaca_premarket_enabled=True),alpaca_credentials=('private-key','private-secret'),
+                collection_clock=lambda:datetime(2026,9,4,8,45,tzinfo=ZoneInfo('America/New_York')),
+                sec_identity='Research test@example.edu', observed_at=datetime(2026,9,4,8,45,tzinfo=ZoneInfo('America/New_York')),
+                market_provider=FakeMarket(), metadata_provider=FakeMetadata(), event_provider=FakeEvents())
+            task = next(t for t in _tasks_for_domain(evidence,'price_volume') if t['symbol']=='AAPL')
+            volume = next(r['content'] for r in task['evidence'] if r['provider']=='alpaca-sip')
+            self.assertEqual(volume['observed_volume'],123)
+            self.assertEqual(volume['source']['last_complete_minute_end_et'],'2026-09-04T08:21:00-04:00')
+            self.assertNotIn('private-key',json.dumps(task))
+            self.assertNotIn('private-secret',json.dumps(evidence.manifest))
+
+    def test_occ_open_interest_available_without_pretending_quote_or_flow(self):
+        from dataclasses import replace
+        from unittest.mock import patch
+        body = (b'Series Search Results for AAPL\n'
+            b'ProductSymbol\tyear\tMonth\tDay\tInteger\tDec\tC/P\tCall\tPut\tPosition Limit\n'
+            b'AAPL\t\t2026\t09\t18\t200\t000\tC P\t100\t200\t250000\n')
+        def fetch(symbol, **kwargs):
+            return body.replace(b'AAPL',symbol.encode())
+        progress = []
+        with tempfile.TemporaryDirectory() as directory, patch('shaq_daily_oracle.occ_options.fetch_occ_series_search',side_effect=fetch):
+            evidence = collect_research_evidence(root=Path(directory)/'evidence', package_root=PACKAGE_ROOT,
+                profile=replace(self.profile(),occ_open_interest_enabled=True), sec_identity='Research test@example.edu',
+                collection_clock=lambda:datetime(2026,9,4,8,45,tzinfo=ZoneInfo('America/New_York')),
+                observed_at=datetime(2026,9,4,8,45,tzinfo=ZoneInfo('America/New_York')),
+                market_provider=FakeMarket(), metadata_provider=FakeMetadata(), event_provider=FakeEvents(), observer=lambda **row: progress.append(row))
+            task = next(t for t in _tasks_for_domain(evidence,'derivatives') if t['symbol']=='AAPL')
+            self.assertEqual(task['collection_status'],'collected')
+            row = next(r['content'] for r in task['evidence'] if r['provider']=='occ')
+            self.assertEqual(row['total_call_open_interest'],100)
+            self.assertEqual(row['total_put_open_interest'],200)
+            self.assertFalse(row['directional_flow_eligible'])
+            self.assertFalse(row['quote_surface_eligible'])
+            self.assertIn('inferred',row['asof_status'])
+            final = [r for r in progress if r.get('component') == 'options'][-1]
+            self.assertEqual(final['status'], 'complete')
+            self.assertIn('OCC', final['source'])
+
+    def test_sec_exhibit_reaches_domain_with_single_filing_lineage(self):
+        class Earnings(FakeEvents):
+            def recent_events(self, members, **kwargs):
+                return {m.symbol: [{"status": "collected", "form": "8-K",
+                    "accession_number": "000123-26-000001", "acceptance_time": "2026-09-04T07:00:00-04:00",
+                    "source_url": "https://www.sec.gov/Archives/edgar/data/123/00012326000001/main.htm"}]
+                    if m.symbol == 'AAPL' else [] for m in members}
+            def download_primary_document(self, url):
+                return (b'<tr><td>99</td><td><a href="release.htm">News release</a></td></tr>'
+                        if url.endswith('main.htm') else b'<html>Revenue 123 million. Outlook 140 million.</html>')
+        with tempfile.TemporaryDirectory() as directory:
+            evidence = collect_research_evidence(root=Path(directory)/'evidence', package_root=PACKAGE_ROOT,
+                profile=self.profile(), sec_identity='Research test@example.edu',
+                observed_at=datetime(2026,9,4,8,45,tzinfo=ZoneInfo('America/New_York')),
+                market_provider=FakeMarket(), metadata_provider=FakeMetadata(), event_provider=Earnings())
+            event = json.loads((evidence.root/'raw/events/AAPL/0.json').read_text())
+            self.assertIn('Revenue 123 million', json.dumps(event))
+            self.assertEqual(event['exhibit_collection']['collected'], 1)
+            tasks = _tasks_for_domain(evidence, 'event')
+            self.assertIn('Revenue 123 million', json.dumps(tasks))
+            # Frozen bundle creation already verifies all raw hashes and parent edges.
+            records = [r for r in evidence.lineage['records'] if r.get('upstream_event_id') == '000123-26-000001']
+            self.assertEqual(len(records), 3)
+            self.assertEqual(len({root for r in records for root in r['lineage_root_ids']}), 1)
+
+    def test_metadata_outage_uses_sec_identity_with_explicit_source(self):
+        from unittest.mock import patch
+        class FailedMetadata:
+            def metadata(self, symbols):
+                raise TimeoutError('private transport detail')
+        events = []
+        with tempfile.TemporaryDirectory() as directory:
+            with patch('shaq_daily_oracle.data_providers.SecEdgarProvider.instrument_metadata',
+                       return_value={'AAPL': {'name': 'Apple Inc.', 'exchange': 'Nasdaq'}}):
+                evidence = collect_research_evidence(
+                    root=Path(directory)/'evidence', package_root=PACKAGE_ROOT,
+                    profile=self.profile(), sec_identity='Research test@example.edu',
+                    observed_at=datetime(2026,9,4,8,45,tzinfo=ZoneInfo('America/New_York')),
+                    market_provider=FakeMarket(), metadata_provider=FailedMetadata(),
+                    event_provider=FakeEvents(), observer=lambda **event: events.append(event))
+            row = json.loads((evidence.root/'raw/relationships/AAPL.json').read_text())
+            self.assertEqual(row['instrument_metadata']['exchange'], 'Nasdaq')
+            self.assertEqual(row['metadata_source']['provider'], 'sec-edgar')
+            event = [e for e in events if e.get('component') == 'metadata'][-1]
+            self.assertEqual(event['source'], 'sec-edgar')
+            self.assertNotIn('private transport detail', json.dumps(event))
+
     def test_missing_prior_session_close_does_not_borrow_older_close(self):
         from datetime import date
         rows = [

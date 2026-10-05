@@ -107,7 +107,9 @@ class LabSmokeTests(unittest.TestCase):
         console = io.TextIOWrapper(output, encoding='cp1252')
         with tempfile.TemporaryDirectory() as name:
             report = Path(name) / 'smoke.json'
-            with redirect_stdout(console):
+            # Exercise the app/stream contract independently of the developer's
+            # PyTables wheel. Frozen distribution checks still inspect real LZO.
+            with redirect_stdout(console), patch('tables.which_lib_version', return_value=None):
                 code = desktop.main(["--smoke", "--smoke-output", str(report)])
             console.flush()
             value = json.loads(output.getvalue().decode('cp1252'))
@@ -132,6 +134,21 @@ class LabSmokeTests(unittest.TestCase):
         serialized = json.dumps(value).lower()
         self.assertNotIn("api_key", serialized)
         self.assertNotIn("fixture-secret", serialized)
+
+    def test_desktop_smoke_rejects_lzo_even_when_application_fixture_passes(self) -> None:
+        from contextlib import redirect_stdout
+        from shaq_daily_oracle import desktop
+
+        with tempfile.TemporaryDirectory() as name:
+            report = Path(name) / 'smoke.json'
+            with redirect_stdout(io.StringIO()), patch(
+                    'tables.which_lib_version', return_value=('2.10', 'fixture', None)):
+                code = desktop.main(['--smoke', '--smoke-output', str(report)])
+            value = json.loads(report.read_text(encoding='utf-8'))
+        self.assertEqual(code, 2)
+        self.assertTrue(value['checks']['whole_lab_fixture'])
+        self.assertFalse(value['checks']['no_lzo_runtime'])
+        self.assertEqual(value['status'], 'failed')
 
 
 if __name__ == "__main__":

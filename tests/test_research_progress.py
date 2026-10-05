@@ -12,6 +12,41 @@ from shaq_daily_oracle.research_progress import ResearchProgressLog, safe_observ
 
 
 class ResearchProgressLogTests(unittest.TestCase):
+    def test_display_cache_reuses_unchanged_log_and_refreshes_on_append(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as tmp:
+            log = ResearchProgressLog(Path(tmp) / 'events.jsonl')
+            log.append(stage='preparation', batch_id='B')
+            with patch.object(ResearchProgressLog, 'read', wraps=log.read) as read:
+                first = log.read_display()
+                first.clear()
+                self.assertEqual(len(ResearchProgressLog(log.path).read_display()), 1)
+                self.assertEqual(read.call_count, 1)
+            log.append(stage='screening', batch_id='B')
+            self.assertEqual(len(log.read_display()), 2)
+            log.path.unlink()
+            self.assertEqual(log.read_display(), [])
+
+    def test_replay_only_reads_matching_job_progress(self):
+        from unittest.mock import patch
+        from shaq_daily_oracle.lab_service import LabService
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); (root/'jobs').mkdir()
+            for job, batch in [('job-one', 'B1'), ('job-two', 'B2')]:
+                (root/'jobs'/f'{job}.json').write_text(json.dumps(
+                    dict(job_id=job, batch_id=batch, status='complete')))
+            service = LabService.__new__(LabService)
+            service.paths = SimpleNamespace(research_root=root)
+            service.jobs = {}; service.jobs_lock = threading.Lock()
+            service.dashboard = SimpleNamespace(batch_detail=lambda batch_id: {})
+            seen = []
+            def read(log):
+                seen.append(log.path.name)
+                return []
+            with patch.object(ResearchProgressLog, 'read_display', read):
+                service.batch_detail('B1', include_accounts=False)
+            self.assertEqual(seen, ['job-one-research.jsonl'])
+
     def test_display_events_do_not_repeat_full_evidence_packets(self):
         from shaq_daily_oracle.research_progress import display_events
         event = {'stage': 'report_validated', 'report': {

@@ -250,9 +250,17 @@ def find_desktop_cli(executable: str, search_roots: list[Path]) -> str | None:
                 metadata = plistlib.loads((bundle / 'Contents/Info.plist').read_bytes())
             except (OSError, ValueError, plistlib.InvalidFileException):
                 continue
-            candidate = bundle / 'Contents/Resources' / executable
-            if metadata.get('CFBundleIdentifier') == 'com.openai.codex' and candidate.is_file() and os.access(candidate, os.X_OK):
-                return str(candidate)
+            if metadata.get('CFBundleIdentifier') != 'com.openai.codex':
+                continue
+            resources = bundle / 'Contents/Resources'
+            # The unified ChatGPT app nests the CLI; older Codex apps ship it directly.
+            # Identify the outer app by bundle ID so renamed installations still work.
+            for candidate in (
+                resources / 'codex-cli/CodexCLI.app/Contents/MacOS' / executable,
+                resources / executable,
+            ):
+                if candidate.is_file() and os.access(candidate, os.X_OK):
+                    return str(candidate)
     return None
 
 
@@ -865,6 +873,35 @@ def _anthropic_call(
     }
 
 
+def _context_preflight(profile: ModelProfile, estimated_input_tokens: int) -> dict[str, Any]:
+    """Resolve only the inherited CLI default, never a user's explicit custom cap."""
+    result = {'estimated_input_tokens': estimated_input_tokens,
+              'configured_limit': profile.maximum_context_tokens,
+              'effective_limit': profile.maximum_context_tokens, 'source': 'profile'}
+    default = ModelProfile.__dataclass_fields__['maximum_context_tokens'].default
+    if (profile.protocol != 'codex-cli' or profile.maximum_context_tokens != default
+            or estimated_input_tokens + profile.maximum_output_tokens <= default):
+        return result
+    # This is installed CLI capability metadata, not a guessed model-name table.
+    # The CLI launcher does not forward CODEX_HOME; inspect that same login home.
+    root = Path.home() / '.codex'
+    try:
+        metadata = json.loads((root / 'models_cache.json').read_text(encoding='utf-8'))
+        for row in metadata.get('models', []):
+            if row.get('slug') != profile.model:
+                continue
+            capacity = row.get('context_window')
+            percent = row.get('effective_context_window_percent', 100)
+            if (type(capacity) is int and capacity > 0 and type(percent) is int
+                    and 0 < percent <= 100):
+                result.update(effective_limit=capacity * percent // 100,
+                              source='codex-model-capabilities', model=profile.model)
+            break
+    except (OSError, ValueError, TypeError, AttributeError):
+        pass
+    return result
+
+
 def call_structured(
     *,
     profile: ModelProfile,
@@ -876,7 +913,8 @@ def call_structured(
 
     profile.validate()
     estimated_input_tokens = max(1, len(prompt.encode("utf-8")) // 4)
-    if estimated_input_tokens + profile.maximum_output_tokens > profile.maximum_context_tokens:
+    context_preflight = _context_preflight(profile, estimated_input_tokens)
+    if estimated_input_tokens + profile.maximum_output_tokens > context_preflight['effective_limit']:
         raise ModelBackendError(
             "冻结证据超过该模型配置的上下文长度；请缩小证据或提高明确的上下文上限"
         )
@@ -923,6 +961,7 @@ def call_structured(
         "completed_at_et": completed,
         "secret_recorded": False,
         "model_facing_tools_allowed": False,
+        "context_preflight": context_preflight,
     }
     try:
         returned_model = str(provider_audit.get("response_model", "")).strip()

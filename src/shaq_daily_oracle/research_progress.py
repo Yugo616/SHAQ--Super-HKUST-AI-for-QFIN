@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import threading
+from collections import OrderedDict
+from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
@@ -29,6 +31,10 @@ def display_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 class ResearchProgressLog:
     """Append-only, display-only research events; never part of batch identity."""
+
+    _display_cache = OrderedDict()
+    _display_lock = threading.Lock()
+    _display_capacity = 64
 
     def __init__(self, path: Path, clock: Callable[[], str] | None = None) -> None:
         self.path = path
@@ -89,6 +95,28 @@ class ResearchProgressLog:
             if isinstance(row, dict) and isinstance(row.get("sequence"), int):
                 rows.append(row)
         return sorted(rows, key=lambda row: row["sequence"])
+
+    def read_display(self) -> list[dict[str, Any]]:
+        """Reuse the compact view, never the raw evidence-heavy event log."""
+        key = str(self.path.resolve())
+        with self._display_lock:
+            try:
+                stat = self.path.stat()
+                stamp = (stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns,
+                         stat.st_ino, stat.st_dev)
+            except OSError:
+                self._display_cache.pop(key, None)
+                return []
+            cached = self._display_cache.get(key)
+            if cached and cached[0] == stamp:
+                self._display_cache.move_to_end(key)
+                return deepcopy(cached[1])
+            rows = display_events(self.read())
+            # If a writer appends during this read, the next stat invalidates it.
+            self._display_cache[key] = (stamp, rows)
+            while len(self._display_cache) > self._display_capacity:
+                self._display_cache.popitem(last=False)
+            return deepcopy(rows)
 
 
 def safe_observe(observer: Callable[..., None] | None, **event: Any) -> Any:

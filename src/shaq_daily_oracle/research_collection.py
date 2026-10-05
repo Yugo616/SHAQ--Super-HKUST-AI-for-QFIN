@@ -5,7 +5,6 @@ import json
 import math
 from functools import lru_cache
 from datetime import date, datetime, time, timedelta
-from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Callable
 from zoneinfo import ZoneInfo
@@ -19,8 +18,10 @@ from .data_providers import (
     YFinanceProvider,
     load_versioned_universe,
     provider_manifest,
+    sec_exhibit_urls,
 )
 from .hashing import sha256_payload
+from .data_retry import failure_diagnostic
 from .market_calendar import market_session, previous_market_session, next_market_session
 from .research_batch import FrozenEvidence, freeze_evidence_bundle
 from .research_progress import safe_observe
@@ -81,29 +82,11 @@ def validate_today_evidence(evidence: FrozenEvidence, now: datetime) -> None:
         raise ResearchCollectionError('no_data：未取得当天盘前数据；缓存不能用于今日研究。')
 
 
-class _VisibleText(HTMLParser):
-    def __init__(self) -> None:
-        super().__init__()
-        self.hidden = 0
-        self.parts: list[str] = []
-
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        if tag.lower() in {"script", "style", "noscript"}:
-            self.hidden += 1
-
-    def handle_endtag(self, tag: str) -> None:
-        if tag.lower() in {"script", "style", "noscript"} and self.hidden:
-            self.hidden -= 1
-
-    def handle_data(self, data: str) -> None:
-        if not self.hidden and data.strip():
-            self.parts.append(" ".join(data.split()))
-
-
 def _document_text(content: bytes, maximum_characters: int) -> str:
-    parser = _VisibleText()
-    parser.feed(content.decode("utf-8", errors="replace"))
-    return "\n".join(parser.parts)[:maximum_characters]
+    from .filing_documents import document_policy, parse_document, select_documents
+    policy = document_policy()
+    document = parse_document(content, source_uri='', policy=policy)
+    return select_documents([document], maximum_characters=maximum_characters, policy=policy)[0]['document_text']
 
 
 def _json_bytes(value: Any) -> bytes:
@@ -320,11 +303,14 @@ def collect_research_evidence(
     metadata_provider: Any | None = None,
     event_provider: Any | None = None,
     openbb_api_key: str = "",
+    alpaca_credentials: tuple[str, str] | None = None,
     screening_rules: dict[str, str] | None = None,
     history_cache_root: Path | None = None,
     allow_replay: bool = False,
     observer: Callable[..., None] | None = None,
+    collection_clock: Callable[[], datetime] | None = None,
 ) -> FrozenEvidence:
+    collection_clock = collection_clock or (lambda: datetime.now(ET))
     def observe(component: str, status: str, *, source: str, completed: int,
                 total: int, message: str, **details: Any) -> None:
         safe_observe(
@@ -481,20 +467,86 @@ def collect_research_evidence(
         selected = {s for symbols in candidate_sets.values() for s in symbols}
         candidates = [c for c in full_pool if c["symbol"] in selected]
     candidate_symbols = [row["symbol"] for row in candidates]
+    alpaca_volume, alpaca_volume_error = None, None
+    if profile.alpaca_premarket_enabled:
+        from .alpaca_bars import collect_premarket_volume, AlpacaBarsError
+        observe('premarket', 'running', source='alpaca-sip', completed=0, total=1,
+                message='补充候选股票的延迟全市场盘前成交量')
+        try:
+            key, secret = alpaca_credentials or ('', '')
+            alpaca_volume = collect_premarket_volume(symbols=candidate_symbols,
+                session_date=session.session_date, cutoff=scheduled_cutoff,
+                observed_at=collection_clock(),
+                key_id=key, secret_key=secret, base_url=profile.alpaca_data_base_url, feed='sip',
+                delay_seconds=profile.alpaca_sip_delay_seconds,
+                safety_margin_seconds=profile.alpaca_safety_margin_seconds,
+                delay_source='https://docs.alpaca.markets/us/docs/market-data-faq',
+                timeout_seconds=profile.request_timeout_seconds,
+                clock=collection_clock)
+        except AlpacaBarsError as exc:
+            alpaca_volume_error = {'kind': exc.kind}
+        observe('premarket', 'complete' if alpaca_volume else 'failed', source='alpaca-sip',
+            completed=1 if alpaca_volume else 0, total=1,
+            message='候选盘前成交量补充完成' if alpaca_volume else 'Alpaca 成交量未取得；原始价格资料保留',
+            diagnostic=alpaca_volume_error)
     member_by_symbol = {member.symbol: member for member in members}
+    iex_quotes, iex_failure = None, None
+    if profile.alpaca_orderflow_enabled:
+        from .alpaca_iex_quotes import collect_quote_pressure
+        observe('capital', 'running', source='alpaca-quotes', completed=0, total=1,
+                message='读取买卖报价；IEX 无合格资料时补取延迟全市场报价')
+        try:
+            key, secret = alpaca_credentials or ('', '')
+            iex_quotes = collect_quote_pressure(key_id=key, secret=secret,
+                cutoff=scheduled_cutoff.isoformat(), observed_at=collection_clock().isoformat(),
+                symbols=candidate_symbols, window_seconds=profile.alpaca_quote_window_seconds,
+                max_pages_per_symbol=profile.alpaca_quote_max_pages,
+                timeout_seconds=profile.request_timeout_seconds,
+                max_response_bytes=profile.alpaca_quote_max_bytes, max_attempts=profile.alpaca_quote_attempts,
+                delay_seconds=profile.alpaca_sip_delay_seconds,
+                safety_margin_seconds=profile.alpaca_safety_margin_seconds,
+                session_fallback=profile.alpaca_quote_session_fallback,
+                retry_backoff_seconds=profile.alpaca_quote_retry_backoff_seconds,
+                retry_wait_cap_seconds=profile.alpaca_quote_retry_wait_cap_seconds,
+                clock=collection_clock)
+        except Exception as exc:
+            iex_failure = failure_diagnostic(exc, None)
     metadata: dict[str, Any] = {}
     metadata_status = "not_configured"
+    metadata_source = {"provider": profile.metadata_provider}
+    metadata_diagnostic = {}
     if profile.metadata_provider != "none":
         observe("metadata", "running", source=profile.metadata_provider,
                 completed=0, total=1, message="开始获取候选标的资料")
     if profile.metadata_provider == "financedatabase":
         try:
-            metadata = (metadata_provider or FinanceDatabaseProvider(
+            identity_provider = metadata_provider or FinanceDatabaseProvider(
                 timeout_seconds=profile.request_timeout_seconds,
-            )).metadata(candidate_symbols)
-            metadata_status = "collected"
+                cache_root=(history_cache_root.parent / 'instrument_metadata'
+                            if history_cache_root is not None else None),
+            )
+            metadata = identity_provider.metadata(candidate_symbols)
+            metadata_source.update(getattr(identity_provider, 'receipt', {}))
+            metadata_status = "collected" if metadata else "no_data"
         except Exception as exc:
             metadata_status = f"provider_error:{type(exc).__name__}"
+            metadata_diagnostic = failure_diagnostic(exc, None)
+            observe('metadata', 'retrying', source='sec-edgar', completed=0, total=1,
+                    message='股票资料库暂不可用，正在从 SEC 核对公司名称与交易所')
+            try:
+                fallback = SecEdgarProvider(user_agent=sec_identity,
+                    timeout_seconds=profile.request_timeout_seconds,
+                    cache_root=(history_cache_root.parent / 'sec_instrument_metadata'
+                                if history_cache_root is not None else None))
+                metadata = fallback.instrument_metadata(
+                    [member_by_symbol[symbol] for symbol in candidate_symbols])
+                metadata_source = {'provider': 'sec-edgar',
+                                   **getattr(fallback, 'metadata_receipt', {}),
+                                   'primary_failure': metadata_diagnostic}
+                metadata_status = 'collected' if metadata else 'no_data'
+            except Exception as fallback_exc:
+                metadata_diagnostic = failure_diagnostic(fallback_exc, None)
+                metadata_source = {'provider': 'sec-edgar', 'primary_provider': profile.metadata_provider}
     elif profile.metadata_provider == "openbb-rest":
         try:
             metadata = (metadata_provider or openbb).metadata(candidate_symbols)
@@ -504,12 +556,18 @@ def collect_research_evidence(
     observe(
         "metadata",
         "failed" if metadata_status.startswith("provider_error") else
-        ("unavailable" if metadata_status == "not_configured" else "complete"),
-        source=profile.metadata_provider,
+        ("unavailable" if metadata_status in {"not_configured", "no_data"} else "complete"),
+        source=metadata_source['provider'],
         completed=1 if metadata_status == "collected" else 0,
         total=0 if metadata_status == "not_configured" else 1,
-        message="候选标的资料获取结果已记录",
+        message=(f"已取得 {len(metadata)} / {len(candidate_symbols)} 只股票资料"
+                 + ('（SEC 公司身份；行业沿用股票池资料）' if metadata_source['provider'] == 'sec-edgar' else '')
+                 + ('；使用已核验缓存，更新时间见来源' if metadata_source.get('cache_status') == 'cached_after_refresh_failure' else '')
+                 if metadata_status == 'collected' else
+                 ('股票资料下载超时，未补造资料' if metadata_diagnostic.get('kind') == 'timeout'
+                  else '股票资料未取得，请检查数据来源或网络')),
         returned_symbol_count=len(metadata),
+        diagnostic=metadata_diagnostic, metadata_source=metadata_source,
     )
     previous = previous_market_session(session.session_date)
     events: dict[str, list[dict[str, Any]]] = {symbol: [] for symbol in candidate_symbols}
@@ -591,6 +649,82 @@ def collect_research_evidence(
         {"symbol": "*", "domain": "capital", "status": "no_data"},
     ]
     captured_at = now.isoformat()
+    iex_eligible = 0
+    if iex_quotes:
+        for symbol, quote in iex_quotes['symbols'].items():
+            feed = quote.get('feed', iex_quotes['feed'])
+            provider = 'alpaca-' + feed
+            captured = quote.get('capture_completed_at', iex_quotes['capture_completed_at'])
+            for index, page in enumerate(quote.get('fallback_raw_pages', [])):
+                files[f'raw/alpaca/{symbol}-quote-attempt-{index}.json'] = page['body_utf8'].encode('utf-8')
+            parent_ids = []
+            for index, page in enumerate(quote['raw_pages']):
+                path = f'raw/alpaca/{symbol}-quote-page-{index}.json'
+                files[path] = page['body_utf8'].encode('utf-8')
+                eid = f'ev_alpaca_{feed}_raw_{symbol.lower()}_' + sha256_payload([page['body_utf8'], index])[:12]
+                parent_ids.append(eid)
+                records.append({'evidence_id': eid, 'domain': 'capital', 'provider': provider,
+                    'source_uri': page['request_uri'], 'captured_at': captured,
+                    'raw_file_path': path, 'scope_symbols': [symbol], 'consumer_domains': [],
+                    'root_component_type': 'capital_flow'})
+            eligible = quote['formal_cutoff_eligible'] and bool(parent_ids)
+            # Raw late/failed captures remain diagnostic files, never task evidence.
+            if not eligible:
+                records[:] = [r for r in records if r['evidence_id'] not in parent_ids]
+            view = {**{k: v for k, v in iex_quotes.items() if k != 'symbols'},
+                    **{k: v for k, v in quote.items() if k not in {'raw_pages', 'fallback_raw_pages'}}, 'symbol': symbol,
+                    'interpretation_boundary': ('Delayed SIP best-quote pressure; quoted venues may change. '
+                        if feed == 'sip' else 'One-venue displayed quote pressure. ') +
+                        'Only the actual observed window; not contemporaneous with later prices. '
+                        'If recent_pressure_available is false, use timestamped quotes and session_context '
+                        'as historical liquidity context only, not evidence of current buying/selling direction. '
+                        'Not full-market capital flow, native trade aggressor, or an all-day directional forecast.'}
+            path = f'raw/alpaca/{symbol}-quote-context.json'
+            files[path] = _json_bytes(view)
+            if eligible:
+                iex_eligible += 1
+                records.append({'evidence_id': f'ev_alpaca_{feed}_' + sha256_payload(view)[:16],
+                    'domain': 'capital', 'provider': provider, 'source_uri': iex_quotes['source_uri'],
+                    'captured_at': captured, 'raw_file_path': path,
+                    'parent_evidence_ids': parent_ids, 'scope_symbols': [symbol],
+                    'consumer_domains': ['capital', 'price_volume'], 'root_component_type': 'capital_flow'})
+            collection_statuses.append({'symbol': symbol, 'domain': 'capital',
+                'status': 'collected' if eligible else ('provider_error' if quote['status']=='provider_error' else 'no_data'),
+                'evidence_kind': quote['status'],
+                'reason': None if eligible else quote.get('error_type') or quote['calculation'].get('reason')})
+    if profile.alpaca_orderflow_enabled:
+        observe('capital', 'complete' if iex_eligible else 'unavailable', source='alpaca-quotes',
+            completed=iex_eligible, total=len(candidate_symbols),
+            message=f'买卖报价已取得 {iex_eligible} / {len(candidate_symbols)} 只', diagnostic=iex_failure)
+    if alpaca_volume:
+        volume_meta = alpaca_volume['metadata']
+        raw_ids = []
+        for index, payload in enumerate(alpaca_volume.pop('raw_pages')):
+            path = f'raw/alpaca/minute-page-{index}.json'
+            files[path] = payload
+            eid = 'ev_alpaca_minute_raw_' + sha256_payload([volume_meta['response_sha256'][index], index])[:16]
+            raw_ids.append(eid)
+            records.append({'evidence_id': eid, 'domain': 'price_volume', 'provider': 'alpaca-sip',
+                'source_uri': volume_meta['source_uri'], 'captured_at': volume_meta['captured_at_et'],
+                'raw_file_path': path, 'scope_symbols': candidate_symbols, 'consumer_domains': [],
+                'root_component_type': 'stock_price_volume'})
+        for symbol, values in alpaca_volume['symbols'].items():
+            if values['volume_status'] != 'observed_positive':
+                continue
+            view = {'symbol': symbol, **values, 'source': volume_meta,
+                    'interpretation_boundary': 'Delayed consolidated volume; not contemporaneous with later Yahoo prices. '
+                        'Not aggressor flow, not buy/sell direction, not an extension of the quote window.'}
+            path = f'raw/alpaca/{symbol}-premarket-volume.json'
+            files[path] = _json_bytes(view)
+            records.append({'evidence_id': 'ev_alpaca_volume_' + sha256_payload(view)[:16],
+                'domain': 'price_volume', 'provider': 'alpaca-sip', 'source_uri': volume_meta['source_uri'],
+                'captured_at': volume_meta['captured_at_et'], 'raw_file_path': path,
+                'parent_evidence_ids': raw_ids, 'scope_symbols': [symbol],
+                'consumer_domains': ['price_volume', 'event', 'relationships'],
+                'root_component_type': 'stock_price_volume'})
+        files['raw/alpaca/premarket-status.json'] = _json_bytes(alpaca_volume)
+    elif profile.alpaca_premarket_enabled:
+        files['raw/alpaca/premarket-status.json'] = _json_bytes({'status': 'provider_error', 'diagnostic': alpaca_volume_error})
     market_path = "raw/market/benchmarks.json"
     files[market_path] = _json_bytes({
         "daily_and_premarket": benchmark_states,
@@ -608,6 +742,10 @@ def collect_research_evidence(
     events_completed = 0
     event_document_count = 0
     option_checked = 0
+    option_context_count = 0
+    option_sources = profile.market_provider + (' + OCC' if profile.occ_open_interest_enabled else '')
+    from .filing_documents import document_policy, parse_document, select_documents
+    filing_policy = document_policy(package_root)
     option_completed = 0
     option_chain_count = 0
     option_failed = False
@@ -640,13 +778,14 @@ def collect_research_evidence(
             "sector_benchmark": candidate["sector_benchmark"],
             "instrument_metadata": metadata.get(symbol),
             "metadata_status": metadata_status,
+            "metadata_source": metadata_source,
             "economic_relationships_claimed": False,
         }
         relation_path = f"raw/relationships/{symbol}.json"
         files[relation_path] = _json_bytes(relationship)
         records.append({
             "evidence_id": f"ev_relationship_{symbol.lower()}_" + sha256_payload(relationship)[:12],
-            "domain": "relationships", "provider": "pit-universe+financedatabase",
+            "domain": "relationships", "provider": "pit-universe+" + metadata_source['provider'],
             "source_uri": f"provider://instrument-identity/{symbol}",
             "captured_at": captured_at, "raw_file_path": relation_path,
             "scope_symbols": [symbol],
@@ -675,12 +814,48 @@ def collect_research_evidence(
                     "scope_symbols": [symbol], "consumer_domains": [],
                     "root_component_type": "stock_event",
                 })
-                event_view = {
-                    **event,
-                    "document_text": _document_text(
-                        content, profile.maximum_event_characters
-                    ),
-                }
+                event_view = {**event}
+                documents = [parse_document(content, source_uri=source_url, policy=filing_policy)]
+                document_archives = [raw_document_path.replace('.html', '-blocks.json')]
+                parent_ids = [original_id]
+                exhibit_urls = sec_exhibit_urls(source_url, content)
+                exhibit_rows, exhibit_errors = [], []
+                for attachment_index, exhibit_url in enumerate(exhibit_urls[:profile.maximum_event_exhibits]):
+                    try:
+                        exhibit_content = sec.download_primary_document(exhibit_url)
+                        exhibit_path = f"raw/sec/{symbol}/{event_index}-exhibit-{attachment_index}.html"
+                        exhibit_id = f"ev_sec_exhibit_{symbol.lower()}_" + sha256_payload(exhibit_url)[:12]
+                        files[exhibit_path] = exhibit_content
+                        records.append({
+                            "evidence_id": exhibit_id, "domain": "event", "provider": "sec-edgar",
+                            "source_uri": exhibit_url, "captured_at": captured_at,
+                            "published_at": event.get("acceptance_time"),
+                            "upstream_event_id": event_key, "raw_file_path": exhibit_path,
+                            "parent_evidence_ids": [original_id],
+                            "scope_symbols": [symbol], "consumer_domains": [],
+                            "root_component_type": "stock_event",
+                        })
+                        parent_ids.append(exhibit_id)
+                        documents.append(parse_document(exhibit_content, source_uri=exhibit_url, policy=filing_policy))
+                        document_archives.append(exhibit_path.replace('.html', '-blocks.json'))
+                        exhibit_rows.append({"source_url": exhibit_url, "raw_evidence_id": exhibit_id})
+                        event_document_count += 1
+                    except Exception as exc:
+                        exhibit_errors.append({"source_url": exhibit_url,
+                            "diagnostic": failure_diagnostic(exc, None)})
+                views = select_documents(documents, maximum_characters=profile.maximum_event_characters,
+                                         policy=filing_policy)
+                for document, archive, view in zip(documents, document_archives, views, strict=True):
+                    files[archive] = _json_bytes(document)
+                    view['document_coverage']['archive_path'] = archive
+                event_view.update(views[0])
+                for exhibit, view in zip(exhibit_rows, views[1:], strict=True):
+                    exhibit.update(view)
+                event_view['exhibits'] = exhibit_rows
+                event_view['exhibit_collection'] = {"discovered": len(exhibit_urls),
+                    "collected": len(exhibit_rows), "failures": exhibit_errors,
+                    "not_fetched_due_to_limit": max(0, len(exhibit_urls) - profile.maximum_event_exhibits)}
+                event_failed = event_failed or bool(exhibit_errors)
                 event_path = f"raw/events/{symbol}/{event_index}.json"
                 files[event_path] = _json_bytes(event_view)
                 records.append({
@@ -689,17 +864,19 @@ def collect_research_evidence(
                     "source_uri": source_url, "captured_at": captured_at,
                     "published_at": event.get("acceptance_time"),
                     "upstream_event_id": event_key, "raw_file_path": event_path,
-                    "parent_evidence_ids": [original_id], "scope_symbols": [symbol],
+                    "parent_evidence_ids": parent_ids, "scope_symbols": [symbol],
                     "consumer_domains": ["event", "relationships", "price_volume"],
                     "root_component_type": "stock_event",
                 })
                 event_document_collected = True
                 event_document_count += 1
             except Exception:
-                candidate["captured_primary_event"] = False
                 event_failed = True
+        candidate["captured_primary_event"] = event_document_collected
         collection_statuses.append({
             "symbol": symbol, "domain": "event",
+            "partial_failure": event_failed and event_document_collected,
+            "reason": 'exhibit_or_primary_download_failed' if event_failed else None,
             "status": (
                 "collected" if event_document_collected
                 else ("provider_error" if event_failed else "not_applicable")
@@ -737,6 +914,48 @@ def collect_research_evidence(
             )
         option_path = f"raw/options/{symbol}.json"
         files[option_path] = _json_bytes(option_surface)
+        interest_context = None
+        interest_failure = None
+        if profile.occ_open_interest_enabled:
+            from .occ_options import fetch_occ_series_search, parse_occ_series_search
+            try:
+                interest_raw = fetch_occ_series_search(symbol, timeout_seconds=profile.request_timeout_seconds)
+                interest_captured = collection_clock()
+                if interest_captured > scheduled_cutoff:
+                    raise DataProviderError('OCC response arrived after evidence cutoff')
+                interest = parse_occ_series_search(interest_raw, symbol=symbol, captured_at=interest_captured)
+                contracts = [row for row in interest['contracts'] if row['expiration'] >= session.session_date.isoformat()]
+                by_expiry = {}
+                for contract in contracts:
+                    expiry = by_expiry.setdefault(contract['expiration'], {'call_open_interest': 0, 'put_open_interest': 0,
+                                                                          'contract_count': 0})
+                    expiry[contract['option_type'] + '_open_interest'] += contract['open_interest']
+                    expiry['contract_count'] += 1
+                if not contracts:
+                    raise DataProviderError('OCC has no unexpired standard contracts')
+                interest_context = {key: value for key, value in interest.items() if key != 'contracts'}
+                interest_context.update({'by_expiration': by_expiry, 'contract_count': len(contracts),
+                    'total_call_open_interest': sum(r['open_interest'] for r in contracts if r['option_type']=='call'),
+                    'total_put_open_interest': sum(r['open_interest'] for r in contracts if r['option_type']=='put'),
+                    'quote_surface_eligible': False, 'directional_flow_eligible': False,
+                    'interpretation_boundary': 'Open interest counts outstanding positions, not buyer direction. '
+                        'No bid/ask, IV, aggressor, opening/closing trades or directional signal is supplied.'})
+                raw_path = f'raw/options/{symbol}-occ.txt'
+                context_path = f'raw/options/{symbol}-occ-context.json'
+                files[raw_path] = interest_raw
+                files[context_path] = _json_bytes(interest_context)
+                root_id = f'ev_occ_raw_{symbol.lower()}_' + interest['source_sha256'][:12]
+                common = {'domain': 'derivatives', 'provider': 'occ', 'source_uri': interest['source_uri'],
+                    'captured_at': interest_captured.isoformat(), 'scope_symbols': [symbol], 'root_component_type': 'stock_derivatives'}
+                records.extend([
+                    {**common, 'evidence_id': root_id, 'raw_file_path': raw_path, 'consumer_domains': []},
+                    {**common, 'evidence_id': f'ev_occ_{symbol.lower()}_' + sha256_payload(interest_context)[:12],
+                     'raw_file_path': context_path, 'parent_evidence_ids': [root_id], 'consumer_domains': ['derivatives']},
+                ])
+            except Exception as exc:
+                interest_failure = failure_diagnostic(exc, None)
+                files[f'raw/options/{symbol}-occ-status.json'] = _json_bytes({'status':'provider_error',
+                    'diagnostic': interest_failure})
         if option_task_eligible:
             records.append({
                 "evidence_id": f"ev_options_{symbol.lower()}_" + sha256_payload(option_surface)[:12],
@@ -747,10 +966,12 @@ def collect_research_evidence(
                 "root_component_type": "stock_derivatives",
             })
         option_status = (
-            "collected" if option_task_eligible
+            "collected" if option_task_eligible or interest_context
             else ("provider_error" if option_surface.get("status") == "provider_error" else "no_data")
         )
-        if option_status == "provider_error":
+        if interest_context and not option_task_eligible:
+            option_reason = 'open_interest_context_only'
+        elif option_status == "provider_error":
             option_reason = "provider_error"
         elif option_surface.get("status") == "no_data":
             option_reason = "no_option_chain"
@@ -767,38 +988,45 @@ def collect_research_evidence(
             "retained_contract_count": option_surface["retained_contract_count"],
             "valid_two_sided_price_count": option_surface["valid_two_sided_price_count"],
             "quote_timestamp_status": option_surface.get("quote_timestamp_status"),
+            "open_interest_context_available": bool(interest_context),
+            "open_interest_context_contracts": interest_context['contract_count'] if interest_context else None,
+            "open_interest_context_diagnostic": interest_failure,
         })
         option_checked += 1
-        if option_surface.get("status") == "provider_error":
+        option_context_count += bool(interest_context)
+        if option_status == "provider_error":
             option_failed = True
         else:
             option_completed += 1
             option_chain_count += option_surface.get("status") == "collected"
-        observe("options", "running", source=profile.market_provider,
+        observe("options", "running", source=option_sources,
                 completed=option_completed, total=len(candidates),
                 message="候选期权链已核对", checked=option_checked,
-                chain_count=option_chain_count)
+                chain_count=option_chain_count, open_interest_context_count=option_context_count)
     observe("events", "complete" if events_completed == len(candidates) else "failed",
             source=profile.event_provider, completed=events_completed,
             total=len(candidates), message="公司事件核对结果已记录",
             checked=events_checked, document_count=event_document_count)
     observe("options", "failed" if option_failed else
-            ("complete" if option_chain_count else "unavailable"),
-            source=profile.market_provider, completed=option_completed,
-            total=len(candidates), message="期权链核对结果已记录",
-            checked=option_checked, chain_count=option_chain_count)
+            ("complete" if option_chain_count or option_context_count else "unavailable"),
+            source=option_sources, completed=option_completed,
+            total=len(candidates), message="期权报价与持仓结构核对结果已记录",
+            checked=option_checked, chain_count=option_chain_count, open_interest_context_count=option_context_count)
     files["raw/provider-status.json"] = _json_bytes({
         "capital": {
-            "status": "unavailable",
-            "reason": "requires_authorized_aggressor_and_depth_feed",
-            "detail": "price, volume, and quote proxies cannot establish active buy/sell direction plus visible depth",
+            "status": "collected" if iex_eligible else "unavailable",
+            "reason": "observed_quote_liquidity" if iex_eligible else (
+                "no_eligible_order_book_source" if profile.alpaca_orderflow_enabled else "requires_authorized_aggressor_and_depth_feed"),
+            "eligible_symbols": iex_eligible, "diagnostic": iex_failure,
+            "detail": "IEX or delayed SIP quotes: recent pressure separated from earlier session liquidity; never native aggressor or full-market capital flow",
         },
         "option_trade_flow": {
             "status": "unavailable",
             "reason": "surface_without_aggressor_or_open_close_semantics",
             "detail": "chain coverage and quote quality do not identify aggressor side or opening versus closing trades",
         },
-        "metadata": {"status": metadata_status},
+        "metadata": {"status": metadata_status, "source": metadata_source,
+                     "diagnostic": metadata_diagnostic},
     })
     completed = datetime.now(ET) if observed_at is None else now
     cutoff_status = "on_time" if completed <= scheduled_cutoff else "late_research_only"
@@ -808,7 +1036,9 @@ def collect_research_evidence(
     manifest["collection_completed_at_et"] = completed.isoformat()
     manifest["metadata_status"] = metadata_status
     manifest["collection_statuses"] = collection_statuses
+    manifest['filing_input_policy'] = filing_policy
     manifest["premarket_observations"] = premarket_observations
+    manifest['supplemental_premarket_volume'] = alpaca_volume or {'diagnostic': alpaca_volume_error}
     manifest["public_source_statuses"] = public_statuses
     return freeze_evidence_bundle(
         root=root, as_of_et=completed.isoformat(),

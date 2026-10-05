@@ -94,7 +94,7 @@ input[type=checkbox],input[type=radio]{width:16px;height:16px;min-width:16px;fle
 /* Saved balance points: keyboard focus and hover share the same compact card. */
 .balance-plot{position:relative;isolation:isolate}
 .balance-plot .pnl-chart{display:block;width:100%;height:auto}
-.balance-hit{position:absolute;width:24px;height:24px;min-width:0;padding:0;border:0;background:transparent;transform:translate(-50%,-50%);border-radius:50%;cursor:help}
+.balance-hit{position:absolute;width:24px;height:24px;min-width:0;padding:0;border:0;background:transparent;transform:translate(-50%,-50%);border-radius:50%;cursor:pointer}
 .balance-hit:hover,.balance-hit:focus{z-index:5;background:rgba(40,91,168,.12)}
 .balance-tip{display:none;position:absolute;left:15px;bottom:20px;min-width:280px;max-width:360px;padding:12px 14px;background:#fff;color:#18212f;border:1px solid #cbd3df;border-radius:6px;box-shadow:0 4px 18px #18212f24;text-align:left;font-size:13px;line-height:1.65;pointer-events:none;white-space:normal}
 .tip-left .balance-tip{left:auto;right:15px}
@@ -105,3 +105,12 @@ input[type=checkbox],input[type=radio]{width:16px;height:16px;min-width:16px;fle
 .replay-price-grid>section{background:#fff;border:1px solid #dde2e8;border-radius:5px;padding:12px}
 .replay-price-grid p{margin:6px 0}
 @media(max-width:700px){.replay-price-grid{grid-template-columns:1fr}.balance-tip{min-width:225px;max-width:260px}}
+.data-connection-list{width:100%;min-width:0}
+.data-connection-row{display:flex!important;align-items:center;gap:16px;padding:16px 0;border-bottom:1px solid #ddd}
+.data-connection-row>div{flex:1;min-width:0}
+.data-connection-row p{margin:6px 0;color:#596371}
+.data-connection-row>span{white-space:nowrap;font-size:14px}
+.data-connection-actions{display:flex;flex-wrap:wrap;gap:12px}
+#supplemental-data-form{padding:16px 0}
+.run-completion{font-size:14px;color:#596371;font-weight:400}
+@media(max-width:700px){.data-connection-row{flex-wrap:wrap}.data-connection-row>div{flex-basis:100%}}
