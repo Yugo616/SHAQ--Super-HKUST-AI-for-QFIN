@@ -2,6 +2,7 @@ import os
 import plistlib
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 from shaq_daily_oracle import model_backends
 
@@ -22,7 +23,13 @@ class CliDiscoveryTests(unittest.TestCase):
             cli.chmod(0o700)
             self.assertEqual(model_backends.find_desktop_cli('codex', [root]), str(cli))
             cli.chmod(0o600)
-            self.assertIsNone(model_backends.find_desktop_cli('codex', [root]))
+            if os.name == 'nt':
+                # Windows chmod does not control POSIX execute bits. Exercise
+                # the same denied-access boundary without assuming Unix modes.
+                with patch.object(model_backends.os, 'access', return_value=False):
+                    self.assertIsNone(model_backends.find_desktop_cli('codex', [root]))
+            else:
+                self.assertIsNone(model_backends.find_desktop_cli('codex', [root]))
 
     def test_nested_cli_is_not_taken_from_an_unrelated_app(self):
         with tempfile.TemporaryDirectory() as name:
