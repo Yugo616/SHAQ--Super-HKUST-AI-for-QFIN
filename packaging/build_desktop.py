@@ -282,7 +282,13 @@ def mingw_toolchain():
     compiler = prefix / 'bin/gcc.exe'
     if not compiler.is_file():
         raise RuntimeError(f'Missing configured MinGW compiler: {compiler}')
-    required = {'gcc-libs': ('COPYING3', 'COPYING.LIB', 'COPYING.RUNTIME'),
+    # MSYS2 split gcc-libs into independently licensed runtime packages.
+    # https://packages.msys2.org/packages/mingw-w64-x86_64-libgcc
+    split_runtime = (prefix / 'share/licenses/libgcc').is_dir()
+    runtime_notices = ({component: ('COPYING3', 'COPYING.RUNTIME')
+                        for component in ('libgcc', 'libstdc++')} if split_runtime else
+                       {'gcc-libs': ('COPYING3', 'COPYING.LIB', 'COPYING.RUNTIME')})
+    required = {**runtime_notices,
                 'crt': ('COPYING', 'COPYING.MinGW-w64.txt', 'COPYING.MinGW-w64-runtime.txt'),
                 'headers': ('COPYING', 'COPYING.MinGW-w64.txt', 'COPYING.MinGW-w64-runtime.txt'),
                 'winpthreads': ('COPYING',), 'libwinpthread': ('COPYING',)}

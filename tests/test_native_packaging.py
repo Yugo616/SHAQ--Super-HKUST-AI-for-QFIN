@@ -429,6 +429,33 @@ class NativePackagingTests(unittest.TestCase):
             self.assertEqual(manifest['compiler_sha256'], hashlib.sha256(b'configured MSYS2 compiler').hexdigest())
             self.assertNotIn(str(root), json.dumps(manifest))
 
+    def test_mingw_split_runtime_packages_keep_licenses_and_provenance(self):
+        build = self.module('build_desktop')
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            prefix = self.mingw_fixture(root)
+            shutil.rmtree(prefix / 'share/licenses/gcc-libs')
+            database = prefix.parent / 'var/lib/pacman/local'
+            shutil.rmtree(database / 'mingw-w64-x86_64-gcc-libs-1.0-1')
+            for component in ('libgcc', 'libstdc++'):
+                package = 'mingw-w64-x86_64-' + component
+                metadata = database / (package + '-1.0-1/desc')
+                metadata.parent.mkdir()
+                metadata.write_text(f'%NAME%\n{package}\n\n%VERSION%\n1.0-1\n\n%BASE%\nmingw-w64-gcc\n')
+                directory = prefix / 'share/licenses' / component
+                directory.mkdir()
+                for notice in ('COPYING3', 'COPYING.RUNTIME'):
+                    (directory / notice).write_text('upstream ' + notice)
+            with patch.dict(os.environ, {'SHAQ_MINGW_PREFIX': str(prefix)}):
+                _, _, provenance = build.mingw_toolchain()
+                self.assertIn('mingw-w64-x86_64-libgcc', provenance['packages'])
+                self.assertIn('mingw-w64-x86_64-libstdc++', provenance['packages'])
+                build.collect_mingw_notices(root / 'notices', provenance)
+                self.assertTrue((root / 'notices/MinGW-W64/libgcc/COPYING.RUNTIME').is_file())
+                (prefix / 'share/licenses/libstdc++/COPYING.RUNTIME').unlink()
+                with self.assertRaisesRegex(RuntimeError, 'COPYING.RUNTIME'):
+                    build.mingw_toolchain()
+
     def test_mingw_missing_notices_or_changed_compiler_fail_closed(self):
         build = self.module('build_desktop')
         self.assertTrue(hasattr(build, 'mingw_toolchain'))
