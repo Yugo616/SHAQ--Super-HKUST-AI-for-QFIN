@@ -59,7 +59,7 @@ Click **Sign in to GitHub (`登录 GitHub`)**, confirm in the browser, and enter
 
 ### 4. Run both methods and open results
 
-On **Start Runs (`开始运行`)**, select one model and both bundled methods, then click **Run Selected Versions (`运行选中版本`)**. SHAQ collects once, freezes the evidence and runs the comparison. Expand progress to inspect finished reports. On **View Results (`查看结果`)**, click a row for full replay or select two runs to compare them.
+On **Start Runs (`开始运行`)**, select one model and both bundled methods, then click **Start Today's Analysis (`开始今日分析`)**. The main action changes to progress, resume or results according to the real state. SHAQ collects once, freezes the evidence and runs the comparison. Expand progress to inspect finished reports. On **View Results (`查看结果`)**, click a row for full replay or select two runs to compare them.
 
 Runs use the New York trading calendar. Weekends/holidays, times before 04:00 ET and absent current-day premarket observations are blocked with an explanation. A Monday in Asia can still be Sunday in New York. Late research stays visible but does not enter on-time premarket performance. Automatic runs require explicit activation and an awake, online computer.
 
