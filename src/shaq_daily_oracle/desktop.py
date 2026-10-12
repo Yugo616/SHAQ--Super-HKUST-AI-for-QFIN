@@ -141,6 +141,9 @@ class DesktopBridge:
         from .research_schedule import save_schedule
         return self._result(save_schedule, self.paths, self.lab, value)
 
+    def delete_history_result(self, batch_id: str, variant_key: str, result_sha256: str):
+        return self._result(self.lab.dashboard.delete_history_result, batch_id, variant_key, result_sha256)
+
     def refresh_prices_and_results(self) -> dict[str, Any]:
         return self._result(self.lab.start_result_refresh, manual=True)
 

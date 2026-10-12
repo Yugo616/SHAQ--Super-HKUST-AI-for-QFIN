@@ -62,6 +62,25 @@ class FakeEvents:
 
 
 class ResearchCollectionTests(unittest.TestCase):
+    def test_new_collection_uses_later_preopen_bars_but_never_open(self):
+        from datetime import date
+        cutoff=datetime(2026,9,4,9,25,tzinfo=ZoneInfo('America/New_York'))
+        records=[dict(timestamp='2026-09-04T'+t+'-04:00',close=p,volume=10)
+                 for t,p in [('08:40:00',101),('09:20:00',102),('09:30:00',200)]]
+        result=_premarket_state(records,session_date=date(2026,9,4),cutoff=cutoff,previous_close=100)
+        self.assertEqual(result['last_price'],102)
+        self.assertEqual(len(result['bars']),2)
+
+    def test_collection_after_old_cutoff_is_valid_before_open(self):
+        from shaq_daily_oracle.research_collection import validate_today_evidence
+        now=datetime(2026,9,4,9,20,tzinfo=ZoneInfo('America/New_York'))
+        with tempfile.TemporaryDirectory() as directory:
+            evidence=collect_research_evidence(root=Path(directory)/'evidence',package_root=PACKAGE_ROOT,
+                profile=self.profile(),sec_identity='Research test@example.edu',observed_at=now,
+                market_provider=FakeMarket(),metadata_provider=FakeMetadata(),event_provider=FakeEvents())
+            self.assertEqual(evidence.manifest['cutoff_status'],'on_time')
+            validate_today_evidence(evidence,now)
+
     def test_prints_supply_timestamped_price_not_fake_minute_bars(self):
         from shaq_daily_oracle.research_collection import _resolved_premarket
         yahoo={'last_price':None,'previous_close':100,'observed_volume':None,'bars':[],

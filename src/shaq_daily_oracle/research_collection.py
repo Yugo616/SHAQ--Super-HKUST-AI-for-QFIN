@@ -68,8 +68,10 @@ def validate_today_evidence(evidence: FrozenEvidence, now: datetime) -> None:
     now = now.astimezone(ET)
     cutoff = _timestamp(evidence.manifest.get('scheduled_cutoff_et'))
     observed = _timestamp(evidence.manifest.get('as_of_et'))
-    expected = datetime.combine(now.date(), time(8, 50), ET)
-    if cutoff != expected or observed is None or observed.date() != now.date() or observed > now:
+    session = market_session(now.date())
+    if (not session or cutoff is None or cutoff.date() != now.date()
+            or not datetime.combine(now.date(), time(4), ET) <= cutoff < session.market_open
+            or observed is None or observed.date() != now.date() or observed > now):
         raise ResearchCollectionError('cached_evidence_invalid：缓存不是当天有效截止时间的证据；未启动今日研究。')
     observations = evidence.manifest.get('provider_manifest', {}).get('premarket_observations', {})
     valid = False
@@ -153,12 +155,14 @@ def _premarket_state(
     previous_close: float | None,
 ) -> dict[str, Any]:
     eligible = []
+    session = market_session(session_date)
     for row in _sorted(records):
         observed = _timestamp(row.get("timestamp"))
         close = _number(row.get("close"))
         if (
             observed is not None and observed.date() == session_date
-            and time(4, 0) <= observed.time().replace(tzinfo=None) <= time(8, 50)
+            and time(4, 0) <= observed.time().replace(tzinfo=None)
+            and session is not None and observed < session.market_open
             and observed <= cutoff and close is not None and close > 0
         ):
             eligible.append((observed, row, close))
@@ -365,7 +369,7 @@ def collect_research_evidence(
         if not allow_replay:
             raise ResearchCollectionError("today_is_not_a_nyse_trading_session")
         session = previous_market_session(now.date())
-    scheduled_cutoff = datetime.combine(session.session_date, time(8, 50), ET)
+    scheduled_cutoff = session.market_open - timedelta(microseconds=1)
     data_cutoff = min(now, scheduled_cutoff)
     if not allow_replay and data_cutoff < datetime.combine(session.session_date, time(4, 0), ET):
         raise ResearchCollectionError("premarket_collection_has_not_started")

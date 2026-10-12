@@ -45,15 +45,49 @@ class PreopenCompletionTests(unittest.TestCase):
             with self.subTest(completed=completed):
                 self.assertEqual(self.row(self.detail(completed=completed))['score_eligible'], expected)
 
-    def test_evidence_cutoff_is_not_relaxed(self):
-        for frozen, expected in [('08:50:00', True), ('08:50:01', False)]:
+    def test_evidence_may_be_collected_after_old_cutoff_before_decision(self):
+        for frozen, expected in [('08:50:00', True), ('08:50:01', True), ('09:20:00', True)]:
             with self.subTest(frozen=frozen):
-                self.assertEqual(self.row(self.detail(frozen=frozen))['score_eligible'], expected)
+                detail = self.detail(frozen=frozen, completed='09:29:59')
+                detail['evidence']['cutoff_status'] = 'late_research_only'
+                self.assertEqual(self.row(detail)['score_eligible'], expected)
 
     def test_collection_completion_cannot_be_hidden_by_earlier_asof(self):
         detail = self.detail()
-        detail['evidence']['provider_manifest']['collection_completed_at_et'] = '2026-09-16T08:51:00-04:00'
+        detail['evidence']['provider_manifest']['collection_completed_at_et'] = '2026-09-16T09:01:00-04:00'
         self.assertFalse(self.row(detail)['score_eligible'])
+
+    def test_latest_success_before_open_wins_not_late_or_failed_retry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            index = ResearchDashboardIndex(batches_root=Path(tmp)/'batches', database=Path(tmp)/'index.db')
+            details = {'first': self.detail(completed='08:55:00'),
+                       'last': self.detail(completed='09:20:00', frozen='09:10:00'),
+                       'late': self.detail(completed='09:31:00')}
+            batches = [dict(batch_id=k, trade_date='2026-09-16', source_valid=True) for k in details]
+            with patch.object(index, 'batch_detail', side_effect=lambda k: details[k]):
+                rows = {r['batch_id']: r for r in index._daily_results(batches)}
+            self.assertTrue(rows['last']['score_eligible'])
+            self.assertFalse(rows['first']['score_eligible'])
+            self.assertTrue(rows['first']['can_delete'])
+            self.assertEqual(rows['first']['superseded_by'], 'last')
+            self.assertFalse(rows['last']['can_delete'])
+            self.assertFalse(rows['late']['can_delete'])
+
+    def test_verified_assessment_overrides_legacy_late_collection_label(self):
+        row = self.row(self.detail(frozen='08:56:00', completed='09:03:00'))
+        row['cutoff_status'] = 'late_research_only'
+        self.assertFalse(_late(row))
+
+    def test_same_batch_alias_selects_latest_variant_not_first_name(self):
+        detail = self.detail(completed='08:55:00')
+        detail['variants']['team/z-alias'] = copy.deepcopy(detail['variants']['team/shadow'])
+        detail['variants']['team/z-alias']['completed_at_et'] = '2026-09-16T09:20:00-04:00'
+        with tempfile.TemporaryDirectory() as tmp:
+            index = ResearchDashboardIndex(batches_root=Path(tmp)/'batches', database=Path(tmp)/'index.db')
+            with patch.object(index, 'batch_detail', return_value=detail):
+                rows = index._daily_results([dict(batch_id='batch', trade_date='2026-09-16', source_valid=True)])
+        self.assertEqual([r['variant_key'] for r in rows if r['score_eligible']], ['team/z-alias'])
+        self.assertTrue(next(r for r in rows if r['variant_key']=='team/shadow')['can_delete'])
 
     def test_missing_freeze_proof_cannot_requalify_legacy_result(self):
         detail = self.detail()

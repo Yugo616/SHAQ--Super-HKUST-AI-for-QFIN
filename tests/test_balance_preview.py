@@ -63,12 +63,30 @@ class BalancePreviewTests(unittest.TestCase):
         self.assertEqual(accounts['two']['equity'],10008)
         self.assertEqual(len(accounts['one']['curve']),1)
 
+    def test_new_preopen_selected_result_replaces_earlier_empty_preview(self):
+        rows=[self.row('2026-09-09',0,batch='old',status='empty'),self.row('2026-09-09',-2,batch='new')]
+        daily=[dict(batch_id='old',variant_key='one',completed_at_et='2026-09-09T08:40:00-04:00',score_eligible=False),
+               dict(batch_id='new',variant_key='one',completed_at_et='2026-09-09T09:20:00-04:00',score_eligible=True)]
+        result=self.project(rows,daily)
+        self.assertEqual(result['accounts'][0]['equity'],9998)
+        self.assertIsNone(result['results'][0]['account_balance'])
+        self.assertEqual(result['results'][1]['account_balance'],9998)
+
     def test_empty_counts_but_nonfinite_or_partial_pnl_does_not(self):
         result=self.project([self.row('2026-09-09',0,status='empty'),
                              self.row('2026-09-10',15,status='incomplete'),
                              self.row('2026-09-11',float('nan'))])
         self.assertEqual([r['account_balance'] for r in result['results']],[10000,None,None])
         self.assertEqual(result['accounts'][0]['sessions'],1)
+
+    def test_distinct_models_keep_separate_balances(self):
+        rows = [self.row('2026-09-09',10,batch='a'), self.row('2026-09-09',20,batch='b')]
+        rows[0]['model_identity'] = 'model-a'
+        rows[1]['model_identity'] = 'model-b'
+        daily = [dict(batch_id=r['batch_id'],variant_key='one',score_eligible=True,
+                      completed_at_et='2026-09-09T09:20:00-04:00') for r in rows]
+        result = self.project(rows,daily)
+        self.assertEqual(sorted(r['equity'] for r in result['accounts']),[10010,10020])
 
     def test_aliases_use_existing_method_identity_and_old_duplicates_stay_excluded(self):
         a=self.row('2026-09-09',4);a['variant_key']='old/alias'

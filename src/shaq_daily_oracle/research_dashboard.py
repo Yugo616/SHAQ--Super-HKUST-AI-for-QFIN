@@ -15,7 +15,7 @@ from zoneinfo import ZoneInfo
 
 from .hashing import sha256_payload, file_revision
 from .research_batch import ResearchBatchError, load_frozen_evidence
-from .research_timing import assess_timing
+from .research_timing import assess_timing, decision_order
 
 
 class ResearchDashboardError(ValueError):
@@ -354,7 +354,27 @@ class ResearchDashboardIndex:
             from .balance_preview import project_saved_balances
             if accounts.get('rules'):
                 result['balance_preview'] = project_saved_balances(accounts, daily_results)
+        result['daily_results'] = [row for row in daily_results if not self._history_deleted(row)]
         return result
+
+    def _history_deleted(self, row):
+        key = sha256_payload([row.get('batch_id'), row.get('variant_key'), row.get('variant_result_sha256')])
+        marker = _read(self.batches_root.parent / 'hidden_history' / (key + '.json'), {})
+        return (row.get('can_delete') is True and marker.get('result_sha256') == row.get('variant_result_sha256')
+                and marker.get('batch_id') == row.get('batch_id') and marker.get('variant_key') == row.get('variant_key'))
+
+    def delete_history_result(self, batch_id, variant_key, result_sha256):
+        """Remove an obsolete display row, never shared evidence or its frozen record."""
+        rows = self.overview()['daily_results']
+        row = next((r for r in rows if r['batch_id'] == batch_id and r['variant_key'] == variant_key), None)
+        if not row or row.get('can_delete') is not True or row.get('variant_result_sha256') != result_sha256:
+            raise ResearchDashboardError('只能删除已被当天更新结果替代的旧记录；请刷新后重试')
+        from .settings import _atomic_json
+        marker = dict(batch_id=batch_id, variant_key=variant_key, result_sha256=result_sha256,
+                      superseded_by=row['superseded_by'], deleted_at=datetime.now(ZoneInfo('UTC')).isoformat())
+        key = sha256_payload([batch_id, variant_key, result_sha256])
+        _atomic_json(self.batches_root.parent / 'hidden_history' / (key + '.json'), marker)
+        return {'status': 'deleted', 'batch_id': batch_id, 'variant_key': variant_key}
 
     def account_rows(self, daily_results):
         """Join minute observations only at the execution/account boundary."""
@@ -397,7 +417,7 @@ class ResearchDashboardIndex:
         """
         chronological = sorted(batches, key=lambda row: (str(row["trade_date"]), str(row["batch_id"])))
         from .history_methods import method_document_identity
-        details, first, timings = {}, {}, {}
+        details, latest_decision, timings = {}, {}, {}
         for batch in chronological:
             if not batch.get('source_valid'):
                 continue
@@ -419,9 +439,9 @@ class ResearchDashboardIndex:
                 documents = detail.get('skill_snapshots', {}).get(key, {}).get('documents', {})
                 method_identity = method_document_identity(documents) or variant['variant'].get('version_sha256')
                 identity = (batch['trade_date'], method_identity, variant.get('model_profile_sha256'))
-                candidate = (datetime.fromisoformat(completed), batch['batch_id'])
-                if identity not in first or candidate < first[identity]:
-                    first[identity] = candidate
+                candidate = decision_order(completed, batch['batch_id'], key)
+                if identity not in latest_decision or candidate > latest_decision[identity]:
+                    latest_decision[identity] = candidate
         cumulative: dict[str, float] = {}
         scored_sessions: set[tuple[str, str]] = set()
         output: list[dict[str, Any]] = []
@@ -449,7 +469,10 @@ class ResearchDashboardIndex:
                 timing = timings[(batch['batch_id'], key)]
                 source_eligible = timing['eligible']
                 identity = (batch['trade_date'], method_identity, variant.get('model_profile_sha256'))
-                eligible = source_eligible and identity in first and first[identity][1] == batch['batch_id'] and session_key not in scored_sessions
+                selected = latest_decision.get(identity)
+                candidate = decision_order(variant.get('completed_at_et'), batch['batch_id'], key)
+                eligible = source_eligible and selected == candidate and session_key not in scored_sessions
+                superseded = bool(selected and candidate < selected)
                 if eligible:
                     scored_sessions.add(session_key)
                 predictions = list(variant.get("predictions", []))
@@ -497,6 +520,8 @@ class ResearchDashboardIndex:
                     "method_identity": method_identity,
                     "model_identity": variant.get('model_profile_sha256'),
                     "source_eligible": source_eligible,
+                    "can_delete": superseded,
+                    "superseded_by": selected[1] if superseded else None,
                     "completed_at_et": variant.get('completed_at_et'),
                     "publication_deadline_et": timing['publication_deadline_et'],
                     "timing_assessment": timing,

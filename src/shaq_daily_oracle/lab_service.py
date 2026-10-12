@@ -634,7 +634,7 @@ class LabService:
         if run_status == "fresh":
             run_note = "今日联网采集并冻结给各版本共用。"
             if evidence_manifest.get("cutoff_status") == "late_research_only":
-                run_note += " 本批为错过截止后的研究补跑，不计准时盘前成绩。"
+                run_note += " 是否计入盘前成绩，以实际保存结论的时间为准。"
         elif run_status == "historical":
             run_note = "最近一次冻结证据属于历史日期，不代表今天已采集。"
         else:

@@ -30,7 +30,7 @@ class WorkbenchTests(unittest.TestCase):
         self.assertEqual(test_rule('function compute(x){return {value:x.x*2}}', cases)['case_count'],1)
 
     def test_schedule_uses_new_york_time_and_skips_weekends(self):
-        for when, expected in [('2026-09-08T12:34:00+00:00','waiting'), ('2026-09-08T12:35:00+00:00','due'), ('2026-09-08T12:50:00+00:00','missed'), ('2026-09-05T12:35:00+00:00','closed'), ('2026-11-09T13:35:00+00:00','due')]:
+        for when, expected in [('2026-09-08T12:34:00+00:00','waiting'), ('2026-09-08T12:35:00+00:00','due'), ('2026-09-08T12:50:00+00:00','due'), ('2026-09-08T13:30:00+00:00','missed'), ('2026-09-05T12:35:00+00:00','closed'), ('2026-11-09T13:35:00+00:00','due')]:
             self.assertEqual(due_status(datetime.fromisoformat(when), '08:35'), expected)
 
     def test_missing_symbol_does_not_replace_good_bars_with_stale_data(self):

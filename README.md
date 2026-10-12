@@ -18,7 +18,7 @@ The downloads below target **0.7.10**. Choose your operating system and, on Mac,
 
 This update fixes saved data connections, routes supplemental premarket inputs to the analysis, adds credit background and optional historical option quotes, and improves bounded retries and research recovery. Alpaca keys saved by older releases need one re-entry; daily use then avoids system credential prompts. See the [update guide](docs/software-updates.md).
 
-This update groups daily selections, separates per-stock P&L from daily totals, connects counted balance history and displays recorded model names. Research evidence must be frozen by 08:50 ET and inference finished before the regular session opens; original forecasts and timestamps remain intact. See the [timing and replay policy](docs/research-timing.md).
+This update groups daily selections, separates per-stock P&L from daily totals, connects counted balance history and displays recorded model names. Evidence must be acquired before the decision, and the decision saved before the regular session opens. The latest valid pre-open result per method/model/day is counted; original forecasts and timestamps remain intact. See the [timing and replay policy](docs/research-timing.md).
 
 Choose your connection, then an explicit model in **Connection Settings**. Change it there at any time: a successful save applies to subsequent manual and scheduled runs, not an in-progress batch. Local model lists come from Codex/Claude Code; APIs can list models when supported or accept an explicit identifier. Older default-model connections require selection once. No model is silently chosen for you.
 

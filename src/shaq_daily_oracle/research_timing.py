@@ -1,18 +1,26 @@
 """Research timing policy, separate from model and trading identities.
 
-Evidence remains sealed at the premarket cutoff. Inference may consume that
-sealed evidence until (but not including) the exchange's regular-session open.
+Evidence must be sealed before the decision. The decision must be saved before
+(but not including) the exchange's regular-session open.
 Assessments are derived; existing frozen results are never rewritten.
 """
-from datetime import date, datetime, time
+from datetime import date, datetime, timezone
 from zoneinfo import ZoneInfo
 
 from .market_calendar import market_session
 
 
-POLICY_ID = 'sealed-evidence-before-market-open-v1'
-EVIDENCE_CUTOFF = time(8, 50)
+POLICY_ID = 'decision-before-market-open-v2'
 ET = ZoneInfo('America/New_York')
+
+
+def decision_order(completed_at, batch_id, variant_key):
+    """One deterministic ordering for scoring and account selection."""
+    try:
+        completed = _stamp(completed_at)
+    except (TypeError, ValueError):
+        completed = datetime.min.replace(tzinfo=timezone.utc)
+    return completed, str(batch_id), str(variant_key)
 
 
 def _stamp(value):
@@ -39,19 +47,16 @@ def assess_timing(evidence, completed_at, *, trade_date=None, original_score_eli
             assessment['reason'] = 'market_closed'
             return assessment
         assessment['publication_deadline_et'] = session.market_open.isoformat()
-        hard_cutoff = datetime.combine(day, EVIDENCE_CUTOFF, ET)
         collected = evidence.get('provider_manifest', {}).get('collection_completed_at_et')
         observations = [frozen] + ([_stamp(collected)] if collected else [])
         if scheduled.date() != day or any(x.date() != day for x in observations) or completed.date() != day:
             assessment['reason'] = 'wrong_session_date'
-        elif evidence.get('cutoff_status') != 'on_time' or scheduled > hard_cutoff or any(x > scheduled for x in observations):
-            assessment['reason'] = 'evidence_not_frozen_by_cutoff'
         elif completed < max(observations):
             assessment['reason'] = 'completion_precedes_evidence'
         elif completed >= session.market_open:
             assessment['reason'] = 'analysis_not_completed_before_open'
         else:
-            assessment.update(eligible=True, reason='sealed_before_cutoff_completed_before_open')
+            assessment.update(eligible=True, reason='evidence_before_decision_completed_before_open')
     except (KeyError, TypeError, ValueError):
         pass
     assessment['reassessed'] = (original_score_eligible is not None

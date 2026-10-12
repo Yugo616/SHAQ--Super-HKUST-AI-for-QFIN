@@ -151,7 +151,7 @@ class VirtualAccountTests(unittest.TestCase):
             self.assertEqual(account['sessions'], 1)
             self.assertAlmostEqual(account['equity'], 10176.400045)
             chosen = [x for x in r['results'] if x['scope'] == 'forward']
-            self.assertEqual([x['batch_id'] for x in chosen], ['zzz-first'])
+            self.assertEqual([x['batch_id'] for x in chosen], ['aaa-later'])
             historical = [x for x in r['results'] if x['scope'] == 'historical']
             self.assertEqual(len(historical), 1)
             self.assertAlmostEqual(historical[0]['account_balance'], 10176.400045)
@@ -160,6 +160,14 @@ class VirtualAccountTests(unittest.TestCase):
             before = {p.name: p.read_bytes() for p in Path(tmp).rglob('*.json')}
             self.assertEqual(api.AccountStore(Path(tmp)).refresh(list(reversed(rows))), r)
             self.assertEqual(before, {p.name: p.read_bytes() for p in Path(tmp).rglob('*.json')})
+
+    def test_equal_completion_uses_same_maximum_identity_as_scores(self):
+        api = self.api()
+        with tempfile.TemporaryDirectory() as tmp:
+            store = api.AccountStore(Path(tmp))
+            store.activate(api.AccountRules(), '2026-09-09T07:00:00-04:00')
+            result = store.refresh([self.row('aaa'), self.row('zzz')])
+            self.assertEqual([r['batch_id'] for r in result['results'] if r['scope']=='forward'],['zzz'])
 
     def test_versions_and_rules_separate_and_pending_stops_later_cash_chain(self):
         api = self.api()
@@ -433,7 +441,7 @@ class VirtualAccountTests(unittest.TestCase):
                                      'scheduled_cutoff_et':'2026-09-09T08:50:00-04:00'}, variants={'team/main':variant}, labels={}, status={})
             with patch.object(index, 'batch_detail', side_effect=detail):
                 rows = index._daily_results(batches)
-            self.assertEqual([r['batch_id'] for r in rows if r['score_eligible']], ['zzz-first'])
+            self.assertEqual([r['batch_id'] for r in rows if r['score_eligible']], ['aaa-later'])
 
     def test_dashboard_groups_verified_document_aliases_and_preserves_frozen_sizing(self):
         from shaq_daily_oracle.research_dashboard import ResearchDashboardIndex

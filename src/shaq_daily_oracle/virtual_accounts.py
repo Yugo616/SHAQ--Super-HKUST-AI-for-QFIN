@@ -303,6 +303,10 @@ def _completion(row):
 
 def _late(row):
     completion = _completion(row)
+    from .research_timing import POLICY_ID as TIMING_POLICY_ID
+    assessment = row.get('timing_assessment') or {}
+    if assessment.get('policy_id') == TIMING_POLICY_ID:
+        return assessment.get('eligible') is not True
     if row.get('cutoff_status') == 'late_research_only':
         return True
     # Explicit assessments take precedence; otherwise use the exchange session.
@@ -474,7 +478,12 @@ class AccountStore:
         with FileLock(str(self.root / '.lock')):
             rules = AccountRules(**policy['rules'])
             rules_hash = sha256_payload(policy)
-            ordered = sorted(rows, key=lambda r: (r['trade_date'], _completion(r) or datetime.max.replace(tzinfo=ET), r['batch_id'], r['variant_key']))
+            # Most recent valid pre-open decision wins within a trading day.
+            # Days themselves remain chronological for the cash ledger.
+            from .research_timing import decision_order
+            ordered = sorted(rows, key=lambda r: decision_order(
+                r.get('completed_at_et'), r['batch_id'], r['variant_key']), reverse=True)
+            ordered.sort(key=lambda r: r['trade_date'])
             accounts, results, selected = {}, [], set()
             for row in ordered:
                 account_model = row.get('account_model_identity', row.get('model_identity', row.get('model')))

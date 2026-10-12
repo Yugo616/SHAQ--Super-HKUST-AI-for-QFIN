@@ -122,7 +122,7 @@ const SHAQAccounts = (() => {
   function balanceStatus(row,source={}) {
     if(!row)return source.status==='engineering_failure'?'分析失败，未计入余额':'等待账户结算，尚未计入余额';
     if(row.scope==='duplicate'||row.status==='duplicate')return '重复运行，不重复入账';
-    const excluded=row.scope==='late'?'仅研究回放，完成超过截止时间，未计入余额':row.scope==='practice'?'练习回放，未计入余额':'';
+    const excluded=row.scope==='late'?'仅研究回放，未满足开盘前结论要求，未计入余额':row.scope==='practice'?'练习回放，未计入余额':'';
     if(['unavailable','incomplete'].includes(row.status)){
       const missing=(row.trades||[]).filter(t=>['unavailable_entry','open_incomplete'].includes(t.status)).map(t=>{
         const entry=t.status==='unavailable_entry',stamp=t[entry?'entry_reference_at_et':'exit_reference_at_et']||row[entry?'entry_reference_at_et':'exit_reference_at_et'];

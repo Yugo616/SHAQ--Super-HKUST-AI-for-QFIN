@@ -227,7 +227,7 @@ with patch.object(yf.Ticker, 'history', history): main()
     def test_scheduler_does_not_retry_models_auth_complete_or_after_cutoff(self):
         now = datetime(2026, 9, 21, 8, 42, tzinfo=schedule.ET)
         failure = self.failure(now)
-        cases = [(failure, now.replace(hour=8, minute=50)),
+        cases = [(failure, now.replace(hour=9, minute=30)),
                  ({**failure, 'error_type': 'ModelBackendError'}, now),
                  ({**failure, 'batch_id': 'LAB-frozen'}, now),
                  ({**failure, 'error_diagnostic': {'kind': 'auth_error'}}, now),

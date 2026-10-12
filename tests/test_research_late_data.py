@@ -23,7 +23,7 @@ ET = ZoneInfo('America/New_York')
 
 class LateDataTests(unittest.TestCase):
     def test_late_quote_context_reaches_research_with_actual_capture(self):
-        late=datetime(2026,9,4,9,20,tzinfo=ET)
+        late=datetime(2026,9,4,9,40,tzinfo=ET)
         response={'provider':'Alpaca Market Data','feed':'sip',
             'source_uri':'https://data.alpaca.markets/v2/stocks/quotes',
             'capture_completed_at':late.isoformat(),
@@ -80,7 +80,7 @@ class LateDataTests(unittest.TestCase):
         self.assertEqual(result['metadata']['captured_at_et'], late.isoformat())
 
     def test_same_day_late_occ_reaches_domain_but_cannot_become_on_time(self):
-        late = datetime(2026, 9, 4, 9, 20, tzinfo=ET)
+        late = datetime(2026, 9, 4, 9, 40, tzinfo=ET)
         body = (b'Series Search Results for AAPL\n'
             b'ProductSymbol\tyear\tMonth\tDay\tInteger\tDec\tC/P\tCall\tPut\tPosition Limit\n'
             b'AAPL\t\t2026\t09\t18\t200\t000\tC P\t100\t200\t250000\n')

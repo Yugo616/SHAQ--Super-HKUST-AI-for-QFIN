@@ -2,13 +2,15 @@
 from copy import deepcopy
 from datetime import datetime, timezone
 import math
+from .hashing import sha256_payload
 
 
 def project_saved_balances(saved, daily_rows):
     """Sum saved daily PnL once per method, including late research records.
 
     Not an account replay: quantities, fills and costs remain unchanged. The
-    first saved run by actual completion wins, never the most profitable run.
+    selected pre-open decision wins. Legacy all-history preview falls back to
+    its first saved run only when no eligible pre-open decision exists.
     """
     view = deepcopy(saved)
     initial = saved['rules']['initial_cash']
@@ -28,6 +30,25 @@ def project_saved_balances(saved, daily_rows):
             stamp = datetime.max.replace(tzinfo=timezone.utc)
         return row['trade_date'], stamp, row['batch_id'], row['variant_key']
 
+    def method_for(row):
+        info = metadata.get((row['batch_id'], row['variant_key']), {})
+        return (row.get('method_identity') or info.get('method_identity')
+                or row.get('series_key') or info.get('series_key') or row['variant_key'])
+
+    def series_for(row):
+        info = metadata.get((row['batch_id'], row['variant_key']), {})
+        model = (row.get('account_model_identity') or row.get('model_identity')
+                 or info.get('account_model_identity') or info.get('model_identity'))
+        method = method_for(row)
+        return sha256_payload([method, model]) if model else method
+
+    preferred = {}
+    for row in rows:
+        info = metadata.get((row['batch_id'], row['variant_key']), {})
+        if info.get('score_eligible') is True:
+            key = series_for(row), row['trade_date']
+            if key not in preferred or order(row) > order(preferred[key]):
+                preferred[key] = row
     accounts, chosen = {}, set()
     for row in sorted(rows, key=order):
         row.update(balance_preview_counted=False, account_balance=None,
@@ -35,15 +56,18 @@ def project_saved_balances(saved, daily_rows):
         if row.get('status') == 'duplicate':
             continue
         info = metadata.get((row['batch_id'], row['variant_key']), {})
-        method = (row.get('method_identity') or info.get('method_identity')
-                  or row.get('series_key') or info.get('series_key') or row['variant_key'])
-        account_id = 'local-preview:' + method
+        method = method_for(row)
+        series = series_for(row)
+        account_id = 'local-preview:' + series
         row['account_id'] = account_id
-        key = method, row['trade_date']
+        key = series, row['trade_date']
+        selected = preferred.get(key)
+        if selected and (row['batch_id'], row['variant_key']) != (selected['batch_id'], selected['variant_key']):
+            continue
         if key in chosen:
             continue
         chosen.add(key)
-        account = accounts.setdefault(method, dict(
+        account = accounts.setdefault(series, dict(
             account_id=account_id, method_identity=method, variant_key=row['variant_key'],
             label=row.get('label', ''), model=row.get('model'), rules=deepcopy(saved['rules']),
             equity=initial, sessions=0, curve=[], _pnls=[]))

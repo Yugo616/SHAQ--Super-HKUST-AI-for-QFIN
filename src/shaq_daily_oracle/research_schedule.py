@@ -100,8 +100,8 @@ def _register_windows_worker(paths):
 
 def save_schedule(paths, lab, submitted):
     start = clock_time.fromisoformat(str(submitted.get("start_et", "08:35")))
-    if start.tzinfo is not None or not clock_time(4) <= start < clock_time(8, 50):
-        raise ValueError("自动启动时间应在美东04:00至08:50之间")
+    if start.tzinfo is not None or not clock_time(4) <= start < clock_time(9, 30):
+        raise ValueError("自动启动时间应在美东04:00至09:30之间，结论仍须在实际开盘前完成")
     selected = submitted.get("selections", [])
     enabled = submitted.get("enabled") is True
     if enabled:
@@ -147,12 +147,13 @@ def save_schedule(paths, lab, submitted):
 
 def due_status(now, start_et):
     now = now.astimezone(ET)
-    if market_session(now.date()) is None:
+    session = market_session(now.date())
+    if session is None:
         return "closed"
     start = datetime.combine(now.date(), clock_time.fromisoformat(start_et), ET)
     if now < start:
         return "waiting"
-    if now >= datetime.combine(now.date(), clock_time(8, 50), ET):
+    if now >= session.market_open:
         return "missed"
     return "due"
 

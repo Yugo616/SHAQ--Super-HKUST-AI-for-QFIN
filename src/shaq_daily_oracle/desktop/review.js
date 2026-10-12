@@ -37,11 +37,12 @@ const SHAQResults=(()=>{
       const account=accounts.find(value=>value.batch_id===row.batch_id&&value.variant_key===row.variant_key);
       const meta=SHAQAccounts.historyIdentity(row,versions),model=SHAQAccounts.modelCaption([],row.model);
       const caption=SHAQRunCaption.describe(row);
-      const phase=row.status==='engineering_failure'?'运行失败':row.score_eligible===false?'过时结果，仅供参考':row.status==='empty'?'空榜':'已正常运行';
+      const phase=row.status==='engineering_failure'?'运行失败':row.superseded_by?'已被当日更新结果替代':row.score_eligible===false?'过时结果，仅供参考':row.status==='empty'?'空榜':'已正常运行';
       const complete=['final','provisional','empty'].includes(account?.status);
       const total=complete?signed(account.net_pnl):'—';
       const retry=account?.reconciliation_pending?'<span>上次结算 · 待重新核对</span> <button class="text-button" data-reconcile-results>重新核对</button>':['unavailable','incomplete','error'].includes(account?.status)?` <button class="text-button" data-retry-minute-date="${esc(row.trade_date)}">补取缺失行情</button>`:'';
-      const header=`<tr class="result-group" data-comparison-group="true" data-batch="${esc(row.batch_id)}" data-variant-key="${esc(row.variant_key)}"><td colspan="9"><div class="result-group-heading"><span class="result-group-choice"></span><b>${esc(caption.title)} · ${esc(meta.method_name)}</b><span class="run-completion">${esc(caption.completion)}</span><span>${esc(model?model+' · ':'')}${esc(phase)}</span><span class="result-group-total">当日合计 ${total} · 余额 ${usd(account?.account_balance)}</span>${retry}</div></td></tr>`;
+      const remove=row.can_delete?`<button class="text-button" data-delete-history="${esc(row.batch_id)}" data-delete-variant="${esc(row.variant_key)}" data-delete-hash="${esc(row.variant_result_sha256)}">删除</button>`:'';
+      const header=`<tr class="result-group" data-comparison-group="true" data-batch="${esc(row.batch_id)}" data-variant-key="${esc(row.variant_key)}"><td colspan="9"><div class="result-group-heading"><span class="result-group-choice"></span><b>${esc(caption.title)} · ${esc(meta.method_name)}</b><span class="run-completion">${esc(caption.completion)}</span><span>${esc(model?model+' · ':'')}${esc(phase)}</span><span class="result-group-total">当日合计 ${total} · 余额 ${usd(account?.account_balance)}</span>${retry}${remove}</div></td></tr>`;
       return [header,...predictions.map(prediction=>{
         const value=outcome(row.labels?.[prediction.symbol],prediction);
         const trade=account?.trades?.find(item=>item.symbol===prediction.symbol);
@@ -148,6 +149,16 @@ if(typeof document!=='undefined'){
       button.disabled=true;button.textContent='正在恢复…';try{await resumeOriginalBatch(button.dataset.historyResume)}catch(error){notice(SHAQProgress.failureText(error),true)}finally{button.disabled=false}
     });
     qa('[data-result-symbol]').forEach(row=>row.onclick=()=>loadBatch(row.dataset.batch,row.dataset.variantKey,row.dataset.resultSymbol||undefined));
+    qa('[data-delete-history]').forEach(button=>button.onclick=async event=>{
+      event.stopPropagation();
+      const row=all.find(r=>r.batch_id===button.dataset.deleteHistory&&r.variant_key===button.dataset.deleteVariant);
+      if(!row)return;
+      const caption=SHAQRunCaption.describe(row),name=SHAQAccounts.historyIdentity(row,versions).method_name;
+      if(!confirm(`删除这次旧结果？\n${caption.title} · ${name}\n${caption.completion}\n当天有效结果和余额不受影响。`))return;
+      button.disabled=true;
+      try{await api('delete_history_result',row.batch_id,row.variant_key,button.dataset.deleteHash);await load(false)}
+      catch(error){notice(error.message,true);button.disabled=false}
+    });
     qa('[data-retry-minute-date]').forEach(button=>{
       button.disabled=['running','already_running'].includes(state.data.result_refresh?.status);
       button.onclick=async event=>{event.stopPropagation();button.disabled=true;button.textContent='正在补取…';try{await api('retry_missing_minutes',button.dataset.retryMinuteDate);await load(false)}catch(error){notice(error.message,true);button.disabled=false;button.textContent='补取缺失行情'}};

@@ -16,6 +16,13 @@ from shaq_daily_oracle.background_process import background_process_options
 
 
 class ResearchScheduleTests(unittest.TestCase):
+    def test_due_until_actual_session_open_not_old_evidence_deadline(self):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        for clock,expected in [('09:20:00','due'),('09:29:59','due'),('09:30:00','missed')]:
+            now=datetime.fromisoformat('2026-10-08T'+clock).replace(tzinfo=ZoneInfo('America/New_York'))
+            self.assertEqual(schedule.due_status(now,'08:35'),expected)
+
     def test_due_forecast_starts_before_historical_price_refresh(self):
         calls = []
         class Lab:

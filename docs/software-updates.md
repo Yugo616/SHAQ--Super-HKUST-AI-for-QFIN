@@ -2,6 +2,12 @@
 
 ## 0.7.10: saved connections, supplemental data and research recovery
 
+- Research scoring now requires evidence before decision and decision strictly
+  before market open, without a fixed 08:50 collection deadline. Latest valid
+  pre-open method/model/day result wins; old frozen results remain immutable.
+  Superseded rows can be removed from the result list after confirmation without
+  deleting shared evidence or changing the selected day's balance.
+
 - Alpaca data credentials are stored in a private local application file, outside
   the repository and research snapshots. Daily reads do not invoke the operating
   system credential prompt. Users upgrading from a credential-store-only setup
@@ -15,7 +21,7 @@
 - Daily credit-spread background and optional historical option quotes supplement
   existing sources. The latter requires a separately configured Market Data token;
   OCC open interest is not a substitute for quote prices or opening trade direction.
-- Late same-session research can collect supplemental inputs without becoming an
+- After-open same-session research can collect supplemental inputs without becoming an
   on-time prediction. Review receives verified source-time context, not future
   outcome data. Unchanged validated domain reports can be reused; original records
   and the original resume contract remain intact.
@@ -23,8 +29,9 @@
   error events, and data progress keeps primary prices separate from supplemental
   volume failures.
 
-The two method packages, sizing, fees, frozen forecasts and account ledgers are
-unchanged. The updater uses the matching 0.7.9 platform base when available and
+The two method packages, sizing, fees and frozen forecasts are unchanged. Derived
+eligibility and balances are reassessed under the new selection policy while saved
+trade quantities are preserved. The updater uses the matching 0.7.9 platform base when available and
 falls back to a full package when a compatible delta cannot be applied.
 
 ## 0.7.9: consolidated data, recovery and replay improvements
