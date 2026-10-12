@@ -12,6 +12,30 @@ from shaq_daily_oracle.research_progress import ResearchProgressLog, safe_observ
 
 
 class ResearchProgressLogTests(unittest.TestCase):
+    def test_parallel_variants_keep_both_task_plans(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as tmp:
+            log = ResearchProgressLog(Path(tmp) / 'events.jsonl')
+            entered, release, second_started = threading.Event(), threading.Event(), threading.Event()
+            read = log.read
+            def slow_read():
+                if not entered.is_set():
+                    entered.set()
+                    release.wait(2)
+                return read()
+            def second():
+                second_started.set()
+                log.append(stage='tasks_planned', variant_key='shadow', tasks=[{'task_id':'decision'}])
+            with patch.object(log, 'read', side_effect=slow_read):
+                first = threading.Thread(target=lambda: log.append(stage='tasks_planned', variant_key='main', tasks=[{'task_id':'decision'}]))
+                other = threading.Thread(target=second)
+                first.start(); self.assertTrue(entered.wait(1)); other.start()
+                self.assertTrue(second_started.wait(1))
+                other.join(.05)
+                release.set(); first.join(2); other.join(2)
+            self.assertEqual({row['variant_key'] for row in log.read()}, {'main','shadow'})
+            self.assertEqual([row['sequence'] for row in log.read()], [1,2])
+
     def test_display_cache_reuses_unchanged_log_and_refreshes_on_append(self):
         from unittest.mock import patch
         with tempfile.TemporaryDirectory() as tmp:

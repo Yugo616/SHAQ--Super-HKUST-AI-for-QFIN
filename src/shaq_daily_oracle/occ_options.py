@@ -57,9 +57,9 @@ def fetch_occ_series_search(
                         raise OccOptionsError("OCC series-search response exceeds size limit")
                     chunks.append(chunk)
                 return b"".join(chunks)
-        except httpx.TimeoutException as exc:
+        except httpx.RequestError as exc:
             if attempt:
-                raise OccOptionsError("OCC series-search timed out twice") from exc
+                raise OccOptionsError("OCC series-search connection failed twice") from exc
     raise OccOptionsError("OCC series-search request failed")
 
 

@@ -139,7 +139,7 @@ def collect_premarket_volume(
     safety_margin_seconds: int, delay_source: str,
     client: httpx.Client | None = None, max_pages: int = 100,
     max_retries: int = 1, retry_backoff_seconds: float = .25,
-    timeout_seconds: float = 15, clock=None,
+    timeout_seconds: float = 15, clock=None, research_replay: bool = False,
 ) -> dict:
     """Collect volume through the last complete, published premarket minute.
 
@@ -156,7 +156,7 @@ def collect_premarket_volume(
         raise AlpacaBarsError("invalid_request", "Invalid session date")
     cutoff_et, observed_et = _et(cutoff, "cutoff"), _et(observed_at, "observed_at")
     if (cutoff_et.date() != session_date or not PREMARKET_START < cutoff_et.time() <= PREMARKET_END
-            or observed_et.date() != session_date or observed_et > cutoff_et):
+            or observed_et.date() != session_date or (observed_et > cutoff_et and not research_replay)):
         raise AlpacaBarsError("late_or_invalid_cutoff", "Premarket sample is not on time")
     if (not isinstance(base_url, str) or not base_url.startswith("https://")
             or not isinstance(feed, str) or feed != "sip"
@@ -171,8 +171,10 @@ def collect_premarket_volume(
         raise AlpacaBarsError("invalid_request", "Invalid collection limits or delay")
 
     start = datetime.combine(session_date, PREMARKET_START, ET)
-    available_end = min(cutoff_et, observed_et - timedelta(
-        seconds=delay_seconds + safety_margin_seconds))
+    # A late retrieval may recover the original delayed observation window,
+    # but must not expand it using prices that arrived after the decision cutoff.
+    available_end = min(cutoff_et, observed_et) - timedelta(
+        seconds=delay_seconds + safety_margin_seconds)
     available_end = available_end.replace(second=0, microsecond=0)
     if available_end <= start:
         raise AlpacaBarsError("not_yet_available", "No completed delayed-SIP premarket minute")
@@ -185,7 +187,7 @@ def collect_premarket_volume(
               "asof": session_date.isoformat(), "limit": MAX_API_PAGE_SIZE}
     headers = {"APCA-API-KEY-ID": key_id, "APCA-API-SECRET-KEY": secret_key}
     clock = clock or (lambda: datetime.now(ET))
-    values: dict[str, dict[datetime, int]] = {symbol: {} for symbol in requested}
+    values: dict[str, dict[datetime, dict]] = {symbol: {} for symbol in requested}
     provider_returned_symbols: set[str] = set()
     seen_tokens: set[str] = set()
     response_hashes: list[str] = []
@@ -223,7 +225,7 @@ def collect_premarket_volume(
                     time.sleep(retry_backoff_seconds * (attempt + 1))
 
             captured_at = _et(clock(), "capture time")
-            if captured_at > cutoff_et:
+            if captured_at.date() != session_date or (captured_at > cutoff_et and not research_replay):
                 raise AlpacaBarsError("late_capture", "Alpaca response arrived after cutoff")
             raw_pages.append(response.content)
             response_hashes.append(hashlib.sha256(response.content).hexdigest())
@@ -244,10 +246,14 @@ def collect_premarket_volume(
                             raise ValueError("not premarket")
                         if stamp + MINUTE > available_end:
                             continue  # Inclusive API end can return an unpublished partial minute.
+                        normalized = {"timestamp": stamp.isoformat(),
+                            **{target: float(row[source]) for target, source in (
+                                ("open", "o"), ("high", "h"), ("low", "l"), ("close", "c"))},
+                            "volume": volume}
                         prior = values[symbol].get(stamp)
-                        if prior is not None and prior != volume:
+                        if prior is not None and prior != normalized:
                             raise ValueError("conflicting duplicate")
-                        values[symbol][stamp] = volume
+                        values[symbol][stamp] = normalized
                 token = body.get("next_page_token")
                 if token is not None and (not isinstance(token, str) or not token):
                     raise ValueError("invalid cursor")
@@ -266,11 +272,12 @@ def collect_premarket_volume(
 
     results = {}
     for symbol, bars in values.items():
-        total = sum(bars.values())
+        total = sum(row["volume"] for row in bars.values())
         status = ("no_bars" if not bars else "observed_positive" if total > 0
                   else "all_zero_unconfirmed")
         results[symbol] = {"observed_volume": total if total > 0 else None,
                            "volume_status": status, "bar_count": len(bars),
+                           "bars": [bars[stamp] for stamp in sorted(bars)],
                            "first_bar_start_et": min(bars).isoformat() if bars else None,
                            "last_bar_start_et": max(bars).isoformat() if bars else None}
     return {"symbols": results, "raw_pages": raw_pages, "metadata": {
@@ -279,6 +286,8 @@ def collect_premarket_volume(
         "bar_timestamp_semantics": "minute_start", "session_date": session_date.isoformat(),
         "cutoff_et": cutoff_et.isoformat(), "requested_at_et": observed_et.isoformat(),
         "captured_at_et": captured_at.isoformat(),
+        "formal_cutoff_eligible": observed_et <= cutoff_et and captured_at <= cutoff_et,
+        "post_cutoff_replay": observed_et > cutoff_et or captured_at > cutoff_et,
         "first_minute_start_et": start.isoformat(),
         "last_complete_minute_end_et": available_end.isoformat(),
         "delay_seconds": delay_seconds, "safety_margin_seconds": safety_margin_seconds,

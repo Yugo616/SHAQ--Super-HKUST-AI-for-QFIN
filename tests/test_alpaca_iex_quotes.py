@@ -80,6 +80,8 @@ class AlpacaIexQuoteTests(unittest.TestCase):
         self.assertEqual(parse_qs(urlparse(requests[1][0].full_url).query)["page_token"], ["page-two"])
         self.assertEqual(parse_qs(urlparse(requests[2][0].full_url).query)["symbols"], ["MSFT"])
         self.assertEqual(result["symbols"]["AAPL"]["calculation"]["ofi_round_lots"], 2)
+        self.assertTrue(result['symbols']['AAPL']['calculation']['data_origin_verified'])
+        self.assertFalse(result['symbols']['AAPL']['calculation']['native_trade_aggressor'])
         self.assertEqual(result["symbols"]["MSFT"]["calculation"]["status"], "unavailable")
         self.assertEqual(result["symbols"]["AAPL"]["raw_pages"][0]["sha256"],
                          hashlib.sha256(bodies[0]).hexdigest())

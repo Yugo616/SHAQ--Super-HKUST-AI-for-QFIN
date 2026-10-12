@@ -425,13 +425,29 @@ def safe_model_error_summary(
     return text[-maximum_length:]
 
 
-def _local_call_failure(backend, completed, *, prompt=''):
+def _local_call_failure(backend, completed, *, prompt='', json_events=False):
     # CLI stderr can echo the complete frozen packet. Never surface that tail.
     # Only a standalone stderr diagnostic may classify an error. The supplied
     # input can be echoed by a CLI; its contents are never an error authority.
     output = str(completed.stderr or '')
     if prompt:
         output = output.replace(prompt, '')
+    if json_events:
+        # Only CLI terminal error envelopes are authority. Never inspect model
+        # messages, tool results, or reasoning items to decide a retry.
+        for line in str(completed.stdout or '').splitlines():
+            try:
+                event = json.loads(line)
+            except (ValueError, TypeError):
+                continue
+            if not isinstance(event, dict):
+                continue
+            error = event.get('error') if event.get('type') == 'turn.failed' else event
+            if event.get('type') not in {'error', 'turn.failed'} or not isinstance(error, dict):
+                continue
+            message = error.get('message')
+            if isinstance(message, str) and (not prompt or prompt not in message):
+                output += '\nERROR: ' + ' '.join(message.splitlines())
     quota = re.search(r"(?im)^(?:ERROR:\s*)?(?:you['’]ve hit your usage limit|"
                       r"usage limit reached|insufficient_quota|quota exceeded)\b", output)
     if quota:
@@ -452,7 +468,8 @@ def _local_call_failure(backend, completed, *, prompt=''):
                 diagnostic={'kind': 'http', 'backend': backend, 'status': status,
                             'returncode': completed.returncode})
         if re.match(r'(?i)(?:stream disconnected before completion|error sending request|'
-                    r'connection (?:reset|refused)|request timed out)\b', line):
+                    r'connection (?:reset|refused)|request timed out|'
+                    r'failed to refresh available models: request timed out)\b', line):
             return ModelBackendError(f'{backend}：模型连接中断，可重试未完成任务',
                 diagnostic={'kind': 'connection', 'backend': backend,
                             'returncode': completed.returncode})
@@ -474,7 +491,7 @@ def _codex_cli_call(
         output_path = root / "final.json"
         schema_path.write_text(json.dumps(schema, sort_keys=True), encoding="utf-8")
         arguments = [
-            "exec", "--ephemeral", "--skip-git-repo-check",
+            "exec", "--json", "--ephemeral", "--skip-git-repo-check",
             "--ignore-user-config", "--ignore-rules", "--sandbox", "read-only",
             "--output-schema", str(schema_path), "--output-last-message", str(output_path),
             "--color", "never", "-C", str(root), "-",
@@ -493,7 +510,7 @@ def _codex_cli_call(
         except subprocess.TimeoutExpired as exc:
             raise ModelBackendError("Codex 本地调用超时", diagnostic={"kind": "timeout"}) from exc
         if completed.returncode != 0 or not output_path.is_file():
-            raise _local_call_failure('Codex', completed, prompt=prompt)
+            raise _local_call_failure('Codex', completed, prompt=prompt, json_events=True)
         parsed = _json_from_text(output_path.read_text(encoding="utf-8"))
     return parsed, {
         "backend": "codex-cli",

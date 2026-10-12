@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import math
 from functools import lru_cache
@@ -206,6 +207,44 @@ def _premarket_state(
     }
 
 
+def _resolved_premarket(yahoo, sip, prints, metadata):
+    """Resolve fields, not volumes: providers' overlapping samples never add up."""
+    result = {**yahoo, 'price_source': 'primary_price_provider',
+              'volume_source': 'primary_price_provider',
+              'volume_window_end': yahoo.get('last_observation_et'),
+              'supplemental_price_bars': sip.get('bars', [])}
+    bars = sip.get('bars', [])
+    if bars:
+        last = bars[-1]
+        old_time = _timestamp(yahoo.get('last_observation_et'))
+        if old_time is None or _timestamp(last['timestamp']) > old_time:
+            result.update(status='collected', bars=bars, last_price=last['close'],
+                last_observation_et=last['timestamp'], first_observation_et=bars[0]['timestamp'],
+                price_source='alpaca_delayed_sip_bars', eligible_price_bar_count=len(bars))
+            prior = yahoo.get('previous_close')
+            result['premarket_return'] = last['close'] / prior - 1 if prior else None
+    # SIP's wider market coverage replaces missing/zero Yahoo volume, not a
+    # later positive volume observation from a different window.
+    if sip.get('volume_status') == 'observed_positive' and not yahoo.get('observed_volume'):
+        result.update(observed_volume=sip['observed_volume'], volume_status='observed_positive',
+            volume_source='alpaca_delayed_sip_bars', volume_ranking_eligible=True,
+            volume_window_end=metadata.get('last_complete_minute_end_et'),
+            volume_note='Delayed SIP bar volume for its own window, not volume through the latest price time.')
+    result['reported_print_volume'] = prints.get('reported_trade_volume')
+    if result.get('last_price') is None and prints.get('trades'):
+        last_print = prints['trades'][-1]
+        result.update(status='collected',last_price=last_print['price'],
+            last_observation_et=last_print['timestamp'],price_source='alpaca_reported_print',
+            last_print_conditions=last_print['conditions'],
+            price_semantics='last_reported_print_including_sale_conditions_not_official_bar_close')
+        prior = yahoo.get('previous_close')
+        result['premarket_return'] = last_print['price']/prior - 1 if prior else None
+    result['interpretation_boundary'] = ('Use these resolved fields for current coverage. Source observations remain '
+        'archived. Delayed volume and later prices have separate windows. Raw prints are not bar volume, '
+        'do not add volumes across sources, and do not infer native aggressor from prints.')
+    return result
+
+
 def _benchmark_rows(path: Path) -> tuple[list[str], dict[str, str]]:
     with path.open(newline="", encoding="utf-8-sig") as handle:
         rows = list(csv.DictReader(handle))
@@ -304,6 +343,7 @@ def collect_research_evidence(
     event_provider: Any | None = None,
     openbb_api_key: str = "",
     alpaca_credentials: tuple[str, str] | None = None,
+    marketdata_token: str = '',
     screening_rules: dict[str, str] | None = None,
     history_cache_root: Path | None = None,
     allow_replay: bool = False,
@@ -482,13 +522,33 @@ def collect_research_evidence(
                 safety_margin_seconds=profile.alpaca_safety_margin_seconds,
                 delay_source='https://docs.alpaca.markets/us/docs/market-data-faq',
                 timeout_seconds=profile.request_timeout_seconds,
-                clock=collection_clock)
+                clock=collection_clock, research_replay=True)
         except AlpacaBarsError as exc:
             alpaca_volume_error = {'kind': exc.kind}
         observe('premarket', 'complete' if alpaca_volume else 'failed', source='alpaca-sip',
             completed=1 if alpaca_volume else 0, total=1,
             message='候选盘前成交量补充完成' if alpaca_volume else 'Alpaca 成交量未取得；原始价格资料保留',
             diagnostic=alpaca_volume_error)
+    alpaca_trades, alpaca_trade_error = None, None
+    missing_bars = [s for s in candidate_symbols if profile.alpaca_premarket_enabled
+                   and (alpaca_volume or {}).get('symbols', {}).get(s, {}).get('volume_status') != 'observed_positive'
+                   and (alpaca_volume_error or {}).get('kind') not in {'auth_error', 'permission_denied'}]
+    if missing_bars:
+        from .alpaca_trades import collect_premarket_trades
+        observe('premarket', 'running', source='alpaca-sip-trades', completed=0, total=1,
+                message='分钟线未覆盖的股票，正在补取真实逐笔成交')
+        try:
+            key, secret = alpaca_credentials or ('', '')
+            alpaca_trades = collect_premarket_trades(symbols=missing_bars,
+                session_date=session.session_date, cutoff=scheduled_cutoff, observed_at=collection_clock(),
+                key_id=key, secret_key=secret, delay_seconds=profile.alpaca_sip_delay_seconds,
+                safety_margin_seconds=profile.alpaca_safety_margin_seconds,
+                timeout_seconds=profile.request_timeout_seconds, clock=collection_clock, research_replay=True)
+        except AlpacaBarsError as exc:
+            alpaca_trade_error = {'kind': exc.kind}
+        observe('premarket', 'complete' if alpaca_trades else 'failed', source='alpaca-sip-trades',
+                completed=int(alpaca_trades is not None), total=1,
+                message='逐笔成交补采结束', diagnostic=alpaca_trade_error)
     member_by_symbol = {member.symbol: member for member in members}
     iex_quotes, iex_failure = None, None
     if profile.alpaca_orderflow_enabled:
@@ -606,7 +666,8 @@ def collect_research_evidence(
         observe("public_context", "running", source="configured_public_sources",
                 completed=0, total=public_total, message="开始获取公开市场背景")
         try:
-            public_packets = collect_public_context(public_config, cutoff=scheduled_cutoff)
+            public_packets = collect_public_context(public_config, cutoff=scheduled_cutoff,
+                                                     research_replay=True, clock=collection_clock)
         except Exception:
             observe("public_context", "failed", source="configured_public_sources",
                     completed=0, total=public_total, message="公开市场背景获取失败")
@@ -667,7 +728,10 @@ def collect_research_evidence(
                     'source_uri': page['request_uri'], 'captured_at': captured,
                     'raw_file_path': path, 'scope_symbols': [symbol], 'consumer_domains': [],
                     'root_component_type': 'capital_flow'})
-            eligible = quote['formal_cutoff_eligible'] and bool(parent_ids)
+            captured_time = _timestamp(captured)
+            eligible = (quote.get('status') in {'computed', 'liquidity_context'}
+                        and captured_time is not None and captured_time.date() == session.session_date
+                        and bool(parent_ids))
             # Raw late/failed captures remain diagnostic files, never task evidence.
             if not eligible:
                 records[:] = [r for r in records if r['evidence_id'] not in parent_ids]
@@ -696,6 +760,37 @@ def collect_research_evidence(
         observe('capital', 'complete' if iex_eligible else 'unavailable', source='alpaca-quotes',
             completed=iex_eligible, total=len(candidate_symbols),
             message=f'买卖报价已取得 {iex_eligible} / {len(candidate_symbols)} 只', diagnostic=iex_failure)
+    supplemental_parents = {s: [] for s in candidate_symbols}
+    if alpaca_trades:
+        trade_meta = alpaca_trades['metadata']
+        trade_roots = []
+        for index, payload in enumerate(alpaca_trades.pop('raw_pages')):
+            path = f'raw/alpaca/trade-page-{index}.json'
+            files[path] = payload
+            eid = 'ev_alpaca_trade_raw_' + sha256_payload([trade_meta['response_sha256'][index], index])[:16]
+            trade_roots.append(eid)
+            records.append(dict(evidence_id=eid, domain='capital', provider='alpaca-sip-trades',
+                source_uri=trade_meta['source_uri'], captured_at=trade_meta['captured_at_et'],
+                raw_file_path=path, scope_symbols=candidate_symbols, consumer_domains=[],
+                root_component_type='stock_price_volume'))
+        for symbol, values in alpaca_trades['symbols'].items():
+            if values['status'] != 'collected':
+                continue
+            view = {'symbol': symbol, **values, 'source': trade_meta}
+            path = f'raw/alpaca/{symbol}-trades.json'
+            files[path] = _json_bytes(view)
+            eid = 'ev_alpaca_trades_' + sha256_payload(view)[:16]
+            records.append(dict(evidence_id=eid, domain='capital', provider='alpaca-sip-trades',
+                source_uri=trade_meta['source_uri'], captured_at=trade_meta['captured_at_et'], raw_file_path=path,
+                parent_evidence_ids=trade_roots, scope_symbols=[symbol],
+                consumer_domains=['capital', 'price_volume', 'market', 'event', 'relationships'],
+                root_component_type='stock_price_volume'))
+            supplemental_parents[symbol].append(eid)
+            collection_statuses.append({'symbol':symbol,'domain':'capital','status':'collected',
+                'evidence_kind':'reported_trades_context','reason':'native_aggressor_not_supplied'})
+        files['raw/alpaca/trade-status.json'] = _json_bytes(alpaca_trades)
+    elif missing_bars:
+        files['raw/alpaca/trade-status.json'] = _json_bytes({'status':'provider_error', 'diagnostic':alpaca_trade_error})
     if alpaca_volume:
         volume_meta = alpaca_volume['metadata']
         raw_ids = []
@@ -720,8 +815,9 @@ def collect_research_evidence(
                 'domain': 'price_volume', 'provider': 'alpaca-sip', 'source_uri': volume_meta['source_uri'],
                 'captured_at': volume_meta['captured_at_et'], 'raw_file_path': path,
                 'parent_evidence_ids': raw_ids, 'scope_symbols': [symbol],
-                'consumer_domains': ['price_volume', 'event', 'relationships'],
+                'consumer_domains': ['market', 'price_volume', 'event', 'relationships'],
                 'root_component_type': 'stock_price_volume'})
+            supplemental_parents[symbol].append(records[-1]['evidence_id'])
         files['raw/alpaca/premarket-status.json'] = _json_bytes(alpaca_volume)
     elif profile.alpaca_premarket_enabled:
         files['raw/alpaca/premarket-status.json'] = _json_bytes({'status': 'provider_error', 'diagnostic': alpaca_volume_error})
@@ -771,6 +867,24 @@ def collect_research_evidence(
             "consumer_domains": ["market", "relationships", "event", "derivatives", "price_volume"],
             "root_component_type": "stock_price_volume",
         })
+        if supplemental_parents[symbol]:
+            original_price = records[-1]
+            original_price['consumer_domains'] = []
+            sip = (alpaca_volume or {}).get('symbols', {}).get(symbol, {})
+            prints = (alpaca_trades or {}).get('symbols', {}).get(symbol, {})
+            volume_meta = (alpaca_volume or {}).get('metadata', {})
+            resolved = {'symbol': symbol, 'daily': stock_states[symbol]['daily'],
+                'premarket': _resolved_premarket(stock_states[symbol]['premarket'], sip, prints, volume_meta),
+                'reported_prints': prints, 'primary_source_premarket': stock_states[symbol]['premarket']}
+            resolved_path = f'raw/stocks/{symbol}-resolved.json'
+            files[resolved_path] = _json_bytes(resolved)
+            parents = [original_price['evidence_id'], *supplemental_parents[symbol]]
+            capture = max(r['captured_at'] for r in records if r['evidence_id'] in parents)
+            records.append(dict(evidence_id='ev_resolved_'+sha256_payload(resolved)[:16], domain='price_volume',
+                provider='resolved-premarket', source_uri='provider://resolved-premarket/'+symbol,
+                captured_at=capture, raw_file_path=resolved_path, parent_evidence_ids=parents,
+                scope_symbols=[symbol], consumer_domains=['market','relationships','event','derivatives','price_volume'],
+                root_component_type='stock_price_volume'))
         relationship = {
             "symbol": symbol, "company_name": candidate["company_name"],
             "gics_sector": candidate["gics_sector"],
@@ -907,6 +1021,37 @@ def collect_research_evidence(
             and option_surface.get("quote_freshness_eligible") is True
         )
         option_surface["derivatives_task_eligible"] = option_task_eligible
+        historical_options = None
+        if profile.marketdata_options_enabled and not option_task_eligible:
+            from .marketdata_options import collect_historical_chain
+            try:
+                historical = collect_historical_chain(symbol=symbol,token=marketdata_token,
+                    cutoff=scheduled_cutoff,timeout_seconds=profile.request_timeout_seconds,
+                    maximum_strikes=profile.maximum_option_contracts_per_side,
+                    maximum_expiries=profile.maximum_option_expiries,clock=collection_clock,
+                    research_replay=True)
+                historical = dict(historical)
+                if (historical['symbol'] != symbol
+                        or _timestamp(historical['captured_at']).date() != session.session_date):
+                    raise DataProviderError('Option context identity or capture time mismatch')
+                raw = historical.pop('raw')
+                raw_path = f'raw/options/{symbol}-marketdata-source.json'
+                context_path = f'raw/options/{symbol}-marketdata-context.json'
+                files[raw_path], files[context_path] = raw, _json_bytes(historical)
+                if historical['status'] == 'collected':
+                    historical_options = historical
+                    root_id = 'ev_option_history_raw_' + hashlib.sha256(raw).hexdigest()[:16]
+                    common = dict(domain='derivatives',provider='marketdata-historical',
+                        source_uri=historical['source_uri'],captured_at=historical['captured_at'],
+                        scope_symbols=[symbol],root_component_type='stock_derivatives')
+                    records.extend([
+                        {**common,'evidence_id':root_id,'raw_file_path':raw_path,'consumer_domains':[]},
+                        {**common,'evidence_id':'ev_option_history_'+sha256_payload(historical)[:16],
+                         'raw_file_path':context_path,'parent_evidence_ids':[root_id],'consumer_domains':['derivatives']},
+                    ])
+            except Exception as exc:
+                files[f'raw/options/{symbol}-marketdata-status.json'] = _json_bytes({
+                    'status':'provider_error','error_type':type(exc).__name__})
         if option_surface.get("status") == "collected" and not option_task_eligible:
             option_surface["derivatives_task_ineligibility_reason"] = (
                 "quote_not_fresh" if option_surface.get("quote_timestamp_status") == "available"
@@ -921,8 +1066,8 @@ def collect_research_evidence(
             try:
                 interest_raw = fetch_occ_series_search(symbol, timeout_seconds=profile.request_timeout_seconds)
                 interest_captured = collection_clock()
-                if interest_captured > scheduled_cutoff:
-                    raise DataProviderError('OCC response arrived after evidence cutoff')
+                if interest_captured.date() != session.session_date:
+                    raise DataProviderError('OCC response belongs to another research day')
                 interest = parse_occ_series_search(interest_raw, symbol=symbol, captured_at=interest_captured)
                 contracts = [row for row in interest['contracts'] if row['expiration'] >= session.session_date.isoformat()]
                 by_expiry = {}
@@ -935,6 +1080,8 @@ def collect_research_evidence(
                     raise DataProviderError('OCC has no unexpired standard contracts')
                 interest_context = {key: value for key, value in interest.items() if key != 'contracts'}
                 interest_context.update({'by_expiration': by_expiry, 'contract_count': len(contracts),
+                    'formal_cutoff_eligible': interest_captured <= scheduled_cutoff,
+                    'post_cutoff_replay': interest_captured > scheduled_cutoff,
                     'total_call_open_interest': sum(r['open_interest'] for r in contracts if r['option_type']=='call'),
                     'total_put_open_interest': sum(r['open_interest'] for r in contracts if r['option_type']=='put'),
                     'quote_surface_eligible': False, 'directional_flow_eligible': False,
@@ -966,10 +1113,12 @@ def collect_research_evidence(
                 "root_component_type": "stock_derivatives",
             })
         option_status = (
-            "collected" if option_task_eligible or interest_context
+            "collected" if option_task_eligible or interest_context or historical_options
             else ("provider_error" if option_surface.get("status") == "provider_error" else "no_data")
         )
-        if interest_context and not option_task_eligible:
+        if historical_options and not option_task_eligible:
+            option_reason = 'historical_pricing_context'
+        elif interest_context and not option_task_eligible:
             option_reason = 'open_interest_context_only'
         elif option_status == "provider_error":
             option_reason = "provider_error"
@@ -991,9 +1140,11 @@ def collect_research_evidence(
             "open_interest_context_available": bool(interest_context),
             "open_interest_context_contracts": interest_context['contract_count'] if interest_context else None,
             "open_interest_context_diagnostic": interest_failure,
+            "historical_quote_context_available": bool(historical_options),
+            "historical_quote_contracts": len(historical_options['contracts']) if historical_options else None,
         })
         option_checked += 1
-        option_context_count += bool(interest_context)
+        option_context_count += bool(interest_context or historical_options)
         if option_status == "provider_error":
             option_failed = True
         else:
@@ -1012,12 +1163,15 @@ def collect_research_evidence(
             source=option_sources, completed=option_completed,
             total=len(candidates), message="期权报价与持仓结构核对结果已记录",
             checked=option_checked, chain_count=option_chain_count, open_interest_context_count=option_context_count)
+    trade_symbols = [s for s,r in (alpaca_trades or {}).get('symbols',{}).items() if r['status']=='collected']
     files["raw/provider-status.json"] = _json_bytes({
         "capital": {
-            "status": "collected" if iex_eligible else "unavailable",
+            "status": "collected" if iex_eligible or trade_symbols else "unavailable",
             "reason": "observed_quote_liquidity" if iex_eligible else (
                 "no_eligible_order_book_source" if profile.alpaca_orderflow_enabled else "requires_authorized_aggressor_and_depth_feed"),
             "eligible_symbols": iex_eligible, "diagnostic": iex_failure,
+            "reported_trade_symbols":trade_symbols,
+            "reported_trades_diagnostic":alpaca_trade_error,
             "detail": "IEX or delayed SIP quotes: recent pressure separated from earlier session liquidity; never native aggressor or full-market capital flow",
         },
         "option_trade_flow": {
@@ -1029,6 +1183,9 @@ def collect_research_evidence(
                      "diagnostic": metadata_diagnostic},
     })
     completed = datetime.now(ET) if observed_at is None else now
+    # Research may consume late same-day captures; the bundle and scoring must
+    # retain their real capture times even when a caller supplies observed_at.
+    completed = max([completed] + [_timestamp(r['captured_at']) for r in records])
     cutoff_status = "on_time" if completed <= scheduled_cutoff else "late_research_only"
     manifest = provider_manifest(
         profile=profile, universe_path=universe_path, cutoff=scheduled_cutoff

@@ -110,20 +110,36 @@ function renderDataConnections(){
   if(!host||q('#supplemental-data-form'))return;
   const active=d.alpaca_premarket_enabled||d.alpaca_orderflow_enabled;
   const tested=!!s.alpaca_connection?.checked_at;
+  const connectionError=s.alpaca_connection?.access_error||(active&&!s.alpaca_credentials_saved);
   const section=document.createElement('div');section.className='data-connection-list';
   section.innerHTML=`<section class="data-connection-row"><div><strong>期权持仓资料 · OCC</strong><p>查看各合约的持仓量。免费，无需注册。</p></div><span>${d.occ_open_interest_enabled?'已启用':'未启用'}</span><button type="button" class="secondary" id="toggle-occ">${d.occ_open_interest_enabled?'停用':'启用'}</button></section>
-    <section class="data-connection-row"><div><strong>盘前成交量与买卖报价 · Alpaca</strong><p>补充延迟成交量；IEX 报价不足时自动使用延迟全市场报价。当天覆盖以运行结果为准。</p></div><span>${active?(tested?'已连接':'已保存，待测试'):'未连接'}</span><button type="button" class="secondary" id="show-alpaca">${s.alpaca_credentials_saved?'检查／修改连接':'连接 Alpaca'}</button></section>
+    <section class="data-connection-row"><div><strong>盘前成交量与买卖报价 · Alpaca</strong><p>补充延迟成交量；IEX 报价不足时自动使用延迟全市场报价。当天覆盖以运行结果为准。</p></div><span id="alpaca-connection-badge">${connectionError?'需要重新连接':active?(tested?'已连接':'已保存，待测试'):'未连接'}</span><button type="button" class="secondary" id="show-alpaca">${s.alpaca_credentials_saved?'检查／修改连接':'连接 Alpaca'}</button></section>
     <form id="supplemental-data-form" class="form-grid compact-form hidden">
     <div class="wide"><p>1. 在 Alpaca 免费注册，进入控制台生成 API 密钥。</p><button type="button" class="text-button" id="open-alpaca">打开 Alpaca 控制台</button><p>2. 将控制台的两项密钥填到下面，然后测试连接。</p></div>
     <label>Key ID<input name="alpaca_key_id" type="password" autocomplete="new-password" placeholder="${s.alpaca_credentials_saved?'已保存；两项均留空可重新测试':'粘贴 Key ID'}"></label>
     <label>Secret Key<input name="alpaca_secret_key" type="password" autocomplete="new-password" placeholder="${s.alpaca_credentials_saved?'更换密钥时，两项都要填写':'粘贴 Secret Key'}"></label>
-    <p class="wide">仅用于读取行情，不下单。测试通过的数据会自动启用。</p>
+    <p class="wide">保存一次，以后自动使用，不再弹系统密码框。仅存本机，用于读取行情，不下单。</p>
     <div class="wide data-connection-actions"><button type="submit" class="primary">测试并连接</button>${active?'<button type="button" class="secondary" id="disable-alpaca">停用 Alpaca 数据</button>':''}</div></form>
+    <section class="data-connection-row"><div><strong>历史期权报价 · Market Data</strong><p>免费历史买卖报价，盘前通常为前两个交易日；不替代实时报价或主动开仓方向。</p></div><span>${d.marketdata_options_enabled&&s.marketdata_token_saved?'已连接':'未连接'}</span><button type="button" class="secondary" id="show-marketdata">${s.marketdata_token_saved?'检查／修改连接':'连接 Market Data'}</button></section>
+    <form id="marketdata-form" class="form-grid compact-form hidden"><div class="wide"><p>注册 Free Forever 免费账户。Token 只保存在本机，不上传团队仓库。</p><button type="button" class="text-button" id="open-marketdata">打开免费账户页面</button></div><label class="wide">Token<input type="password" name="marketdata_token" autocomplete="new-password" placeholder="${s.marketdata_token_saved?'已保存；留空可重新测试':'粘贴 Token'}"></label><div class="wide data-connection-actions"><button type="submit" class="primary">测试并连接</button>${d.marketdata_options_enabled?'<button type="button" class="secondary" id="disable-marketdata">停用历史期权报价</button>':''}</div></form>
     <p class="inline-status" role="status" id="supplemental-data-status"></p>`;
   host.append(section);
   q('#show-alpaca').onclick=()=>q('#supplemental-data-form').classList.toggle('hidden');
   q('#open-alpaca').onclick=async()=>{try{await api('open_external_url','https://app.alpaca.markets')}catch(error){q('#supplemental-data-status').textContent=error.message}};
   const refresh=async message=>{await api('check_research_environment');await load(false);host.replaceChildren();renderDataConnections();q('#supplemental-data-status').textContent=message};
+  q('#show-marketdata').onclick=()=>q('#marketdata-form').classList.toggle('hidden');
+  q('#open-marketdata').onclick=async()=>{try{await api('open_external_url','https://www.marketdata.app/pricing/')}catch(error){q('#supplemental-data-status').textContent=error.message}};
+  q('#marketdata-form').onsubmit=async event=>{
+    event.preventDefault();const form=event.target,button=form.querySelector('[type="submit"]');button.disabled=true;
+    q('#supplemental-data-status').textContent='正在验证历史期权报价…';
+    try{await api('save_lab_setup',{data_connection_action:'connect_marketdata',marketdata_token:new FormData(form).get('marketdata_token')});form.elements.marketdata_token.value='';await refresh('历史期权报价已连接。运行时保留实际报价日期。')}
+    catch(error){q('#supplemental-data-status').textContent=error.message}
+    finally{button.disabled=false}
+  };
+  if(q('#disable-marketdata'))q('#disable-marketdata').onclick=async event=>{
+    event.target.disabled=true;try{await api('save_lab_setup',{data_connection_action:'disable_marketdata'});await refresh('历史期权报价已停用。')}
+    catch(error){q('#supplemental-data-status').textContent=error.message;event.target.disabled=false}
+  };
   q('#toggle-occ').onclick=async event=>{
     event.target.disabled=true;
     try{await api('save_lab_setup',{data_profile:{occ_open_interest_enabled:!d.occ_open_interest_enabled}});await refresh(d.occ_open_interest_enabled?'OCC 已停用。':'OCC 已启用，无需填写密钥。')}
@@ -143,7 +159,9 @@ function renderDataConnections(){
       form.elements.alpaca_key_id.value='';form.elements.alpaca_secret_key.value='';
       const feeds=saved.alpaca_connection?.feeds||{};
       await refresh(dataConnectionSummary(feeds));
-    }catch(error){q('#supplemental-data-status').textContent=error.message;}finally{button.disabled=false;}
+    }catch(error){q('#supplemental-data-status').textContent=error.message;
+      q('#alpaca-connection-badge').textContent='连接测试失败';
+    }finally{button.disabled=false;}
   };
 }
 function dataConnectionSummary(feeds={}){
@@ -151,7 +169,7 @@ function dataConnectionSummary(feeds={}){
   return Object.entries(feeds).map(([key,row])=>`${labels[key]||'补充数据'}：${row.message||(row.status==='available'?'已连接':'未连接')}`).join('；');
 }
 function renderPage(){({run:renderRun,editor:renderEditor,upload:renderUpload,updates:renderUpdates,history:renderHistory,data:renderData,settings:renderSettings,operator:renderOperator}[state.page]||renderRun)();if(state.page==='settings')renderDataConnections()}
-function render(pageChanged=true,settingsChanged=true){q('#operator-nav').classList.toggle('hidden',!state.data.operator_mode.safety_ready);q('#service-text').textContent=state.data.settings.setup_complete?'本地研究工作台已连接':'等待首次设置';q('#service-dot').className='dot '+(state.data.settings.setup_complete?'ok':'');const status=state.data.result_refresh||{};q('#refresh-status').textContent=refreshStatusText(status);q('#refresh-button').disabled=['running','already_running'].includes(status.status);renderRefreshControls(status);if(pageChanged)renderPage();if(settingsChanged)bindSetup();if(!state.data.settings.setup_complete)q('#setup').classList.remove('hidden')}
+function render(pageChanged=true,settingsChanged=true){const settings=state.data.settings,needsSetup=Array.isArray(settings.setup_required_fields)?settings.setup_required_fields.length>0:!settings.setup_complete;q('#operator-nav').classList.toggle('hidden',!state.data.operator_mode.safety_ready);q('#service-text').textContent=settings.setup_complete?'本地研究工作台已连接':needsSetup?'请完成连接设置':'连接已保存 · 数据配置待检查';q('#service-dot').className='dot '+(settings.setup_complete?'ok':'');const status=state.data.result_refresh||{};q('#refresh-status').textContent=refreshStatusText(status);q('#refresh-button').disabled=['running','already_running'].includes(status.status);renderRefreshControls(status);if(pageChanged)renderPage();if(settingsChanged)bindSetup();if(needsSetup)q('#setup').classList.remove('hidden')}
 async function load(showError=true){
   if(load.pending){load.again=true;return load.pending;}
   load.pending=loadState(showError).finally(()=>{

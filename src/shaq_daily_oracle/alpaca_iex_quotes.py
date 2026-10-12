@@ -211,6 +211,12 @@ def collect_iex_quotes(
                 http_status = getattr(exc, 'code', None)
                 calculation = calculate([], symbol=symbol, cutoff=end_text)
                 calculation["reason"] = "alpaca_quote_collection_failed"
+        # The pure calculator cannot attest a source. This collector can bind
+        # its validated result to the authenticated request and archived pages.
+        calculation['data_origin_verified'] = failure is None and bool(raw_pages) and bool(rows)
+        calculation['source_validation'] = 'official_endpoint_archived_response_and_schema'
+        if isinstance(calculation.get('session_context'), dict):
+            calculation['session_context']['data_origin_verified'] = calculation['data_origin_verified']
         output[symbol] = {
             "status": calculation["status"] if failure is None else "provider_error",
             "error_type": failure,

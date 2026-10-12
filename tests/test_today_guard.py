@@ -31,6 +31,46 @@ class MondayMarket(FakeMarket):
 
 
 class TodayGuardTests(unittest.TestCase):
+    def test_optional_marketdata_access_failure_preserves_other_collection(self):
+        from dataclasses import replace
+        from shaq_daily_oracle.settings import SettingsError
+        with tempfile.TemporaryDirectory() as name:
+            lab = LabService(foundation.ResearchLabFoundationTests().paths(Path(name)))
+            now = datetime(2026, 9, 14, 8, 45, tzinfo=ET)
+            profile = replace(collection.ResearchCollectionTests().profile(), marketdata_options_enabled=True)
+            events = []
+            def collect(**kwargs):
+                self.assertEqual(kwargs['marketdata_token'], '')
+                return self.collect(kwargs['root'], MondayMarket(), now)
+            with patch('shaq_daily_oracle.lab_service.datetime') as clock, \
+                    patch.object(lab.settings, 'get_marketdata_token', side_effect=SettingsError('需要重新连接期权数据')), \
+                    patch('shaq_daily_oracle.lab_service.collect_research_evidence', side_effect=collect):
+                clock.now.return_value = now
+                evidence = lab._today_evidence(profile=profile, sec_identity='test', observer=lambda **e: events.append(e))
+            self.assertTrue(evidence.root.exists())
+            self.assertTrue(any(e.get('status') == 'failed' and e.get('component') == 'marketdata_connection'
+                                for e in events))
+
+    def test_optional_alpaca_access_failure_preserves_other_collection(self):
+        from dataclasses import replace
+        from shaq_daily_oracle.settings import SettingsError
+        with tempfile.TemporaryDirectory() as name:
+            lab = LabService(foundation.ResearchLabFoundationTests().paths(Path(name)))
+            now = datetime(2026, 9, 14, 8, 45, tzinfo=ET)
+            profile = replace(collection.ResearchCollectionTests().profile(), alpaca_premarket_enabled=True)
+            events = []
+            def collect(**kwargs):
+                self.assertEqual(kwargs['alpaca_credentials'], ('', ''))
+                return self.collect(kwargs['root'], MondayMarket(), now)
+            with patch('shaq_daily_oracle.lab_service.datetime') as clock, \
+                    patch.object(lab.settings, 'get_alpaca_credentials', side_effect=SettingsError('需要重新连接 Alpaca')), \
+                    patch('shaq_daily_oracle.lab_service.collect_research_evidence', side_effect=collect):
+                clock.now.return_value = now
+                evidence = lab._today_evidence(profile=profile, sec_identity='test', observer=lambda **e: events.append(e))
+            self.assertTrue(evidence.root.exists())
+            self.assertTrue(any(e.get('status') == 'failed' and e.get('component') == 'alpaca_connection'
+                                and '重新连接' in e.get('message', '') for e in events))
+
     def collect(self, root, market, now, **kwargs):
         return collect_research_evidence(root=root, package_root=PACKAGE_ROOT,
             profile=collection.ResearchCollectionTests().profile(), sec_identity='Research test@example.edu',

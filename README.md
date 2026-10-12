@@ -14,9 +14,9 @@ SHAQ brings six specialist research domains, adversarial review and a brokerless
 
 ## Download
 
-The downloads below target **0.7.9**. Choose your operating system and, on Mac, your chip. Each platform page contains its installer, checksums and acceptance record.
+The downloads below target **0.7.10**. Choose your operating system and, on Mac, your chip. Each platform page contains its installer, checksums and acceptance record.
 
-This update consolidates data preparation, bounded failure recovery and readable results. Successful work is retained; dates and completion times replace batch hashes in titles. Hover balance points for stock-level outcomes, open preloaded replay details, and retain reading position during refresh.
+This update fixes saved data connections, routes supplemental premarket inputs to the analysis, adds credit background and optional historical option quotes, and improves bounded retries and research recovery. Alpaca keys saved by older releases need one re-entry; daily use then avoids system credential prompts. See the [update guide](docs/software-updates.md).
 
 This update groups daily selections, separates per-stock P&L from daily totals, connects counted balance history and displays recorded model names. Research evidence must be frozen by 08:50 ET and inference finished before the regular session opens; original forecasts and timestamps remain intact. See the [timing and replay policy](docs/research-timing.md).
 
@@ -26,11 +26,11 @@ Optional free Alpaca market data is configured in Connection Settings. SEC earni
 
 | Your computer | Download |
 |---|---|
-| Windows 10/11, x64 | [Windows 0.7.9 installer](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.9-windows) |
-| Mac with Apple Silicon (M series), macOS 15+ | [Apple Silicon 0.7.9 DMG](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.9-macos) |
-| Intel Mac, macOS 15+ | [Intel 0.7.9 DMG](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.9-macos) |
+| Windows 10/11, x64 | [Windows 0.7.10 installer](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.10-windows) |
+| Mac with Apple Silicon (M series), macOS 15+ | [Apple Silicon 0.7.10 DMG](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.10-macos) |
+| Intel Mac, macOS 15+ | [Intel 0.7.10 DMG](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.10-macos) |
 
-Previous managed release: [Windows 0.7.8](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.8-windows), [macOS 0.7.8](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.8-macos). Use the previous release if a new platform's assets have not yet appeared.
+Previous managed release: [Windows 0.7.9](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.9-windows), [macOS 0.7.9](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.9-macos).
 
 Download the **`.exe`** or **`.dmg`** only. Other assets serve the updater, checksum verification and third-party notices. Installers include Python and the simulation engine: Git, Python, Futu and a brokerage account are not end-user prerequisites. Windows requires WebView2; the installer checks it. These are internally tested prereleases without commercial signing or notarization. Check the release page before accepting an operating-system source warning.
 

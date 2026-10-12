@@ -49,8 +49,10 @@ class ResearchProgressLog:
         except OSError:
             return None
         lock = FileLock(str(self.path) + ".lock")
-        if not self._thread_lock.acquire(blocking=False):
-            return None
+        # Both variants share this recorder. Contention between their short
+        # append operations must serialize, not silently discard a task plan.
+        # The external file lock remains nonblocking for unavailable storage.
+        self._thread_lock.acquire()
         try:
             lock.acquire(timeout=0)
         except Timeout:

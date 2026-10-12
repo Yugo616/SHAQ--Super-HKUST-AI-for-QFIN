@@ -113,9 +113,13 @@ const SHAQProgress = (() => {
     return {action:'resume',label:'继续未完成分析',job};
   }
   function preparationHtml(job){
-    const latest=new Map((job.research_progress||[]).filter(e=>e.stage==='data_preparation').map(e=>[e.component,e]));
+    // Older logs used the same component for primary prices and supplemental
+    // volume. Keep both outcomes instead of letting a failed supplement erase
+    // successfully collected primary data.
+    const latest=new Map((job.research_progress||[]).filter(e=>e.stage==='data_preparation').map(e=>[
+      e.component==='premarket'&&['alpaca-sip','alpaca-sip-trades'].includes(e.source)?'premarket_volume':e.component,e]));
     if(!latest.size)return '';
-    const names={universe:'股票池',history:'历史价格',premarket:'盘前价格',metadata:'股票资料',events:'公司公告',options:'期权资料',public_context:'公开市场资料'};
+    const names={universe:'股票池',history:'历史价格',premarket:'盘前价格',premarket_volume:'盘前成交量',alpaca_connection:'Alpaca 连接',capital:'买卖报价',metadata:'股票资料',events:'公司公告',options:'期权资料',public_context:'公开市场资料'};
     const retry=dataRetry(job);
     const retryText=retry?`<p class="data-retry">正在自动重试 · ${esc(retry.source||'')} ${esc(retry.symbol||'')} · 第 ${esc(retry.attempt)} / ${esc(retry.max_attempts)} 次尝试${retry.stage==='data_retry_scheduled'&&retry.next_retry_at?' · 下次 '+esc(new Date(retry.next_retry_at).toLocaleTimeString('zh-CN',{hour12:false})):''}</p>`:'';
     return `<section class="preparation-progress"><h4>1 · 准备数据</h4>${retryText}${[...latest].map(([component,e])=>{

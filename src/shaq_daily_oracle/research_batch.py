@@ -262,7 +262,44 @@ def market_input_view(content):
     return result
 
 
+def _task_reuse_source(evidence):
+    source = evidence.manifest.get('provider_manifest', {}).get('task_reuse_source_manifest')
+    if source is None:
+        return None
+    unsigned = {k: v for k, v in source.items() if k != 'evidence_hash'}
+    if source.get('evidence_hash') != sha256_payload(unsigned):
+        raise ResearchBatchError('supplement source manifest hash mismatch')
+    if (source.get('scheduled_cutoff_et') != evidence.manifest['scheduled_cutoff_et']
+            or datetime.fromisoformat(source['as_of_et']) > datetime.fromisoformat(evidence.manifest['as_of_et'])
+            or source.get('candidate_set_sha256') != evidence.manifest['candidate_set_sha256']
+            or source.get('provider_manifest', {}).get('task_reuse_source_manifest')):
+        raise ResearchBatchError('supplement requires the original same-session candidate snapshot')
+    for path, digest in source.get('file_sha256', {}).items():
+        if evidence.manifest['file_sha256'].get(path) != digest:
+            raise ResearchBatchError('supplement changed original evidence files')
+    records = [{**r, 'raw_file_path': str(evidence.root / r['raw_file_path'])}
+               for r in source['records']]
+    return FrozenEvidence(root=evidence.root, manifest=source,
+        lineage=build_lineage_graph(records, evidence.root, source['as_of_et']),
+        candidate_intake=evidence.candidate_intake)
+
+
 def _tasks_for_domain(evidence: FrozenEvidence, domain: str, *, prompt_format_version=1) -> list[dict[str, Any]]:
+    tasks = _fresh_tasks_for_domain(evidence, domain, prompt_format_version=prompt_format_version)
+    source = _task_reuse_source(evidence)
+    if source is None:
+        return tasks
+    original = {t['symbol']: t for t in _fresh_tasks_for_domain(source, domain,
+                    prompt_format_version=prompt_format_version)}
+    def content(task):
+        return {k: v for k, v in task.items() if k not in {'task_id', 'as_of_et'}}
+    # Retain the exact original prompt envelope only for byte-equivalent inputs.
+    # New/changed evidence gets a new identity and the actual supplemental time.
+    return [original[t['symbol']] if t['symbol'] in original
+            and content(t) == content(original[t['symbol']]) else t for t in tasks]
+
+
+def _fresh_tasks_for_domain(evidence: FrozenEvidence, domain: str, *, prompt_format_version=1) -> list[dict[str, Any]]:
     records = evidence.lineage["records"]
     declared_statuses = {
         (str(row.get("symbol", "*")).upper(), str(row.get("domain", ""))): str(
@@ -349,6 +386,13 @@ class ContentAddressedModelCache:
         self.root.mkdir(parents=True, exist_ok=True)
         self._rate_lock = threading.Lock()
         self._call_times: dict[str, deque[float]] = defaultdict(deque)
+
+    def checkpoint_document(self, profile, key):
+        path = self.root / profile.request_policy_identity() / f'{key}.json'
+        return self._verified_document(path, cache_key=key) if path.is_file() else None
+
+    def checkpoint_authenticated(self, key):
+        pass  # Disk cache documents were already hash-verified on read.
 
     def _wait_for_rate_slot(self, profile: ModelProfile) -> None:
         """Reserve one request in the configured rolling one-minute window."""
@@ -495,9 +539,15 @@ class ContentAddressedModelCache:
                         _write_json_same_or_once(rejected_root / 'rejected_model_calls' / f'{rejected_hash}.json',
                             {**rejected, 'rejected_document_sha256': rejected_hash})
                     transient = transient_model_failure(exc)
+                    diagnostic = getattr(exc, 'diagnostic', None) or {}
+                    safe_diagnostic = {key: value for key, value in diagnostic.items()
+                        if (key in {'kind', 'backend', 'protocol'} and isinstance(value, str)
+                            and len(value) <= 64 and all(c.isalnum() or c in '-_' for c in value))
+                        or (key in {'status', 'returncode'} and type(value) is int)}
                     attempts.append({'attempt': attempt + 1, 'started_at_et': timestamp,
                         'elapsed_seconds': time.monotonic() - attempt_started,
                         'status': 'failed', 'error_type': type(exc).__name__, 'transient': transient,
+                        'diagnostic': safe_diagnostic,
                         **({'rejected_document_sha256': rejected_hash} if rejected_hash else {}),
                         'message': safe_model_error_summary(exc, sensitive_values=(secret,))})
                     if snapshot_root:
@@ -673,6 +723,73 @@ def _progress_call_id(profile: ModelProfile, prompt: str, schema: dict[str, Any]
     })
 
 
+def _domain_groups(tasks, domain, documents, profile, prompt_format_version):
+    groups, group = [], []
+    for task in tasks:
+        prompt = _domain_prompt(domain=domain, tasks=group + [task], documents=documents,
+                                prompt_format_version=prompt_format_version)
+        if group and ((prompt_format_version >= 2 and domain == 'price_volume') or
+                len(prompt.encode('utf-8')) // 4 + profile.maximum_output_tokens > profile.maximum_context_tokens):
+            groups.append(group)
+            group = []
+        group.append(task)
+    if group:
+        groups.append(group)
+    return groups
+
+
+def _unchanged_checkpoint_rows(evidence, tasks, domain, documents, profile, cache,
+                               prompt_format_version, snapshot_root):
+    source = _task_reuse_source(evidence)
+    if source is None:
+        return [], []
+    old_tasks = _fresh_tasks_for_domain(source, domain, prompt_format_version=prompt_format_version)
+    from .module_rules import default_rule, execute_rule
+    code = documents.get(f'modules/{domain}/compute.js')
+    if code and code != default_rule(domain):
+        for task in old_tasks:
+            task['computed_features'] = execute_rule(code, {'evidence':task['evidence'], 'symbol':task['symbol']})
+    wanted = {t['task_id']: t for t in tasks}
+    old_tasks = [t for t in old_tasks if t['evidence'] and t['collection_status'] == 'collected']
+    rows, audits = [], []
+    for group in _domain_groups(old_tasks, domain, documents, profile, prompt_format_version):
+        matching = {t['task_id']: t for t in group if wanted.get(t['task_id']) == t}
+        if not matching:
+            continue
+        schema = _report_schema()
+        schema['properties']['results']['items']['properties']['task_id']['enum'] = [t['task_id'] for t in group]
+        prompt = _domain_prompt(domain=domain, tasks=group, documents=documents,
+                                prompt_format_version=prompt_format_version)
+        key = sha256_payload({'cache_schema_version': 2, 'profile_sha256': profile.identity(),
+            'prompt_sha256': hashlib.sha256(prompt.encode('utf-8')).hexdigest(),
+            'schema_sha256': sha256_payload(schema)})
+        document = cache.checkpoint_document(profile, key)
+        if document is None:
+            continue
+        if document['prompt'] != prompt or document['schema'] != schema:
+            raise ResearchBatchError('supplement checkpoint input mismatch')
+        selected = [r for r in document['result']['results'] if r['task_id'] in matching]
+        if len(selected) != len(matching) or len({r['task_id'] for r in selected}) != len(matching):
+            raise ResearchBatchError('supplement checkpoint task mismatch')
+        for row in selected:
+            task, report = matching[row['task_id']], row['report']
+            if (report.get('domain') != domain or report.get('as_of_et') != task['as_of_et']
+                    or not set(report.get('evidence_ids', [])) <= {e['evidence_id'] for e in task['evidence']}):
+                raise ResearchBatchError('supplement checkpoint report mismatch')
+            _validate_result(document['result'], schema)
+            validate_domain_report(_bind_verified_lineage(report, evidence.lineage['evidence_to_roots']),
+                evidence.lineage['evidence_to_roots'], {
+                    r['evidence_id']: set(r.get('consumer_domains', [r['domain']]))
+                    for r in evidence.lineage['records']})
+        cache.checkpoint_authenticated(key)
+        if snapshot_root:
+            _write_json_same_or_once(snapshot_root / f'{key}.json', document)
+        rows.extend(selected)
+        audits.append({**ContentAddressedModelCache._public_audit(document), 'domain':domain, 'cache_hit':True,
+                       'reused_task_ids':sorted(matching), 'source_evidence_hash':source.manifest['evidence_hash']})
+    return rows, audits
+
+
 def _run_domain(
     *,
     domain: str,
@@ -709,18 +826,12 @@ def _run_domain(
                          status="no_data", elapsed_seconds=round(time.monotonic()-domain_started, 3),
                          report={**report, "original": report, "evidence": []})
         return [empty_reports[task['task_id']] for task in all_tasks], []
-    groups, group = [], []
-    for task in tasks:
-        prompt = _domain_prompt(domain=domain, tasks=group + [task], documents=documents,
-                                prompt_format_version=prompt_format_version)
-        if group and ((prompt_format_version >= 2 and domain == 'price_volume') or
-                len(prompt.encode('utf-8')) // 4 + profile.maximum_output_tokens > profile.maximum_context_tokens):
-            groups.append(group)
-            group = []
-        group.append(task)
-    if group:
-        groups.append(group)
-    rows, audits, call_by_task, failures = [], [], {}, []
+    rows, audits = _unchanged_checkpoint_rows(evidence, tasks, domain, documents, profile,
+        cache, prompt_format_version, snapshot_root)
+    reused_ids = {r['task_id'] for r in rows}
+    groups = _domain_groups([t for t in tasks if t['task_id'] not in reused_ids],
+                            domain, documents, profile, prompt_format_version)
+    call_by_task, failures = {}, []
     evidence_domains = {
         record['evidence_id']: set(record.get('consumer_domains', [record['domain']]))
         for record in evidence.lineage['records']
@@ -829,7 +940,7 @@ def _run_domain(
                      variant_key=variant_key, symbol=task["symbol"], domain=domain,
                      call_id=call_by_task.get(task["task_id"], ("", 1))[0],
                      attempt=call_by_task.get(task["task_id"], ("", 1))[1],
-                     status="validated", report={**report, "original": report,
+                     status="reused" if task['task_id'] in reused_ids else "validated", report={**report, "original": report,
                          "evidence": [{**{key: catalog[eid].get(key) for key in
                              ("evidence_id", "provider", "source_uri", "captured_at", "unit")},
                              "observed": observed.get(eid)}
@@ -850,8 +961,13 @@ def _run_domain(
 
 
 def _adversary_prompt(
-    *, reports_by_symbol: dict[str, list[dict[str, Any]]], documents: dict[str, str]
+    *, reports_by_symbol: dict[str, list[dict[str, Any]]], documents: dict[str, str],
+    timing_context: dict[str, Any] | None = None,
 ) -> str:
+    from .review_timing import TIMING_GUIDANCE
+    timing_text = (f"EVIDENCE TIMING:\n{TIMING_GUIDANCE}\n"
+                   f"{json.dumps(timing_context, sort_keys=True, ensure_ascii=False)}\n\n"
+                   if timing_context is not None else '')
     skill = documents["skills/thesis-adversary/SKILL.md"]
     foundation = documents.get("skills/thesis-adversary/references/foundations.md", "")
     role_card = documents.get("skills/thesis-adversary/agents/openai.yaml", "")
@@ -872,6 +988,7 @@ def _adversary_prompt(
         f"ROLE CARD:\n{role_card}\n\n"
         f"ROLE TASK: {role.get('default_prompt', '')}\n\n"
         f"SKILL:\n{skill}\n\nFOUNDATIONS:\n{foundation}\n\n"
+        f"{timing_text}"
         f"REPORTS:\n{json.dumps(reports_by_symbol, sort_keys=True, ensure_ascii=False)}"
     )
 
@@ -926,6 +1043,12 @@ def authenticated_failed_checkpoints(*, evidence, manifest, skill_snapshots, fai
         def __init__(self):
             self.authenticated = set()
 
+        def checkpoint_document(self, profile, key):
+            return calls.get(key)
+
+        def checkpoint_authenticated(self, key):
+            self.authenticated.add(key)
+
         def call(self, *, profile, prompt, schema, validate=None, **unused):
             key = sha256_payload({'cache_schema_version': 2,
                 'profile_sha256': profile.identity(),
@@ -961,8 +1084,12 @@ def authenticated_failed_checkpoints(*, evidence, manifest, skill_snapshots, fai
         if incomplete or not reports_by_symbol:
             continue
         try:
+            from .review_timing import review_timing_context
+            timing_context = (review_timing_context(selected, reports_by_symbol)
+                              if config.get('review_timing_contract_version', 0) == 1 else None)
             adversary, _, _ = cache.call(profile=profile,
-                prompt=_adversary_prompt(reports_by_symbol=reports_by_symbol, documents=documents),
+                prompt=_adversary_prompt(reports_by_symbol=reports_by_symbol, documents=documents,
+                                        timing_context=timing_context),
                 schema=_adversary_schema(), validate=lambda value: _validated_adversary(value, reports_by_symbol))
             if decision_mode(documents['decision/cases.json']) == 'synthesis':
                 from .synthesis import synthesis_prompt, synthesis_schema, validate_synthesis
@@ -970,7 +1097,8 @@ def authenticated_failed_checkpoints(*, evidence, manifest, skill_snapshots, fai
                 cache.call(profile=profile, prompt=synthesis_prompt(reports=reports_by_symbol,
                     adversary=_validated_adversary(adversary, reports_by_symbol), documents=documents,
                     as_of_et=selected.manifest['as_of_et'], maximum_predictions=maximum,
-                    citation_contract_version=config.get('synthesis_citation_contract_version', 1)),
+                    citation_contract_version=config.get('synthesis_citation_contract_version', 1),
+                    timing_context=timing_context),
                     schema=synthesis_schema(list(reports_by_symbol)), validate=lambda value: validate_synthesis(
                         value, reports_by_symbol, selected.lineage['evidence_to_roots'], maximum_predictions=maximum))
         except ValueError:
@@ -996,6 +1124,7 @@ def run_variant(
     documents_snapshot: dict[str, str] | None = None,
     recover_rejected_cache: bool = False,
     synthesis_citation_contract_version: int = 2,
+    review_timing_contract_version: int = 0,
 ) -> dict[str, Any]:
     variant_key = f"{variant.author}/{variant.version_id}"
     stage_started = time.monotonic()
@@ -1056,8 +1185,13 @@ def run_variant(
         audits.extend(domain_audits)
     if domain_failures:
         raise ResearchBatchError('Required reports incomplete; synthesis blocked: ' + '; '.join(domain_failures))
+    if review_timing_contract_version not in {0, 1}:
+        raise ResearchBatchError('unsupported review timing contract')
+    from .review_timing import review_timing_context
+    timing_context = (review_timing_context(evidence, reports_by_symbol)
+                      if review_timing_contract_version == 1 else None)
     adversary_prompt = _adversary_prompt(
-        reports_by_symbol=reports_by_symbol, documents=documents
+        reports_by_symbol=reports_by_symbol, documents=documents, timing_context=timing_context
     )
     if reports_by_symbol:
         adversary_started = time.monotonic()
@@ -1104,7 +1238,8 @@ def run_variant(
         synthesis_text = synthesis_prompt(reports=reports_by_symbol, adversary=adversary_by_symbol,
             documents=documents, as_of_et=evidence.manifest["as_of_et"],
             maximum_predictions=parameters["maximum_predictions"],
-            citation_contract_version=synthesis_citation_contract_version)
+            citation_contract_version=synthesis_citation_contract_version,
+            timing_context=timing_context)
         synthesis_shape = synthesis_schema(list(reports_by_symbol))
         synthesis_call_id = _progress_call_id(profile, synthesis_text, synthesis_shape)
         safe_observe(observer, stage='synthesis', batch_id=batch_id, variant_key=variant_key,
@@ -1339,7 +1474,9 @@ class ResearchBatchRunner:
             "skill_snapshot_sha256s": skill_snapshot_sha256s,
             "cutoff_status": evidence.manifest.get("cutoff_status"),
             "execution_config": {"prompt_format_version": 2, "price_volume_group_size": 1,
-                                 "synthesis_citation_contract_version": 2},
+                                 "synthesis_citation_contract_version": 2,
+                                 **({'review_timing_contract_version': 1} if
+                                     evidence.manifest.get('cutoff_status') == 'late_research_only' else {})},
         }
         if _resume_manifest is not None:
             identity = _resume_manifest['batch_identity']
@@ -1393,6 +1530,8 @@ class ResearchBatchRunner:
                 recover_rejected_cache=_resume_manifest is not None,
                 synthesis_citation_contract_version=identity.get('execution_config', {}).get(
                     'synthesis_citation_contract_version', 1),
+                review_timing_contract_version=identity.get('execution_config', {}).get(
+                    'review_timing_contract_version', 0),
             )
             self.cache.snapshot_calls(
                 value.get("model_call_audits", []),

@@ -23,6 +23,29 @@ def bar(stamp, volume):
 
 
 class AlpacaBarsTests(unittest.TestCase):
+    def test_retains_validated_prices_and_sorted_minutes_for_analysis(self):
+        with httpx.Client(transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, json={"bars": {"APP": [
+                bar("2026-10-02T12:02:00Z", 20),
+                bar("2026-10-02T12:01:00Z", 10),
+                bar("2026-10-02T12:34:00Z", 100),
+            ]}, "next_page_token": None}))) as client:
+            result = self.request(client)
+        rows = result["symbols"]["APP"].get("bars", [])
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0], {"timestamp": "2026-10-02T08:01:00-04:00",
+            "open": 100.0, "high": 101.0, "low": 99.0, "close": 100.5, "volume": 10})
+        self.assertEqual(rows[1]["volume"], 20)
+
+    def test_rejects_duplicate_minute_with_different_price_even_if_volume_matches(self):
+        first = bar("2026-10-02T12:01:00Z", 10)
+        revised = dict(first, c=100.75)
+        with httpx.Client(transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, json={"bars": {"APP": [first, revised]},
+                "next_page_token": None}))) as client:
+            with self.assertRaises(AlpacaBarsError):
+                self.request(client)
+
     def request(self, client, **overrides):
         arguments = dict(
             symbols=["NVDA", "APP"], session_date=SESSION, cutoff=CUTOFF,

@@ -37,12 +37,16 @@ def synthesis_schema(symbols: list[str]) -> dict[str, Any]:
 
 
 def synthesis_prompt(*, reports, adversary, documents, as_of_et, maximum_predictions,
-                     citation_contract_version=2):
+                     citation_contract_version=2, timing_context=None):
     packet = {"as_of_et": as_of_et, "reports_by_symbol": reports, "adversary_by_symbol": adversary}
     if citation_contract_version not in {1, 2}:
         raise ValueError('unsupported synthesis citation contract')
     if citation_contract_version >= 2:
         packet['available_evidence_ids_by_symbol'] = available_evidence_ids(reports)
+    if timing_context is not None:
+        from .review_timing import TIMING_GUIDANCE
+        packet['evidence_timing'] = timing_context
+        packet['timing_guidance'] = TIMING_GUIDANCE
     _reject_forbidden_keys(packet)
     return (
         "You are SHAQ's final research synthesizer, not another evidence vote. Use only the supplied "

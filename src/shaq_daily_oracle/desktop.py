@@ -225,9 +225,9 @@ class DesktopBridge:
 
             parsed = urlparse(url)
             if parsed.scheme != "https" or parsed.netloc not in {
-                "github.com", "www.github.com", "app.alpaca.markets"
+                "github.com", "www.github.com", "app.alpaca.markets", "www.marketdata.app"
             }:
-                raise SettingsError("只允许打开GitHub登录页面")
+                raise SettingsError("只允许打开已配置服务的官方页面")
             return {"opened": bool(webbrowser.open(url))}
         return self._result(open_safe)
 

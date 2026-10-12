@@ -62,6 +62,83 @@ class FakeEvents:
 
 
 class ResearchCollectionTests(unittest.TestCase):
+    def test_prints_supply_timestamped_price_not_fake_minute_bars(self):
+        from shaq_daily_oracle.research_collection import _resolved_premarket
+        yahoo={'last_price':None,'previous_close':100,'observed_volume':None,'bars':[],
+               'last_observation_et':None,'status':'no_data','volume_status':'no_price_bars'}
+        prints={'reported_trade_volume':1,'trades':[{'timestamp':'2026-09-04T08:01:00-04:00',
+            'price':102,'size':1,'conditions':['I']}]}
+        resolved=_resolved_premarket(yahoo,{},prints,{})
+        self.assertEqual(resolved['last_price'],102)
+        self.assertAlmostEqual(resolved['premarket_return'],.02)
+        self.assertEqual(resolved['price_source'],'alpaca_reported_print')
+        self.assertEqual(resolved['bars'],[])
+        self.assertIsNone(resolved['observed_volume'])
+    def test_historical_options_context_reaches_domain_without_becoming_live(self):
+        from dataclasses import replace
+        from unittest.mock import patch
+        response={'symbol':'AAPL','status':'collected','contracts':[{'bid':3,'ask':4}],
+            'source_uri':'https://api.marketdata.app/v1/options/chain/AAPL/',
+            'captured_at':'2026-09-04T08:45:00-04:00','snapshot_session':'2026-09-02',
+            'current_quote':False,'directional_flow_semantics':False,'raw':b'{"s":"ok"}'}
+        with tempfile.TemporaryDirectory() as directory, patch(
+                'shaq_daily_oracle.marketdata_options.collect_historical_chain',side_effect=lambda **kw:
+                    {**response,'symbol':kw['symbol'],'raw':json.dumps({'s':'ok','symbol':kw['symbol']}).encode()}):
+            evidence=collect_research_evidence(root=Path(directory)/'evidence',package_root=PACKAGE_ROOT,
+                profile=replace(self.profile(),marketdata_options_enabled=True),marketdata_token='fixture-secret',
+                sec_identity='Research test@example.edu',observed_at=datetime(2026,9,4,8,45,tzinfo=ZoneInfo('America/New_York')),
+                market_provider=FakeMarket(),metadata_provider=FakeMetadata(),event_provider=FakeEvents())
+            task=next(t for t in _tasks_for_domain(evidence,'derivatives') if t['symbol']=='AAPL')
+            rows=[r['content'] for r in task['evidence'] if r['provider']=='marketdata-historical']
+            self.assertTrue(rows)
+            self.assertFalse(rows[0]['current_quote'])
+            self.assertNotIn('fixture-secret',str(task))
+    def test_resolved_premarket_uses_newer_price_but_separate_volume_window(self):
+        from shaq_daily_oracle.research_collection import _resolved_premarket
+        yahoo={'last_price':111,'observed_volume':None,'volume_status':'volume_unavailable',
+               'last_observation_et':'2026-09-04T08:40:00-04:00','bars':[]}
+        sip={'bars':[{'timestamp':'2026-09-04T08:20:00-04:00','open':102,'high':104,'low':101,'close':103,'volume':123}],
+             'volume_status':'observed_positive','observed_volume':123}
+        out=_resolved_premarket(yahoo,sip,{},dict(last_complete_minute_end_et='2026-09-04T08:21:00-04:00'))
+        self.assertEqual(out['last_price'],111)
+        self.assertEqual(out['observed_volume'],123)
+        self.assertEqual(out['volume_window_end'],'2026-09-04T08:21:00-04:00')
+        self.assertEqual(out['supplemental_price_bars'],sip['bars'])
+        self.assertIsNone(yahoo['observed_volume'])
+
+    def test_missing_bars_get_real_trade_evidence_and_resolved_price_packet(self):
+        from dataclasses import replace
+        from unittest.mock import patch
+        import hashlib
+        raw = b'{"trades":{"AAPL":[{"t":"2026-09-04T12:01:00Z","p":102,"s":1,"i":1,"x":"D","c":["I"]}]}}'
+        meta = {'source_uri':'https://data.alpaca.markets/v2/stocks/trades',
+                'captured_at_et':'2026-09-04T08:45:00-04:00',
+                'requested_start':'2026-09-04T04:00:00-04:00',
+                'requested_end':'2026-09-04T08:29:00-04:00',
+                'response_sha256':[hashlib.sha256(raw).hexdigest()]}
+        trades = {'raw_pages':[raw], 'metadata':meta, 'symbols':{'AAPL':{
+            'status':'collected','trade_count':1,'reported_trade_volume':1,'odd_lot_volume':1,
+            'native_aggressor':None,'trades':[{'timestamp':'2026-09-04T08:01:00-04:00','price':102,'size':1,'conditions':['I']}],
+            'last_trade_at':'2026-09-04T08:01:00-04:00'}}}
+        bars = {'raw_pages':[], 'metadata':{'source_uri':'https://data.alpaca.markets/v2/stocks/bars',
+            'captured_at_et':'2026-09-04T08:45:00-04:00','response_sha256':[]},
+            'symbols':{'AAPL':{'volume_status':'no_bars','observed_volume':None,'bars':[]}}}
+        with tempfile.TemporaryDirectory() as directory, patch(
+            'shaq_daily_oracle.alpaca_bars.collect_premarket_volume',return_value=bars), patch(
+            'shaq_daily_oracle.alpaca_trades.collect_premarket_trades',return_value=trades):
+            evidence=collect_research_evidence(root=Path(directory)/'evidence',package_root=PACKAGE_ROOT,
+                profile=replace(self.profile(),alpaca_premarket_enabled=True),alpaca_credentials=('key','secret'),
+                sec_identity='Research test@example.edu',observed_at=datetime(2026,9,4,8,45,tzinfo=ZoneInfo('America/New_York')),
+                market_provider=FakeMarket(),metadata_provider=FakeMetadata(),event_provider=FakeEvents())
+            task=next(t for t in _tasks_for_domain(evidence,'capital') if t['symbol']=='AAPL')
+            prints=[r['content'] for r in task['evidence'] if r['provider']=='alpaca-sip-trades']
+            self.assertEqual(prints[0]['reported_trade_volume'],1)
+            task=next(t for t in _tasks_for_domain(evidence,'price_volume') if t['symbol']=='AAPL')
+            resolved=[r['content'] for r in task['evidence'] if r['provider']=='resolved-premarket']
+            self.assertEqual(resolved[0]['premarket']['last_price'],111)
+            self.assertEqual(resolved[0]['reported_prints']['odd_lot_volume'],1)
+            self.assertNotEqual(resolved[0]['premarket']['observed_volume'],5001)
+
     def test_primary_and_exhibits_share_one_budget_and_archive_full_blocks(self):
         from dataclasses import replace
         class Earnings(FakeEvents):
@@ -174,6 +251,10 @@ class ResearchCollectionTests(unittest.TestCase):
             volume = next(r['content'] for r in task['evidence'] if r['provider']=='alpaca-sip')
             self.assertEqual(volume['observed_volume'],123)
             self.assertEqual(volume['source']['last_complete_minute_end_et'],'2026-09-04T08:21:00-04:00')
+            market_task = next(t for t in _tasks_for_domain(evidence,'market') if t['symbol']=='AAPL')
+            market_volume = [r['content'] for r in market_task['evidence'] if r['provider']=='alpaca-sip']
+            self.assertEqual(len(market_volume), 1)
+            self.assertEqual(market_volume[0]['observed_volume'], 123)
             self.assertNotIn('private-key',json.dumps(task))
             self.assertNotIn('private-secret',json.dumps(evidence.manifest))
 

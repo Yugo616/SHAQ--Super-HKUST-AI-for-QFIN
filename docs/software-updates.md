@@ -1,5 +1,32 @@
 # Software updates
 
+## 0.7.10: saved connections, supplemental data and research recovery
+
+- Alpaca data credentials are stored in a private local application file, outside
+  the repository and research snapshots. Daily reads do not invoke the operating
+  system credential prompt. Users upgrading from a credential-store-only setup
+  must enter their Alpaca keys once in Connection Settings; existing model and
+  GitHub connections are unchanged. This file is not an encrypted credential vault.
+- Saved SEC identity is not treated as missing when optional data settings change.
+  An empty submission cannot erase the saved identity.
+- Delayed minute bars, reported trades and quote context are routed consistently
+  to the relevant domains, retaining real source timestamps and lineage. Trade
+  prints do not claim native aggressor classifications or full order-book depth.
+- Daily credit-spread background and optional historical option quotes supplement
+  existing sources. The latter requires a separately configured Market Data token;
+  OCC open interest is not a substitute for quote prices or opening trade direction.
+- Late same-session research can collect supplemental inputs without becoming an
+  on-time prediction. Review receives verified source-time context, not future
+  outcome data. Unchanged validated domain reports can be reused; original records
+  and the original resume contract remain intact.
+- Public-data retries are bounded. Codex terminal errors are classified from real
+  error events, and data progress keeps primary prices separate from supplemental
+  volume failures.
+
+The two method packages, sizing, fees, frozen forecasts and account ledgers are
+unchanged. The updater uses the matching 0.7.9 platform base when available and
+falls back to a full package when a compatible delta cannot be applied.
+
 ## 0.7.9: consolidated data, recovery and replay improvements
 
 - Prepare reusable history before scheduled research. Save successful work and

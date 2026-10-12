@@ -3,6 +3,9 @@ from __future__ import annotations
 import csv
 import io
 import json
+import math
+import time
+import httpx
 from datetime import date, datetime, timedelta
 from html.parser import HTMLParser
 from pathlib import Path
@@ -127,23 +130,87 @@ def earnings_expectations(rows):
     return [{key: value for key, value in row.items() if key in allowed} for row in rows]
 
 
-def collect_public_context(config, *, cutoff):
+def parse_fred_context(text, *, source, cutoff):
+    """Daily OAS snapshot, knowable only at the enclosing packet's capture time.
+
+    Observation dates are not release timestamps. The enclosing collector must
+    reject captures after cutoff; this is not a historical-vintage backtester.
+    """
+    reader = csv.DictReader(io.StringIO(text))
+    series = source['series_id']
+    if not reader.fieldnames or not {'observation_date', series} <= set(reader.fieldnames):
+        raise ValueError('FRED response has no requested credit series')
+    observations = {}
+    for row in reader:
+        day = date.fromisoformat(row['observation_date'])
+        if day >= cutoff.date() or row[series] in ('', '.', None):
+            continue
+        value = float(row[series])
+        if not math.isfinite(value):
+            raise ValueError('Non-finite credit spread')
+        observations[day.isoformat()] = value
+    values = [{'date': d, 'value': observations[d]} for d in sorted(observations)][-source['history_rows']:]
+    if not values:
+        raise ValueError('No completed daily credit observations')
+    return {'series_id': series, 'units': source['units'], 'observations': values,
+            'latest_change_basis_points': round((values[-1]['value']-values[-2]['value'])*100, 6) if len(values)>1 else None,
+            'intraday': False, 'availability_semantics': 'known_at_actual_capture_not_observation_date',
+            'interpretation_boundary': 'Daily option-adjusted credit spread, not a live spread. '
+                'Observation date is not its publication time; no historical PIT claim.',
+            'usage': 'local_internal_research_no_raw_redistribution'}
+
+
+def _public_response(source, name, cutoff, config):
+    """Bounded retries at the same public endpoint; never disable TLS checks."""
+    from curl_cffi.requests import Session
+    from curl_cffi.const import CurlHttpVersion
+    from .data_retry import failure_diagnostic
+    timeout = config['timeout_seconds']
+    params = {'date': cutoff.date().isoformat()} if name == 'nasdaq_earnings' else None
+    headers = {'User-Agent': 'SHAQ Daily Oracle Research', 'Accept': 'application/json,text/csv,text/html'}
+    for attempt in range(3):
+        try:
+            if attempt < 2:
+                with Session() as session:
+                    response = session.get(source['url'], params=params, timeout=timeout,
+                        allow_redirects=True, stream=False, headers=headers,
+                        **({'http_version': CurlHttpVersion.V1_1} if attempt else {}))
+                    response.raise_for_status()
+                return response
+            # A different TLS implementation can recover a failed curl handshake.
+            # Bound the full streaming body as well as each socket operation.
+            started = time.monotonic()
+            with httpx.Client(timeout=timeout, follow_redirects=True) as client:
+                with client.stream('GET', source['url'], params=params, headers=headers) as response:
+                    response.raise_for_status()
+                    chunks, size = [], 0
+                    for chunk in response.iter_bytes():
+                        size += len(chunk)
+                        if time.monotonic() - started > timeout or size > 5_000_000:
+                            raise TimeoutError('Public source response limit exceeded')
+                        chunks.append(chunk)
+                    return httpx.Response(response.status_code, content=b''.join(chunks),
+                                          request=response.request)
+        except Exception as exc:
+            retryable = (failure_diagnostic(exc, None).get('retryable') is True
+                         or isinstance(exc, httpx.RequestError))
+            if not retryable or attempt == 2:
+                raise
+            time.sleep(config.get('retry_backoff_seconds', .25) * (attempt + 1))
+
+
+def collect_public_context(config, *, cutoff, research_replay=False, clock=None):
     packets = []
     for name, source in config['sources'].items():
         if not source.get('enabled'):
             packets.append({'provider': name, 'status': 'not_enabled', 'source_uri': source['url']})
             continue
         try:
-            from curl_cffi.requests import Session
-            # Non-streaming libcurl timeout bounds the entire transfer, even if
-            # a server keeps sending small chunks below an inactivity timeout.
-            with Session() as session:
-                response = session.get(source['url'], params={'date': cutoff.date().isoformat()} if name == 'nasdaq_earnings' else None,
-                                       timeout=config['timeout_seconds'], allow_redirects=True, stream=False,
-                                       headers={'User-Agent': 'SHAQ Daily Oracle Research', 'Accept': 'application/json,text/csv,text/html'})
-                response.raise_for_status()
-            captured = datetime.now(ZoneInfo('America/New_York'))
-            if source['kind'] == 'csv':
+            response = _public_response(source, name, cutoff, config)
+            captured = (clock or (lambda: datetime.now(ZoneInfo('America/New_York'))))()
+            if source['kind'] == 'fred_csv':
+                data = parse_fred_context(response.text, source=source, cutoff=cutoff)
+            elif source['kind'] == 'csv':
                 rows = list(csv.DictReader(io.StringIO(response.text)))
                 rows = [r for r in rows if datetime.strptime(r['DATE'], '%m/%d/%Y').date() < cutoff.date()]
                 data = rows[-30:]
@@ -152,8 +219,11 @@ def collect_public_context(config, *, cutoff):
                 if not data: raise ValueError('没有找到利率数据表')
             else:
                 data = earnings_expectations((response.json().get('data') or {}).get('rows') or [])
+            eligible = captured <= cutoff
+            usable = eligible or (research_replay and captured.date() == cutoff.date())
             packets.append({'provider': name, 'source_uri': source['url'], 'captured_at': captured.isoformat(),
-                            'status': 'collected' if captured <= cutoff else 'after_cutoff', 'data': data,
+                            'status': 'collected' if usable else 'after_cutoff', 'data': data,
+                            'formal_cutoff_eligible': eligible, 'post_cutoff_replay': not eligible,
                             'raw': response.content})
         except Exception as exc:
             packets.append({'provider': name, 'source_uri': source['url'], 'status': 'provider_error', 'error': str(exc)})

@@ -5,6 +5,21 @@ from pathlib import Path
 
 
 class TodayProgressTests(unittest.TestCase):
+    def test_supplementary_volume_failure_does_not_overwrite_ready_prices(self):
+        self.run_js(r'''
+const assert=require('node:assert/strict');
+for(const source of ['alpaca-sip','alpaca-sip-trades']){
+const html=ui.progressHtml([{job_id:'j',status:'running',variant_progress:{v:'running'},research_progress:[
+ {stage:'data_preparation',component:'premarket',source:'yfinance',status:'complete',completed:8,total:8},
+ {stage:'data_preparation',component:'premarket',source,status:'failed',completed:0,total:1},
+ {stage:'data_preparation',component:'capital',source:'alpaca-quotes',status:'unavailable',completed:0,total:8}
+]}],[],'2026-10-06T08:48:00-04:00');
+assert.match(html,/<b>盘前价格<\/b> · 已准备/);
+assert.match(html,/<b>盘前成交量<\/b> · 获取失败/);
+assert.match(html,/<b>买卖报价<\/b>/);
+}
+''')
+
     def test_batch_bar_uses_backend_summary_and_complete_never_animates(self):
         self.run_js(r'''
 const assert=require('node:assert/strict');

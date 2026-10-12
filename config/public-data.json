@@ -9,6 +9,8 @@
   "sources": {
     "cboe_vix": {"url": "https://cdn.cboe.com/api/global/us_indices/daily_prices/VIX_History.csv", "kind": "csv", "enabled": true},
     "federal_reserve_h15": {"url": "https://www.federalreserve.gov/releases/h15/", "kind": "html", "enabled": true},
-    "nasdaq_earnings": {"url": "https://api.nasdaq.com/api/calendar/earnings", "kind": "json", "enabled": true}
+    "nasdaq_earnings": {"url": "https://api.nasdaq.com/api/calendar/earnings", "kind": "json", "enabled": true},
+    "fred_high_yield_credit": {"url": "https://fred.stlouisfed.org/graph/fredgraph.csv?id=BAMLH0A0HYM2", "kind": "fred_csv", "series_id": "BAMLH0A0HYM2", "units": "percent", "history_rows": 30, "enabled": true},
+    "fred_investment_grade_credit": {"url": "https://fred.stlouisfed.org/graph/fredgraph.csv?id=BAMLC0A0CM", "kind": "fred_csv", "series_id": "BAMLC0A0CM", "units": "percent", "history_rows": 30, "enabled": true}
   }
 }

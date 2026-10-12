@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -242,15 +243,83 @@ class ResearchSettingsStore:
     def set_alpaca_credentials(self, key_id: str, secret_key: str) -> None:
         if not key_id.strip() or not secret_key.strip():
             raise SettingsError('Alpaca Key ID 和 Secret Key 都需要填写')
-        self._set_secret(ALPACA_SECRET_NAME, json.dumps({'key_id': key_id.strip(), 'secret_key': secret_key.strip()}))
+        path = self.alpaca_credentials_path
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if os.name != 'nt':
+            path.parent.chmod(0o700)
+        descriptor, temporary = tempfile.mkstemp(prefix='.alpaca-', dir=path.parent)
+        try:
+            with os.fdopen(descriptor, 'w', encoding='utf-8') as stream:
+                json.dump({'key_id': key_id.strip(), 'secret_key': secret_key.strip()}, stream)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, path)
+        finally:
+            Path(temporary).unlink(missing_ok=True)
         self._record_secret_state('alpaca_credentials_saved', present=True)
 
+    @property
+    def alpaca_credentials_path(self) -> Path:
+        # Separate from public settings, evidence snapshots and source checkout.
+        return self.paths.config_root / 'private-credentials' / 'alpaca.json'
+
+    @property
+    def marketdata_token_path(self) -> Path:
+        return self.paths.config_root / 'private-credentials' / 'marketdata.json'
+
+    def set_marketdata_token(self, token: str) -> None:
+        if not token.strip():
+            raise SettingsError('请填写 Market Data Token。')
+        path = self.marketdata_token_path
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if os.name != 'nt':
+            path.parent.chmod(0o700)
+        descriptor, temporary = tempfile.mkstemp(prefix='.marketdata-', dir=path.parent)
+        try:
+            with os.fdopen(descriptor, 'w', encoding='utf-8') as stream:
+                json.dump({'token':token.strip()},stream)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary,path)
+        finally:
+            Path(temporary).unlink(missing_ok=True)
+
+    def get_marketdata_token(self) -> str:
+        if not self.marketdata_token_path.is_file():
+            return ''
+        try:
+            token = json.loads(self.marketdata_token_path.read_text(encoding='utf-8'))['token']
+            if not isinstance(token,str) or not token.strip():
+                raise ValueError('invalid token')
+            return token.strip()
+        except (OSError,ValueError,KeyError,TypeError) as exc:
+            raise SettingsError('Market Data 本地连接不完整，请重新连接。') from exc
+
+    def _alpaca_access_error(self, message: str) -> SettingsError:
+        try:
+            settings = self.load()
+            receipt = settings.setdefault('alpaca_connection', {})
+            receipt['access_error'] = message
+            receipt['access_checked_at'] = datetime.now(timezone.utc).isoformat()
+            self._save(settings)
+        except Exception:
+            pass  # A diagnostic write must not mask the credential failure.
+        return SettingsError(message)
+
     def get_alpaca_credentials(self) -> tuple[str, str]:
-        value = self._get_secret(ALPACA_SECRET_NAME)
-        if not value:
+        path = self.alpaca_credentials_path
+        if not path.is_file():
+            if self.load().get('credential_state', {}).get('alpaca_credentials_saved'):
+                raise self._alpaca_access_error('请在连接设置填写一次 Alpaca API Key 并保存；以后每天直接使用，不再申请系统授权。')
             return '', ''
-        parsed = json.loads(value)
-        return str(parsed['key_id']), str(parsed['secret_key'])
+        try:
+            parsed = json.loads(path.read_text(encoding='utf-8'))
+            key, secret = parsed['key_id'], parsed['secret_key']
+            if not isinstance(key, str) or not isinstance(secret, str) or not key.strip() or not secret.strip():
+                raise ValueError('incomplete credential')
+            return key.strip(), secret.strip()
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            raise self._alpaca_access_error('已保存的 Alpaca 密钥内容不完整；请重新连接。') from exc
 
     def save_alpaca_connection_receipt(self, receipt: dict[str, Any]) -> dict[str, Any]:
         settings = self.load()
@@ -377,6 +446,8 @@ class ResearchSettingsStore:
         unexpected = set(submitted) - allowed
         if unexpected:
             raise SettingsError("研究设置包含未知字段：" + ", ".join(sorted(unexpected)))
+        if 'sec_identity' in submitted and not str(submitted['sec_identity'] or '').strip():
+            raise SettingsError('SEC研究身份不能为空；现有身份未修改。')
         for key in allowed:
             if key in submitted:
                 if isinstance(settings.get(key), dict):
@@ -485,8 +556,16 @@ class ResearchSettingsStore:
         settings = self.load()
         state = settings.get("credential_state", {})
         model_state = state.get("model_secret_saved", {})
+        missing = []
+        if not self._model_profile_ready(settings, str(settings.get('active_model_profile_id', ''))):
+            missing.append('model')
+        if not str(settings.get('sec_identity') or '').strip():
+            missing.append('sec_identity')
+        if not settings.get('github_login') or not self._github_credentials_available(settings):
+            missing.append('github')
         return {
             **settings,
+            'setup_required_fields': missing,
             "github_token_saved": (
                 bool(os.environ.get("SHAQ_GITHUB_TOKEN", "").strip())
                 or state.get("github_token_saved") is True
@@ -510,7 +589,8 @@ class ResearchSettingsStore:
                 bool(os.environ.get("SHAQ_OPENBB_API_KEY", "").strip())
                 or state.get("openbb_secret_saved") is True
             ),
-            "alpaca_credentials_saved": state.get('alpaca_credentials_saved') is True,
+            "alpaca_credentials_saved": self.alpaca_credentials_path.is_file(),
+            "marketdata_token_saved": self.marketdata_token_path.is_file(),
         }
 
     def _save(self, settings: dict[str, Any]) -> None:

@@ -12,6 +12,17 @@ from shaq_daily_oracle.lab_service import LabService
 
 
 class DataConnectionTests(unittest.TestCase):
+    def test_retest_reads_saved_pair_without_rewriting_it(self):
+        with tempfile.TemporaryDirectory() as directory:
+            lab = LabService(foundation.ResearchLabFoundationTests().paths(Path(directory)))
+            receipt = {'premarket_available': True, 'orderflow_available': False}
+            with patch.object(lab.settings, 'get_alpaca_credentials', return_value=('key', 'secret')) as read, \
+                 patch.object(lab.settings, 'set_alpaca_credentials') as write, \
+                 patch('shaq_daily_oracle.alpaca_bars.probe_data_connection', return_value=receipt):
+                lab.save_setup({'data_connection_action': 'connect_alpaca'})
+            read.assert_called_once_with()
+            write.assert_not_called()
+
     def test_success_enables_only_verified_feed_and_never_saves_secrets_in_receipt(self):
         receipt = {'checked_at': '2026-10-03T08:00:00-04:00', 'premarket_available': True,
                    'orderflow_available': False, 'feeds': {'sip': {'status': 'available'},
@@ -92,6 +103,47 @@ class DataConnectionTests(unittest.TestCase):
 
 
 class RunCaptionTests(unittest.TestCase):
+    def test_historical_option_connection_uses_its_own_action_and_redacts_input(self):
+        value=review.ReviewViewTests().bundle(r'''
+(async()=>{
+ let mounted=false,submitted;
+ const original=ctx.document.querySelector;
+ ctx.document.querySelector=s=>s==='#supplemental-data-form'&&!mounted?null:original(s);
+ nodes['#data-connections']={append:()=>{mounted=true},replaceChildren:()=>{mounted=false}};
+ ctx.FormData=class {get(){return 'fixture-token'}};
+ ctx.window.pywebview={api:{save_lab_setup:async data=>{submitted=data;throw new Error('Token 未通过验证')}}};
+ vm.runInContext(`state.data={settings:{data_profile:{}}};renderDataConnections()`,ctx);
+ const button={disabled:false};const form={querySelector:()=>button};
+ await nodes['#marketdata-form'].onsubmit({preventDefault(){},target:form});
+ console.log(JSON.stringify({action:submitted.data_connection_action,message:nodes['#supplemental-data-status'].textContent,disabled:button.disabled}));
+})().catch(error=>{console.error(error);process.exitCode=1});
+''')
+        self.assertEqual(value['action'],'connect_marketdata')
+        self.assertIn('未通过验证',value['message'])
+        self.assertNotIn('fixture-token',value['message'])
+        self.assertFalse(value['disabled'])
+    def test_failed_connection_test_immediately_invalidates_green_badge(self):
+        value = review.ReviewViewTests().bundle(r'''
+(async()=>{
+ let mounted=false;
+ const originalQuery=ctx.document.querySelector;
+ ctx.document.querySelector=s=>s==='#supplemental-data-form'&&!mounted?null:originalQuery(s);
+ nodes['#data-connections']={append:()=>{mounted=true}};
+ ctx.FormData=class {get(){return ''}};
+ ctx.window.pywebview={api:{save_lab_setup:async()=>{throw new Error('需要重新连接')}}};
+ vm.runInContext(`state.data={settings:{data_profile:{alpaca_premarket_enabled:true},
+  alpaca_connection:{checked_at:'previous'},alpaca_credentials_saved:true}};renderDataConnections()`,ctx);
+ const button={disabled:false};
+ const form={querySelector:()=>button};
+ await nodes['#supplemental-data-form'].onsubmit({preventDefault(){},target:form});
+ console.log(JSON.stringify({badge:nodes['#alpaca-connection-badge']?.textContent,
+  message:nodes['#supplemental-data-status'].textContent,disabled:button.disabled}));
+})().catch(error=>{console.error(error);process.exitCode=1});
+''')
+        self.assertEqual(value['badge'], '连接测试失败')
+        self.assertIn('重新连接', value['message'])
+        self.assertFalse(value['disabled'])
+
     def test_connection_summary_distinguishes_iex_from_delayed_sip_quotes(self):
         value = review.ReviewViewTests().bundle(r'''
 console.log(JSON.stringify(vm.runInContext(`dataConnectionSummary({

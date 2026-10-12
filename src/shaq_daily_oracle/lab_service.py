@@ -848,12 +848,36 @@ class LabService:
     def save_setup(self, submitted: dict[str, Any]) -> dict[str, Any]:
         sanitized = dict(submitted)
         action = sanitized.pop('data_connection_action', '')
+        marketdata_token = str(sanitized.pop('marketdata_token', '')).strip()
+        if action == 'connect_marketdata':
+            from .marketdata_options import collect_historical_chain
+            profile = DataProfile.from_dict(self.settings.load()['data_profile'])
+            token = marketdata_token or self.settings.get_marketdata_token()
+            universe = Path(profile.universe_file)
+            if not universe.is_absolute(): universe = self.paths.package_root / universe
+            now = datetime.now(ET)
+            members = load_versioned_universe(universe, cutoff=now)
+            if not members:
+                raise LabServiceError('请先配置股票池。')
+            # A connection test is not a premarket forecast capture.
+            sample = collect_historical_chain(symbol=members[0].symbol.removeprefix('US.'),token=token,
+                cutoff=now+timedelta(seconds=profile.request_timeout_seconds*2+1),
+                timeout_seconds=profile.request_timeout_seconds,
+                maximum_strikes=profile.maximum_option_contracts_per_side,maximum_expiries=profile.maximum_option_expiries)
+            if sample['status'] != 'collected':
+                raise LabServiceError('连接可访问，但测试股票未返回合格历史报价；未替换现有连接。')
+            if marketdata_token:
+                self.settings.set_marketdata_token(marketdata_token)
+            return self.settings.save_research_setup({'data_profile':{'marketdata_options_enabled':True}})
+        if action == 'disable_marketdata':
+            return self.settings.save_research_setup({'data_profile':{'marketdata_options_enabled':False}})
         alpaca_key = str(sanitized.pop('alpaca_key_id', '')).strip()
         alpaca_secret = str(sanitized.pop('alpaca_secret_key', '')).strip()
         if action == 'connect_alpaca':
             from .alpaca_bars import probe_data_connection
             profile = DataProfile.from_dict(self.settings.load()['data_profile'])
-            if not alpaca_key and not alpaca_secret:
+            new_credentials = bool(alpaca_key or alpaca_secret)
+            if not new_credentials:
                 alpaca_key, alpaca_secret = self.settings.get_alpaca_credentials()
             universe = Path(profile.universe_file)
             if not universe.is_absolute(): universe = self.paths.package_root / universe
@@ -866,7 +890,8 @@ class LabService:
                 timeout_seconds=profile.request_timeout_seconds,
                 delay_seconds=profile.alpaca_sip_delay_seconds + profile.alpaca_safety_margin_seconds)
             # Do not replace a working connection when the proposed keys fail.
-            self.settings.set_alpaca_credentials(alpaca_key, alpaca_secret)
+            if new_credentials:
+                self.settings.set_alpaca_credentials(alpaca_key, alpaca_secret)
             self.settings.save_research_setup({'data_profile': {
                 'alpaca_premarket_enabled': receipt['premarket_available'],
                 'alpaca_orderflow_enabled': receipt['orderflow_available']}})
@@ -1492,11 +1517,31 @@ class LabService:
         staging_root.mkdir(parents=True, exist_ok=True)
         temporary = Path(tempfile.mkdtemp(prefix=f"{date_text}-", dir=staging_root)) / "evidence"
         try:
+            from .settings import SettingsError
+            from .research_progress import safe_observe
+            alpaca_credentials = None
+            if profile.alpaca_premarket_enabled or profile.alpaca_orderflow_enabled:
+                try:
+                    alpaca_credentials = self.settings.get_alpaca_credentials()
+                except SettingsError as exc:
+                    # Supplementary credentials must not discard otherwise valid
+                    # market data. The collectors keep these domains unavailable.
+                    alpaca_credentials = ('', '')
+                    safe_observe(observer, stage='data_preparation', component='alpaca_connection',
+                        source='alpaca', status='failed', completed=0, total=1, message=str(exc))
+            marketdata_token = ''
+            if profile.marketdata_options_enabled:
+                try:
+                    marketdata_token = self.settings.get_marketdata_token()
+                except SettingsError as exc:
+                    safe_observe(observer, stage='data_preparation', component='marketdata_connection',
+                        source='marketdata', status='failed', completed=0, total=1, message=str(exc))
             evidence = collect_research_evidence(
                 root=temporary, package_root=self.paths.package_root,
                 profile=profile, sec_identity=sec_identity,
                 openbb_api_key=openbb_api_key,
-                alpaca_credentials=self.settings.get_alpaca_credentials() if (profile.alpaca_premarket_enabled or profile.alpaca_orderflow_enabled) else None,
+                alpaca_credentials=alpaca_credentials,
+                marketdata_token=marketdata_token,
                 screening_rules=screening_rules or None,
                 history_cache_root=self.paths.research_root / "cache/daily_bars",
                 allow_replay=False,

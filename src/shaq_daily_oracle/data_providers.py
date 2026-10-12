@@ -58,6 +58,7 @@ class DataProfile:
     maximum_option_expiries: int = 3
     maximum_option_contracts_per_side: int = 40
     occ_open_interest_enabled: bool = False
+    marketdata_options_enabled: bool = False
     alpaca_premarket_enabled: bool = False
     alpaca_data_base_url: str = 'https://data.alpaca.markets'
     alpaca_sip_delay_seconds: int = 900
@@ -87,7 +88,7 @@ class DataProfile:
         return profile
 
     def validate(self) -> None:
-        if any(type(value) is not bool for value in (self.occ_open_interest_enabled, self.alpaca_premarket_enabled, self.alpaca_orderflow_enabled, self.alpaca_quote_session_fallback)):
+        if any(type(value) is not bool for value in (self.marketdata_options_enabled, self.occ_open_interest_enabled, self.alpaca_premarket_enabled, self.alpaca_orderflow_enabled, self.alpaca_quote_session_fallback)):
             raise DataProviderError("supplemental provider switches must be booleans")
         if any(type(value) is not int or value <= 0 for value in (self.alpaca_quote_window_seconds,
                 self.alpaca_quote_max_pages, self.alpaca_quote_max_bytes, self.alpaca_quote_attempts)):
@@ -1212,6 +1213,8 @@ def provider_manifest(
         "supplemental_sources": {
             "option_open_interest": "occ" if profile.occ_open_interest_enabled else "disabled",
             "delayed_premarket_volume": "alpaca-sip" if profile.alpaca_premarket_enabled else "disabled",
+            "sparse_premarket_trades": "alpaca-sip-prints-v1" if profile.alpaca_premarket_enabled else "disabled",
+            "historical_option_pricing": "marketdata-free-history-v1" if profile.marketdata_options_enabled else "disabled",
         },
         "manifest_sha256": sha256_payload({
             "profile": profile.source_dict(),
