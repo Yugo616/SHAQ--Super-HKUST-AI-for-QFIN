@@ -1,5 +1,25 @@
 name: Stage verified native artifact in release draft
 on:
+  workflow_call:
+    inputs:
+      run_id:
+        required: true
+        type: string
+      artifact_id:
+        required: true
+        type: string
+      job_id:
+        required: true
+        type: string
+      application_sha:
+        required: true
+        type: string
+      version:
+        required: true
+        type: string
+      platform:
+        required: true
+        type: string
   workflow_dispatch:
     inputs:
       run_id:

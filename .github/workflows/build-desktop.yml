@@ -5,7 +5,7 @@ on:
       target:
         description: Complete acceptance for Windows, macOS, or all platforms at this commit
         type: choice
-        options: [windows, windows-check, windows-layout, windows-validated, macos, macos-arm64, macos-intel, all]
+        options: [windows, windows-check, windows-layout, windows-validated, macos, macos-arm64, macos-intel, all, stage-artifact]
         default: windows
       application_ref:
         description: Exact application commit for Windows layout or validated Windows release route
@@ -15,6 +15,15 @@ on:
         type: string
       native_artifact_id:
         description: Official Windows artifact ID from that run
+        type: string
+      native_job_id:
+        description: Successful source job for draft asset staging only
+        type: string
+      release_version:
+        description: Existing draft version for staging only
+        type: string
+      release_platform:
+        description: Native platform for staging only
         type: string
   push:
     tags-ignore:
@@ -33,6 +42,19 @@ on:
 permissions:
   contents: read
 jobs:
+  stage-verified-artifact:
+    if: inputs.target == 'stage-artifact'
+    permissions:
+      actions: read
+      contents: write
+    uses: ./.github/workflows/promote-verified-artifact.yml
+    with:
+      run_id: ${{ inputs.native_run_id }}
+      artifact_id: ${{ inputs.native_artifact_id }}
+      job_id: ${{ inputs.native_job_id }}
+      application_sha: ${{ inputs.application_ref }}
+      version: ${{ inputs.release_version }}
+      platform: ${{ inputs.release_platform }}
   windows-research-check:
     if: inputs.target == 'windows-check'
     runs-on: windows-latest
@@ -126,7 +148,7 @@ jobs:
           name: SHAQ-Windows-layout-diagnostic
           path: dist/diagnostic/**
   native:
-    if: inputs.target != 'windows-check' && inputs.target != 'windows-layout'
+    if: inputs.target != 'windows-check' && inputs.target != 'windows-layout' && inputs.target != 'stage-artifact'
     permissions:
       contents: read
       actions: read
