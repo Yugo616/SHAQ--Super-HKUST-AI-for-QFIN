@@ -48,6 +48,12 @@ class ResultRefreshTests(unittest.TestCase):
         while time.monotonic() < deadline:
             value = service.result_refresh_status()
             if value.get("status") in expected:
+                # The receipt is written before the worker's finally releases
+                # its lock. Do not remove a Windows fixture while it is owned.
+                owned = getattr(service, '_owned_result_refresh', None)
+                if owned and owned[0] == value.get('operation_id'):
+                    owned[1].join(max(0, deadline - time.monotonic()))
+                    self.assertFalse(owned[1].is_alive(), 'refresh fixture worker did not finish')
                 return value
             time.sleep(0.01)
         self.fail(f"refresh did not reach {expected}: {service.result_refresh_status()}")
