@@ -1,0 +1,99 @@
+name: Stage verified native artifact in release draft
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        required: true
+        type: string
+      artifact_id:
+        required: true
+        type: string
+      job_id:
+        required: true
+        type: string
+      application_sha:
+        required: true
+        type: string
+      version:
+        required: true
+        type: string
+      platform:
+        required: true
+        type: choice
+        options: [macOS-Apple-Silicon, macOS-Intel, Windows-x64]
+permissions:
+  actions: read
+  contents: write
+jobs:
+  stage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      SOURCE_RUN: ${{ inputs.run_id }}
+      SOURCE_ARTIFACT: ${{ inputs.artifact_id }}
+      SOURCE_JOB: ${{ inputs.job_id }}
+      SOURCE_SHA: ${{ inputs.application_sha }}
+      RELEASE_VERSION: ${{ inputs.version }}
+      TARGET_PLATFORM: ${{ inputs.platform }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Verify source job, artifact and draft identity
+        run: |
+          python - <<'PY'
+          import json, os, re, subprocess
+          e=os.environ
+          def api(path): return json.loads(subprocess.check_output(['gh','api',f'repos/{e["GH_REPO"]}/{path}']))
+          assert all(e[k].isdigit() for k in ('SOURCE_RUN','SOURCE_ARTIFACT','SOURCE_JOB'))
+          assert re.fullmatch('[0-9a-f]{40}',e['SOURCE_SHA'])
+          assert re.fullmatch(r'\d+\.\d+\.\d+',e['RELEASE_VERSION'])
+          job=api(f'actions/jobs/{e["SOURCE_JOB"]}')
+          artifact=api(f'actions/artifacts/{e["SOURCE_ARTIFACT"]}')
+          assert job['run_id']==int(e['SOURCE_RUN']) and job['conclusion']=='success'
+          assert artifact['workflow_run']['id']==int(e['SOURCE_RUN']) and not artifact['expired']
+          assert artifact['name']=='SHAQ-Daily-Oracle-Lab-'+e['TARGET_PLATFORM']
+          suffix='windows' if e['TARGET_PLATFORM']=='Windows-x64' else 'macos'
+          tag=f'lab-v{e["RELEASE_VERSION"]}-{suffix}'
+          release=next(r for r in api('releases?per_page=100') if r['tag_name']==tag)
+          assert release['draft'] and release['target_commitish']==e['SOURCE_SHA']
+          with open(e['GITHUB_ENV'],'a') as f: f.write(f'RELEASE_TAG={tag}\n')
+          PY
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.run_id }}
+          artifact-ids: ${{ inputs.artifact_id }}
+          merge-multiple: true
+          path: native-artifact
+      - name: Validate complete native acceptance and package hashes
+        run: |
+          python packaging/stage_verified_assets.py --artifact native-artifact --output public-assets --platform "$TARGET_PLATFORM" --version "$RELEASE_VERSION" --commit "$SOURCE_SHA" --job-url "https://github.com/$GH_REPO/actions/runs/$SOURCE_RUN/job/$SOURCE_JOB"
+      - name: Replace only unpublished draft assets
+        run: gh release upload "$RELEASE_TAG" public-assets/* --clobber
+      - name: Verify remote upload digests
+        run: |
+          python - <<'PY'
+          import hashlib,json,os,subprocess
+          from pathlib import Path
+          e=os.environ
+          releases=json.loads(subprocess.check_output(['gh','api',f'repos/{e["GH_REPO"]}/releases?per_page=100']))
+          release=next(r for r in releases if r['tag_name']==e['RELEASE_TAG'])
+          assert release['draft'] and release['target_commitish']==e['SOURCE_SHA']
+          assets={a['name']:a for a in release['assets']}
+          for path in Path('public-assets').iterdir():
+              with path.open('rb') as f: sha=hashlib.file_digest(f,'sha256').hexdigest()
+              asset=assets[path.name]
+              assert asset['state']=='uploaded' and asset['size']==path.stat().st_size
+              assert asset['digest']=='sha256:'+sha, path.name
+          print('All staged assets match remote upload digests.')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: verified-release-metadata-${{ inputs.platform }}
+          path: |
+            public-assets/Acceptance-*.json
+            public-assets/SHA256SUMS-*.txt
