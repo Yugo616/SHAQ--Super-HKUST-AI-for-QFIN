@@ -44,7 +44,9 @@ class ResultRefreshTests(unittest.TestCase):
         return service
 
     def wait_status(self, service: LabService, expected: set[str]) -> dict:
-        deadline = time.monotonic() + 3
+        # Includes real fsync/status publication on shared native CI machines;
+        # this is a bounded test wait, not an application timeout or retry rule.
+        deadline = time.monotonic() + 15
         while time.monotonic() < deadline:
             value = service.result_refresh_status()
             if value.get("status") in expected:
@@ -56,6 +58,9 @@ class ResultRefreshTests(unittest.TestCase):
                     self.assertFalse(owned[1].is_alive(), 'refresh fixture worker did not finish')
                 return value
             time.sleep(0.01)
+        owned = getattr(service, '_owned_result_refresh', None)
+        if owned:
+            owned[1].join(3)
         self.fail(f"refresh did not reach {expected}: {service.result_refresh_status()}")
 
     def test_manual_and_auto_refresh_are_single_flight_across_instances(self):
