@@ -11,6 +11,7 @@ import threading
 import unittest
 import urllib.error
 import urllib.request
+from types import SimpleNamespace
 from unittest.mock import patch
 
 
@@ -28,6 +29,37 @@ def module():
 
 
 class PublicBaseUpdateAcceptanceTests(unittest.TestCase):
+    def test_failed_native_close_retains_events_and_owned_process_diagnostics(self):
+        acceptance=module()
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)/'isolated';events=root/'events-public-base';events.mkdir(parents=True)
+            health={'status':'passed','pid':123,'version':'0.9.0'}
+            (events/'target-health.json').write_text(json.dumps(health))
+            (events/'target-result.json').write_text('{"status":"passed"}')
+            (root/'acceptance.json').write_text('{"fixture":true}')
+            output=Path(directory)/'reports'/'public-base-update.json'
+            process=SimpleNamespace(stdout=f'123 1 S 00:30 {root}/installed/app --update-smoke',returncode=0)
+            with patch.object(acceptance.sys,'platform','darwin'), patch.object(
+                    acceptance.subprocess,'run',return_value=process) as run:
+                result=acceptance.retain_failure_diagnostics(root,output)
+            retained=output.parent/result['directory']
+            self.assertEqual(json.loads((retained/'events-public-base/target-health.json').read_text()),health)
+            self.assertIn(str(root/'installed'),(retained/'process.txt').read_text())
+            self.assertEqual(run.call_args_list[-1].args[0][0],'sample')
+            self.assertEqual(run.call_args_list[-1].kwargs['timeout'],15)
+            self.assertTrue((events/'target-result.json').is_file())
+
+    def test_failure_diagnostics_never_samples_a_reused_unrelated_pid(self):
+        acceptance=module()
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)/'isolated';events=root/'events-public-base';events.mkdir(parents=True)
+            (events/'target-health.json').write_text('{"pid":123}')
+            output=Path(directory)/'reports'/'public-base-update.json'
+            with patch.object(acceptance.sys,'platform','darwin'), patch.object(
+                    acceptance.subprocess,'run',return_value=SimpleNamespace(stdout='123 1 S loginwindow')) as run:
+                acceptance.retain_failure_diagnostics(root,output)
+            self.assertEqual(run.call_count,1)
+
     def test_mac_public_installer_requires_matching_release_architecture_and_digest(self):
         acceptance = module()
         self.assertTrue(hasattr(acceptance, 'mac_installer_identity'))

@@ -364,6 +364,7 @@ jobs:
             dist/*.sha256
             dist/*.json
             dist/public-base-update*.log
+            dist/public-base-update-diagnostics/**
             dist/native/*.json
             dist/diagnostic/**
             dist/update-feed/**

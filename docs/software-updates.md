@@ -1,6 +1,6 @@
 # Software updates
 
-## 0.7.12: isolated analysis and a simpler desktop
+## 0.9.0 Preview: isolated analysis and a simpler desktop
 
 - The three main pages are now **Run Analysis**, **Edit Methods** and **View Results**,
   with a flat sidebar, compact method selection and fewer explanatory labels.
@@ -159,7 +159,7 @@ Application updates and research-method updates are separate. **0.7.0 is the fir
 
 ## Platform downloads and acceptance
 
-Primary 0.7.12 downloads: [Windows](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.12-windows), [Apple Silicon / Intel Mac](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.12-macos). Each is available only once its matching packages, checksums and acceptance records appear. Publication requires separate native acceptance for each architecture from the same frozen source, including an upgrade from the matching public base recorded in its acceptance report. Previous downloads:
+Primary 0.9.0 downloads: [Windows](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.9.0-windows), [Apple Silicon / Intel Mac](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.9.0-macos). Each is available only once its matching packages, checksums and acceptance records appear. Publication requires separate native acceptance for each architecture from the same frozen source, including an upgrade from the matching public base recorded in its acceptance report. Previous downloads:
 
 - [0.7.7 Windows release page](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.7-windows)
 - [0.7.7 macOS release page](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.7-macos)

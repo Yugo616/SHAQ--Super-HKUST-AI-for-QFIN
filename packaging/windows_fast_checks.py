@@ -5,8 +5,10 @@ import unittest
 
 
 TESTS = (
+    'test_desktop_javascript',
     'test_desktop_notifications',
     'test_desktop_icons',
+    'test_native_vendor_proof',
     'test_file_revisions',
     'test_metadata_transport',
     'test_background_lifecycle.BackgroundLifecycleTests.test_existing_job_lock_is_authority_not_stale_running_json',

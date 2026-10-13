@@ -67,13 +67,16 @@ def native_vendor_pins():
 
 
 def native_vendor_identity(data, pins):
-    """Prove upstream bytes, allowing only the launcher's public PE resources.
+    """Prove upstream bytes, allowing only public launcher/updater PE resources.
 
     This is source-path provenance, not a code signature or authenticity claim.
     Every byte, including resources/headers, still goes through the privacy scan.
     """
     if hashlib.sha256(data).hexdigest() in pins.get('exact_sha256',[]):return True
-    launcher=pins.get('launcher')
+    return any(_native_resource_identity(data,pins.get(name)) for name in ('launcher','updater'))
+
+
+def _native_resource_identity(data, launcher):
     if not launcher or not data.startswith(b'MZ'):return False
     import struct
     try:

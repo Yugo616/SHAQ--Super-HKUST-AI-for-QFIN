@@ -82,3 +82,24 @@ class NativeVendorProofTests(unittest.TestCase):
         data=b'pinned full updater';pins={'exact_sha256':[hashlib.sha256(data).hexdigest()]}
         self.assertTrue(proof(data,pins))
         self.assertFalse(proof(data+b'changed',pins))
+
+    def test_custom_updater_icon_requires_unchanged_pinned_code(self):
+        proof=self.module().native_vendor_identity
+        data,pins=fixture_pe(b'SHAQ public icon')
+        pins['updater']=pins.pop('launcher')
+        self.assertTrue(proof(data,pins),'A custom updater icon keeps the vendor code identity')
+        changed=bytearray(data);changed[600]^=1
+        self.assertFalse(proof(bytes(changed),pins),'Changed updater code cannot inherit vendor provenance')
+        changed=bytearray(data);struct.pack_into('<I',changed,104,8192)
+        self.assertFalse(proof(bytes(changed),pins),'Changed updater entrypoint cannot inherit vendor provenance')
+        changed=bytearray(data);struct.pack_into('<I',changed,388,0x60000040)
+        self.assertFalse(proof(bytes(changed),pins),'Updater resources must not become executable')
+
+    def test_proven_updater_icon_still_rejects_personal_paths(self):
+        audit=self.module()
+        home='/'.join(('C:', 'Users', 'runneradmin'))
+        data,pins=fixture_pe((home+'/.ssh/id_rsa').encode())
+        pins['updater']=pins.pop('launcher')
+        self.assertTrue(audit.native_vendor_identity(data,pins))
+        self.assertTrue(audit.contains_private_path(data,home,'D:/a/current/current',
+            hosted_runner=True,verified_native=True),'Vendor identity never exempts private resource data')

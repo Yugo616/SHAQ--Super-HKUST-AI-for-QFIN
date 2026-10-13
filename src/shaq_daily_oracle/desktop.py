@@ -16,6 +16,7 @@ from zoneinfo import ZoneInfo
 
 from .app_paths import app_paths, migrate_legacy_runtime
 from .dashboard import DashboardIndex
+from .desktop_javascript import bind_javascript_lifetime
 from .execution import select_simulate_us_account
 from .lab_service import LabService
 from .market_calendar import market_session, next_market_session
@@ -787,6 +788,7 @@ def launch_desktop(*, smoke_output: Path | None = None) -> int:
         min_size=(980, 680),
         background_color="#ffffff",
     )
+    bind_javascript_lifetime(window)
     bridge.window = window
     result = {'status': 'failed', 'pages': [], 'model_calls': 'not tested'}
     def inspect_window():

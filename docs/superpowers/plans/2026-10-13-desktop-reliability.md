@@ -77,10 +77,10 @@
 
 **Files:** precise saved repair files, `tests/test_result_refresh.py`, version metadata, release documentation.
 
-- [ ] Complete source validation after public ancestry integration; focused tests, all 1212 offline tests (7 conditional skips) and independent whole-change review passed.
-- [ ] Preserve the validated Windows fixture bounded-wait and worker-drain correction.
-- [ ] Prepare public ancestry from the published runtime baseline in the same checkout, retaining a recoverable local snapshot.
-- [ ] Update coherent version metadata above 0.7.11 and validate payload/privacy/version identities.
+- [x] Complete source validation after public ancestry integration; focused tests, all 1222 offline tests (7 conditional skips) and independent whole-change review passed.
+- [x] Preserve the validated Windows fixture bounded-wait and worker-drain correction.
+- [x] Prepare public ancestry from the published runtime baseline in the same checkout, retaining a recoverable local snapshot.
+- [x] Update coherent version metadata above 0.7.11 and validate payload/privacy/version identities.
 - [ ] Dispatch a single final source to the three native platforms; inspect job-level evidence, retain successful artifacts and retry only failed affected jobs.
 - [ ] Publish matching platform installers and update feeds only after native acceptance, then verify local installation/data preservation and remote release contents.
 
@@ -91,3 +91,9 @@ Initial state: twelve saved citation/isolation repair files, local installed 0.7
 Implementation verification: the native Mac layout fixture passes all sixteen normal/narrow surface checks, persistent progress-node identity, independent manual/scheduled selection, formal-operator updates and disclosure retention. The separate native GUI smoke passes connection, replay, comparison, updater and saved-editor interactions. Independent review found and verified fixes for shared-failure checkpoint reads, accumulated recovery attempts, renderer-close blocking, late full-response state races and checkbox identity collisions. Live model calls and personal provider/account behavior were not exercised.
 
 The user selected the flat Q containing a market signal. Version metadata is 0.7.12 so it is newer than the locally installed 0.7.11. Public ancestry and three-platform delivery remain separate verification steps.
+
+Final user release naming: 0.9.0 Preview supersedes the earlier 0.7.12 candidate and the briefly proposed 1.0.0 name. Resolve native acceptance findings before freezing and delivering the final three-platform source.
+
+Native acceptance found two additional boundaries. Windows icon customization changes the official updater's resource section; the audit now verifies the locked vendor's non-resource code sections while retaining private-path checks over every byte. A real Mac RPC-return/close race left a non-daemon thread waiting on a native JavaScript semaphore after the window closed. The desktop, installed-update acceptance and update-recovery windows now use a window-owned cancellation adapter for rendering waits. API work stays on its original thread and completes before its response is discarded after closure. Deterministic concurrency tests cover cancellation, original results and exceptions, and preservation of an admitted file write.
+
+Final source checks: 1222 offline tests passed with seven conditional platform skips; the native GUI interaction fixture and all sixteen normal/narrow layout surfaces passed. Independent native verification repeated the original close barrier for all three window entrypoints plus normal desktop and update controls: all five real processes exited successfully within the unchanged deadline. Public-source validation passed with all eight Skills. Three-platform package acceptance and publication remain the next delivery gates.

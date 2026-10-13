@@ -19,6 +19,7 @@ import traceback
 import urllib.request
 
 from .app_paths import app_paths, application_version
+from .desktop_javascript import bind_javascript_lifetime
 from .settings import _atomic_json
 
 
@@ -216,6 +217,7 @@ def main(argv=None):
             _atomic_json(root/'before-hashes.json',hashes(paths))
         page=Path(__file__).with_name('desktop')/'index.html'
         window=webview.create_window('SHAQ installed update acceptance',page.as_uri(),js_api=desktop_api(bridge),width=1320,height=860)
+        bind_javascript_lifetime(window)
         bridge.window=window
         result={'status':'failed','stage':stage,'actual_version':version,'model':'existing deterministic lab_smoke substitute',
                 'pid':os.getpid(),

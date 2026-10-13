@@ -14,7 +14,7 @@ SHAQ brings six specialist research domains, adversarial review and a brokerless
 
 ## Download
 
-The downloads below target **0.7.12**. Choose your operating system and, on Mac, your chip. Each platform page contains its installer, checksums and acceptance record.
+The downloads below target **0.9.0 Preview**. Choose your operating system and, on Mac, your chip. Each platform page contains its installer, checksums and acceptance record.
 
 This update introduces a flat three-page workbench and a Q market-signal icon. Progress updates preserve reading position. Failed candidates receive bounded retries and isolated recovery while healthy candidates continue. Software discovery is automatic; the circular download control appears only when an update is available. See the [update guide](docs/software-updates.md).
 
@@ -26,9 +26,9 @@ Optional free Alpaca market data is configured in Connection Settings. SEC earni
 
 | Your computer | Download |
 |---|---|
-| Windows 10/11, x64 | [Windows 0.7.12 installer](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.12-windows) |
-| Mac with Apple Silicon (M series), macOS 15+ | [Apple Silicon 0.7.12 DMG](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.12-macos) |
-| Intel Mac, macOS 15+ | [Intel 0.7.12 DMG](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.12-macos) |
+| Windows 10/11, x64 | [Windows 0.9.0 installer](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.9.0-windows) |
+| Mac with Apple Silicon (M series), macOS 15+ | [Apple Silicon 0.9.0 DMG](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.9.0-macos) |
+| Intel Mac, macOS 15+ | [Intel 0.9.0 DMG](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.9.0-macos) |
 
 Previous managed release: [Windows 0.7.10](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.10-windows), [macOS 0.7.10](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.10-macos).
 

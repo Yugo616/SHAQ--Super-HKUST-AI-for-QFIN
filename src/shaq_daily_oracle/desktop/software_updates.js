@@ -19,7 +19,7 @@ function renderSoftwareUpdate(value) {
   const focus=target.contains(document.activeElement)?document.activeElement.id:null;
   const scroll=target.scrollTop;
   const previousError=target.querySelector('#software-update-error')?.textContent||'';
-  target.innerHTML=`<h3>${labels[value.status]||'检查完成'}</h3><p>${esc(value.platform||'')} · 当前 ${esc(value.current_version)}${value.latest_version?` · 最新 ${esc(value.latest_version)}${value.internal_test_release?'（内部测试版）':''}`:''}</p>
+  target.innerHTML=`<h3>${labels[value.status]||'检查完成'}</h3><p>${esc(value.platform||'')} · 当前 ${esc(value.current_version)}${value.latest_version?` · 最新 ${esc(value.latest_version)}${value.internal_test_release?'（预览版）':''}`:''}</p>
     <p>${esc(value.waiting_for_idle?'已下载，等待本地任务运行完更新':value.message||'旧安装仅提供完整安装包：请等待分析和结算结束，关闭应用后安装。')}</p>
     ${value.target_version?`<p>更新目标版本：${esc(value.target_version)}</p>`:''}
     <label class="check-row"><input type="checkbox" id="automatic-software-update" ${value.automatic_enabled?'checked':''}>自动下载并安装更新（默认关闭）</label>

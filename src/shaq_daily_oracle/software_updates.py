@@ -106,6 +106,7 @@ class UpdateRecovery:
 
 def launch_update_recovery(paths):
     import webview
+    from .desktop_javascript import bind_javascript_lifetime
     # No DashboardIndex, SettingsStore, or LabService is created on this path.
     html = '''<!doctype html><meta charset="utf-8"><title>更新恢复</title>
     <style>body{font:17px system-ui;padding:36px;line-height:1.7;color:#243047}button{font:inherit;padding:10px;margin-right:12px}</style>
@@ -121,7 +122,8 @@ def launch_update_recovery(paths):
     }catch(e){document.querySelector('#status').textContent='无法读取更新状态，请联系发布者；研究资料未删除。';}}
     async function openInstaller(){try{await pywebview.api.open_installer();}catch(e){document.querySelector('#status').textContent=String(e);}}
     window.addEventListener('pywebviewready',refresh);</script>'''
-    webview.create_window('SHAQ Lab · 更新恢复', html=html, js_api=UpdateRecovery(paths), width=760, height=500)
+    window = webview.create_window('SHAQ Lab · 更新恢复', html=html, js_api=UpdateRecovery(paths), width=760, height=500)
+    bind_javascript_lifetime(window)
     webview.start()
     return 0
 

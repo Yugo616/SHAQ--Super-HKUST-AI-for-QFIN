@@ -72,6 +72,28 @@ def run_child(command, stream, timeout, *, loopback=False):
                           stderr=subprocess.STDOUT, timeout=timeout, env=environment)
 
 
+def retain_failure_diagnostics(root, output):
+    """Keep isolated fixture evidence without changing the failed acceptance."""
+    destination=output.parent/(output.stem+'-diagnostics')
+    destination.mkdir(parents=True,exist_ok=True)
+    configuration=root/'acceptance.json'
+    if configuration.is_file(): shutil.copy2(configuration,destination/configuration.name)
+    events=root/'events-public-base'
+    if events.is_dir(): shutil.copytree(events,destination/events.name,dirs_exist_ok=True)
+    health=events/'target-health.json'
+    if sys.platform=='darwin' and health.is_file():
+        pid=json.loads(health.read_text()).get('pid')
+        if type(pid) is int and pid>0:
+            process=subprocess.run(['ps','-ww','-p',str(pid),'-o','pid,ppid,stat,etime,command'],
+                capture_output=True,text=True,timeout=5)
+            (destination/'process.txt').write_text(process.stdout)
+            # A PID may have been recycled: sample only the isolated installation.
+            if str(root/'installed') in process.stdout:
+                subprocess.run(['sample',str(pid),'2','-file',str(destination/'target-sample.txt')],
+                    capture_output=True,text=True,timeout=15,check=False)
+    return {'directory':destination.name}
+
+
 def validate_transition(root, feed_root, target_version, *, system='Windows', machine='amd64'):
     """Bind public base, final full, and actual delta to one verified identity."""
     from shaq_daily_oracle.software_updates import UpdateRuntime
@@ -294,6 +316,11 @@ def main(argv=None):
         if server is not None:
             server.shutdown()
             server.server_close()
+        if result['status']=='failed' and root is not None:
+            try:
+                result['diagnostics']=retain_failure_diagnostics(root,args.output)
+            except Exception as exc:
+                result['diagnostic_error']=str(exc)
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(result, indent=2), encoding='utf-8')
     print(json.dumps(result), flush=True)
