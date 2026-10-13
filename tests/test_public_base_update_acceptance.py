@@ -38,7 +38,7 @@ class PublicBaseUpdateAcceptanceTests(unittest.TestCase):
             (events/'target-result.json').write_text('{"status":"passed"}')
             (root/'acceptance.json').write_text('{"fixture":true}')
             output=Path(directory)/'reports'/'public-base-update.json'
-            process=SimpleNamespace(stdout=f'123 1 S 00:30 {root}/installed/app --update-smoke',returncode=0)
+            process=SimpleNamespace(stdout=f"123 1 S 00:30 {root/'installed'/'app'} --update-smoke",returncode=0)
             with patch.object(acceptance.sys,'platform','darwin'), patch.object(
                     acceptance.subprocess,'run',return_value=process) as run:
                 result=acceptance.retain_failure_diagnostics(root,output)
