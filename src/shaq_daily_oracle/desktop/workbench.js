@@ -1,5 +1,42 @@
 // Three work surfaces share the existing desktop bridge and immutable records.
 const wb={filters:{},selectedModule:'',draft:'',base:null,scheduleSelectionsLoaded:false,researchSelections:{}};
+const modelCatalogRequests=new Map();
+function readModelCatalog(name,...args){
+  const key=JSON.stringify([name,...args]);
+  if(!modelCatalogRequests.has(key))modelCatalogRequests.set(key,
+    api(name,...args).finally(()=>modelCatalogRequests.delete(key)));
+  return modelCatalogRequests.get(key);
+}
+function bindAnalysisModel(profileId,modelId,statusId,refreshId,choice,onChange=()=>{}){
+  const connection=q(profileId),model=q(modelId),status=q(statusId),refresh=q(refreshId);
+  if(!connection||!model)return;
+  const profiles=state.data.settings.model_profiles||[];
+  connection.innerHTML=profiles.map(p=>`<option value="${esc(p.profile_id)}">${esc(SHAQConnections.connectionLabel(p,profiles))}</option>`).join('');
+  connection.value=choice.profile_id;
+  const generation=model.pickerGeneration=(model.pickerGeneration||0)+1;
+  const current=()=>model.isConnected&&model.pickerGeneration===generation;
+  const picker=SHAQConnections.modelPicker(readModelCatalog,value=>{
+    if(!current())return;
+    model.disabled=!['ready','saved'].includes(value.status);
+    refresh.disabled=value.status==='loading';
+    model.innerHTML=`<option value="">${value.status==='loading'?'读取模型…':'请选择模型'}</option>`+
+      value.models.map(m=>`<option value="${esc(m.id)}">${esc(m.label)}</option>`).join('');
+    model.value=value.model;
+    status.textContent=value.message||'';
+    status.hidden=!status.textContent;
+    if(!model.disabled)Object.assign(choice,{profile_id:value.profile_id,model:value.model});
+    onChange();
+  });
+  const load=()=>picker.load(profiles.find(p=>p.profile_id===connection.value),choice.model);
+  connection.onchange=()=>{
+    choice.profile_id=connection.value;
+    choice.model=profiles.find(p=>p.profile_id===connection.value)?.model||'';
+    void load();
+  };
+  model.onchange=()=>picker.choose(model.value);
+  refresh.onclick=()=>void load();
+  return load();
+}
 const formalState=s=>({waiting:'等待开始',workflow_running:'正式流程运行中',workflow_complete:'正式流程完成',workflow_failed:'正式流程失败',connected_to_existing_worker:'已连接原后台',missed_daily_cutoff:'已错过盘前截止',session_already_recorded:'今日已完成',configuration_error:'配置错误',setup_required:'需要完成连接'}[s]||s||'等待后台回应');
 async function showFormalRun(id){try{const run=await api('get_run',id);const target=q('#formal-detail');target.innerHTML=`<h3>${esc(run.trade_date)} · 正式模拟盘</h3><p>${run.predictions.map(p=>`${esc(p.symbol)} ${dir(p.direction)}`).join('、')||'没有发布预测'} · 模拟订单 ${run.orders.length} 笔</p><label>股票 <select id="formal-symbol">${Object.keys(run.reports_by_symbol).map(s=>`<option>${esc(s)}</option>`).join('')}</select></label><div id="formal-analysis"></div>`;const draw=()=>{const symbol=q('#formal-symbol').value;q('#formal-analysis').innerHTML=(run.reports_by_symbol[symbol]||[]).map(r=>`<h4>${esc(moduleName(r.domain))} · ${dir(r.verdict)}</h4><p>${esc(r.thesis||'')}</p><p>反方：${esc(r.antithesis||'')}</p>`).join('')};q('#formal-symbol').onchange=draw;draw()}catch(e){notice(e.message,true)}}
 const moduleName=id=>({decision:'最终决策',screening:'候选筛选',market:'市场环境',relationships:'行业与关系传导',event:'公司催化事件',capital:'买卖压力与流动性',derivatives:'期权定价与仓位线索',price_volume:'价格走势与参与度',adversary:'反方审查'}[id]||(state.data?.skill_explanations?.[id]||id).split(' · ')[0]);
@@ -26,6 +63,8 @@ async function resumeOriginalBatch(batchId){
 }
 renderRun=function(){
   const s=state.data.settings, versions=state.data.versions||[], profiles=s.model_profiles||[];
+  if(!wb.runModelChoice)wb.runModelChoice={profile_id:s.active_model_profile_id,
+    model:profiles.find(p=>p.profile_id===s.active_model_profile_id)?.model||''};
   // Move the live form across a run-list refresh instead of replacing user input.
   const previousPanel=q('#automatic-panel')||wb.automaticPanel;
   const focusedAutomatic=previousPanel?.contains(document.activeElement)?document.activeElement:null;
@@ -33,13 +72,13 @@ renderRun=function(){
   if(state.runSelections===null)state.runSelections=new Set(versions.filter(v=>v.status_badge==='正式基准').map(versionKey));
   const rows=versions.map(v=>`<label class="method-row"><input class="version-check" type="checkbox" data-author="${esc(v.author||'team')}" data-version="${esc(v.version_id)}" ${state.runSelections.has(versionKey(v))?'checked':''}><span class="method-copy"><strong>${esc(versionName(v))}</strong></span></label>`).join('');
   q('#run').innerHTML=`<div class="run-toolbar"><span></span><time id="local-clock"></time><button class="text-button" id="show-data">查看数据</button></div>
-    <section class="run-methods"><div class="section-head"><h3>选择方法</h3><button class="text-button" id="select-all">全选</button></div><div class="method-list">${rows}</div><label class="run-model">分析模型 <select id="run-profile">${profiles.map(p=>`<option value="${esc(p.profile_id)}" ${p.profile_id===s.active_model_profile_id?'selected':''}>${esc(p.model)}${profiles.filter(other=>other.model===p.model).length>1?' · '+esc(p.profile_id):''}</option>`).join('')}</select></label><div class="run-actions"><button class="primary" id="start-batch" ${profiles.length?'':'disabled'}>开始今日分析</button><span id="estimate" class="estimate"></span></div></section>
+    <section class="run-methods"><div class="section-head"><h3>选择方法</h3><button class="text-button" id="select-all">全选</button></div><div class="method-list">${rows}</div><div class="run-models"><label class="run-model">连接 <select id="run-profile"></select></label><label class="run-model">分析模型 <select id="run-model" disabled></select></label><button class="text-button" id="refresh-run-models">刷新模型</button></div><p id="run-model-status" class="inline-status" role="status" hidden></p><div class="run-actions"><button class="primary" id="start-batch" disabled>开始今日分析</button><span id="estimate" class="estimate"></span></div></section>
     <div class="automatic-row"><span id="automatic-summary">读取自动运行设置…</span><button class="text-button" id="edit-automatic">自动运行设置</button></div><section class="sheet hidden" id="automatic-panel"><div id="automatic-settings"></div></section>
     <section class="run-progress"><div class="section-head"><h3>当日进度</h3><span id="activity-status" role="status"></span></div><div id="today-progress">${SHAQProgress.progressHtml(progressJobs,versions,state.data.clock?.et||new Date().toISOString())}</div></section>`;
   q('#start-batch').onclick=startBatch;
   q('#select-all').onclick=()=>{const boxes=qa('.version-check'),on=boxes.some(b=>!b.checked);boxes.forEach(b=>b.checked=on);rememberSelections();estimate();updatePrimaryAction()};
   qa('.version-check').forEach(b=>b.onchange=()=>{rememberSelections();estimate();updatePrimaryAction()});
-  q('#run-profile').onchange=()=>{estimate();updatePrimaryAction()};
+  void bindAnalysisModel('#run-profile','#run-model','#run-model-status','#refresh-run-models',wb.runModelChoice,()=>{estimate();updatePrimaryAction()});
   q('#show-data').onclick=()=>openUtility('data','数据更新时间');
   qa('[data-progress-result]').forEach(b=>b.onclick=()=>{showPage('history');loadBatch(b.dataset.progressResult)});
   bindProgressRetries();
@@ -89,9 +128,9 @@ function bindProgressRetries(){
 }
 function updatePrimaryAction(){
   const button=q('#start-batch');if(!button)return;
-  const action=SHAQProgress.primaryAction(state.data.jobs||[],[...(state.runSelections||[])],state.data.clock?.et||new Date().toISOString(),q('#run-profile')?.value);
+  const action=SHAQProgress.primaryAction(state.data.jobs||[],[...(state.runSelections||[])],state.data.clock?.et||new Date().toISOString(),q('#run-profile')?.value,q('#run-model')?.value||'');
   button.textContent=action.label;
-  button.disabled=action.action==='retrying'||(action.action==='start'&&(!state.runSelections?.size||state.data.clock?.today_available!==true||!state.data.settings.model_profiles?.length));
+  button.disabled=action.action==='retrying'||(action.action==='start'&&(!state.runSelections?.size||state.data.clock?.today_available!==true||!q('#run-model')?.value||q('#run-model')?.disabled));
   button.onclick=async()=>{
     if(action.action==='start'){button.disabled=true;try{await startBatch()}finally{updatePrimaryAction()}return}
     if(action.action==='progress'){q('#today-progress')?.scrollIntoView({block:'start',behavior:'smooth'});return}
@@ -124,13 +163,16 @@ async function renderAutomatic(force=false){
     if(target.querySelector('#auto-time')&&!force)return;
     const versions=state.data.versions||[], profiles=state.data.settings.model_profiles||[];
     const chosen=new Set(SHAQAccounts.normalizeSelections(versions,x.selections||[]).map(v=>`${v.author}/${v.version_id}`));
-    target.innerHTML=`<label class="check-row"><input id="auto-enabled" type="checkbox" ${x.enabled?'checked':''}>每天自动运行</label><label>美东启动时间 <input id="auto-time" type="time" value="${esc(x.start_et.slice(0,5))}"></label><p>${esc(x.local_start||'')} ${esc(x.status_message||'')}</p><label>自动运行模型<select id="auto-model">${profiles.map(p=>`<option value="${esc(p.profile_id)}" ${p.profile_id===x.model_profile_id?'selected':''}>${esc(p.model)} · ${esc(p.profile_id)}</option>`).join('')}</select></label><p>自动运行的版本（独立于手动运行选择）</p>${versions.map(v=>`<label class="check-row"><input class="auto-version" type="checkbox" data-author="${esc(v.author)}" data-version="${esc(v.version_id)}" ${chosen.has(versionKey(v))?'checked':''}>${esc(versionName(v))}</label>`).join('')}<p>保存只修改后续任务。电脑需要保持开机、联网。</p><button class="secondary" id="save-automatic">保存自动运行设置</button>`;
+    wb.autoModelChoice={profile_id:x.model_profile_id,model:x.model||profiles.find(p=>p.profile_id===x.model_profile_id)?.model||''};
+    target.innerHTML=`<label class="check-row"><input id="auto-enabled" type="checkbox" ${x.enabled?'checked':''}>每天自动运行</label><label>美东启动时间 <input id="auto-time" type="time" value="${esc(x.start_et.slice(0,5))}"></label><p>${esc(x.local_start||'')} ${esc(x.status_message||'')}</p><div class="run-models"><label class="run-model">连接<select id="auto-model"></select></label><label class="run-model">自动运行模型<select id="auto-model-name" disabled></select></label><button type="button" class="text-button" id="refresh-auto-models">刷新模型</button></div><p id="auto-model-status" class="inline-status" role="status" hidden></p><p>自动运行的版本（独立于手动运行选择）</p>${versions.map(v=>`<label class="check-row"><input class="auto-version" type="checkbox" data-author="${esc(v.author)}" data-version="${esc(v.version_id)}" ${chosen.has(versionKey(v))?'checked':''}>${esc(versionName(v))}</label>`).join('')}<p>保存只修改后续任务。电脑需要保持开机、联网。</p><button class="secondary" id="save-automatic">保存自动运行设置</button>`;
+    void bindAnalysisModel('#auto-model','#auto-model-name','#auto-model-status','#refresh-auto-models',wb.autoModelChoice);
     target.oninput=target.onchange=()=>{wb.autoRevision=(wb.autoRevision||0)+1};
     q('#save-automatic').onclick=async()=>{
       const revision=wb.autoRevision||0;
       const button=q('#save-automatic');button.disabled=true;
       try{
-        await api('save_research_schedule',{enabled:q('#auto-enabled').checked,start_et:q('#auto-time').value,selections:qa('.auto-version:checked').map(v=>({author:v.dataset.author,version_id:v.dataset.version})),model_profile_id:q('#auto-model').value});
+        if(q('#auto-enabled').checked&&(q('#auto-model-name').disabled||!q('#auto-model-name').value))throw Error('请先选择自动运行模型');
+        await api('save_research_schedule',{enabled:q('#auto-enabled').checked,start_et:q('#auto-time').value,selections:qa('.auto-version:checked').map(v=>({author:v.dataset.author,version_id:v.dataset.version})),model_profile_id:q('#auto-model').value,model:q('#auto-model-name').value||wb.autoModelChoice.model});
         notice('自动运行设置已保存');renderAutomatic((wb.autoRevision||0)===revision);
       }catch(e){notice(e.message,true)}finally{button.disabled=false}
     };

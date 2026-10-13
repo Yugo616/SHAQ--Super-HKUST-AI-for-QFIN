@@ -863,6 +863,8 @@ class LabService:
         if schedule_path.exists():
             schedule = json.loads(schedule_path.read_text(encoding='utf-8'))
             schedule['model_profile_id'] = parsed.profile_id
+            if 'model' in schedule:
+                schedule['model'] = parsed.model
             _atomic_json(schedule_path, schedule)
         return result
 
@@ -1234,12 +1236,29 @@ class LabService:
             login=author, manifest=manifest, files=files
         )
 
+    def selected_model_profile(
+        self, profile_id: str = '', model: str = '', *, verify: bool = False
+    ) -> ModelProfile:
+        profile = self.settings.model_profile(profile_id or None)
+        if not model:
+            return profile
+        saved_model = profile.model
+        profile = ModelProfile.from_dict({**profile.public_dict(), 'model': model})
+        require_explicit_model(profile)
+        if verify and profile.model != saved_model:
+            from .model_catalog import local_model_catalog, api_model_catalog
+            catalog = (local_model_catalog(profile.protocol) if uses_local_subscription(profile)
+                       else api_model_catalog(profile.public_dict(), self.connection_secret(profile.public_dict(), '')))
+            if profile.model not in {row['id'] for row in catalog['models']}:
+                raise LabServiceError('所选型号不在此连接的可选模型中，请刷新后重新选择。')
+        return profile
+
     def estimate_batch(
-        self, selections: list[dict[str, str]], model_profile_id: str = ""
+        self, selections: list[dict[str, str]], model_profile_id: str = "", model: str = ""
     ) -> dict[str, Any]:
         variants = self._resolve_variants(selections)
         settings = self.settings.load()
-        model_profile = self.settings.model_profile(model_profile_id or None)
+        model_profile = self.selected_model_profile(model_profile_id, model)
         data_profile = DataProfile.from_dict(settings["data_profile"])
         unique_domain_documents = set()
         for variant in variants:
@@ -1295,11 +1314,11 @@ class LabService:
 
     @guarded_method
     def start_batch(
-        self, *, selections: list[dict[str, str]], model_profile_id: str = ""
+        self, *, selections: list[dict[str, str]], model_profile_id: str = "", model: str = ""
     ) -> dict[str, Any]:
         self._require_today_available()
         variants = self._resolve_variants(selections)
-        profile = self.settings.model_profile(model_profile_id or None)
+        profile = self.selected_model_profile(model_profile_id, model, verify=True)
         require_explicit_model(profile)
         secret = "" if uses_local_subscription(profile) else (self.settings.get_model_secret(profile.profile_id) or "")
         if not secret and not uses_local_subscription(profile):
@@ -1331,6 +1350,7 @@ class LabService:
                 "queued_at_et": datetime.now(ET).isoformat(),
                 "completed_at_et": None, "message": "等待开始",
                 "model_profile_id": profile.profile_id,
+                "model": profile.model,
                 "variant_progress": {f'{v.author}/{v.version_id}': 'queued' for v in variants},
             }
         thread = threading.Thread(
@@ -1493,6 +1513,7 @@ class LabService:
                 execution_lock_protocol=1,
                 message='已恢复，正在继续未完成分析',
                 model_profile_id=profile.profile_id,
+                model=profile.model,
                 queued_at_et=datetime.now(ET).isoformat(),
                 started_at_et=datetime.now(ET).isoformat(), completed_at_et=None,
                 variant_errors={},
@@ -1649,6 +1670,21 @@ class LabService:
             stored = {key: row for key, row in stored.items() if row.get('batch_id') == batch_id}
         for job_id, row in stored.items():
             row = observed_job_status(self.paths.research_root, corrected_status(self.paths.research_root, row))
+            if (not row.get('model') and row.get('model_profile_id')
+                    and re.fullmatch(r'LAB-[A-Za-z0-9_-]+', str(row.get('batch_id', '')))):
+                # Legacy jobs can identify their model from the verified frozen batch,
+                # never from a connection whose saved model may since have changed.
+                try:
+                    manifest = json.loads((self.paths.batches_root / row['batch_id'] / 'batch_manifest.json').read_text(encoding='utf-8'))
+                    identity = manifest['batch_identity']
+                    profile = ModelProfile.from_dict(manifest['model_profile'])
+                    if (manifest.get('batch_id') == row['batch_id']
+                            and manifest['batch_identity_sha256'] == sha256_payload(identity)
+                            and profile.identity() == identity['model_profile_hash']
+                            and profile.profile_id == row.get('model_profile_id')):
+                        row = {**row, 'model': profile.model}
+                except (OSError, ValueError, KeyError, TypeError):
+                    pass
             stored[job_id] = row
             row["research_progress"] = ResearchProgressLog(
                 self.paths.research_root / "jobs" / f"{job_id}-research.jsonl"

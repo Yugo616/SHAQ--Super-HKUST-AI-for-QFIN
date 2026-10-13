@@ -19,6 +19,21 @@ class ProgressActionIdentityTests(unittest.TestCase):
             text=True,
         )
 
+    def test_same_connection_different_model_does_not_reuse_or_resume_old_job(self):
+        self.run_js("""
+const assert=require('node:assert/strict');
+const now='2026-09-23T09:00:00-04:00';
+const base={job_id:'old-model-job',model_profile_id:'connection',model:'old-model',
+  started_at_et:'2026-09-23T08:35:00-04:00'};
+for(const [status,progress,expected] of [['complete','complete','results'],
+    ['failed','failed','resume'],['running','running','progress']]) {
+  const job={...base,status,variant_progress:{'team/main':progress}};
+  assert.equal(ui.primaryAction([job],['team/main'],now,'connection','new-model').action,'start');
+  assert.equal(ui.primaryAction([job],['team/main'],now,'connection','old-model').action,expected);
+  assert.equal(ui.primaryAction([{...job,model:undefined}],['team/main'],now,'connection','old-model').action,'start');
+}
+""")
+
     def test_primary_action_matches_selected_model_and_fails_closed_for_legacy_job(self):
         self.run_js("""
 const assert=require('node:assert/strict');

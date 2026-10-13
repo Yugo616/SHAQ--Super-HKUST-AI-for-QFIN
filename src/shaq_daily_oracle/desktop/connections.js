@@ -2,6 +2,48 @@
 const providerDraftFields=['model','secret','base_url','relay_base_url','auth_style','output_mode','maximum_context_tokens'];
 const providerDraftControllers=new WeakMap();
 const SHAQConnections = {
+  connectionLabel(profile, profiles=[]) {
+    const name={'codex-cli':'Codex','claude-code':'Claude Code',
+      'openai-responses':'OpenAI API','anthropic-messages':'Claude API',
+      'openai-chat-completions':'兼容 API'}[profile.protocol]||profile.protocol;
+    return profiles.filter(p=>p.protocol===profile.protocol).length>1?`${name} · ${profile.profile_id}`:name;
+  },
+  modelPicker(invoke, show) {
+    let request=0,value={status:'idle',profile_id:'',model:'',models:[]};
+    const publish=next=>{value=next;show(value)};
+    return {
+      get value(){return value},
+      async load(profile, preferred=profile?.model||'') {
+        const current=++request,profile_id=profile?.profile_id||'';
+        let received=false;
+        publish({status:'loading',profile_id,model:'',models:[]});
+        try {
+          if(!profile)throw Error('请先连接模型');
+          const result=['codex-cli','claude-code'].includes(profile.protocol)?
+            await invoke('list_local_models',profile.protocol):await invoke('list_api_models',profile,'');
+          received=true;
+          if(current!==request)return;
+          if(result.protocol&&result.protocol!==profile.protocol)throw Error('模型列表与连接不一致，请重试');
+          const models=result.models||[];
+          if(!models.length)throw Error('此连接未返回可选模型，请检查连接');
+          publish({status:'ready',profile_id,models,model:models.some(m=>m.id===preferred)?preferred:''});
+        } catch(error) {
+          if(current!==request)return;
+          const message=SHAQConnections.diagnosticMessage(error?.diagnostic,error?.message);
+          // A metadata outage must not replace an unsaved choice or invent alternatives.
+          const saved=!received&&preferred&&preferred===profile?.model&&
+            !['default','subscription-default'].includes(preferred.toLowerCase());
+          publish(saved?{status:'saved',profile_id,model:preferred,
+            models:[{id:preferred,label:preferred+'（已保存）'}],message:'模型列表读取失败：'+message}:
+            {status:'failed',profile_id,models:[],model:'',message});
+        }
+      },
+      choose(model) {
+        if(!['ready','saved'].includes(value.status)||(model&&!value.models.some(m=>m.id===model)))throw Error('请选择此连接的可选模型');
+        publish({...value,model});
+      }
+    };
+  },
   diagnosticMessage(diagnostic, fallback) {
     if(!diagnostic)return fallback || '连接失败，请重新检测。';
     const local=diagnostic.protocol||diagnostic.login_protocol;
@@ -182,8 +224,14 @@ async function refreshSavedModel(profile) {
   for(const selector of ['#run-profile','#auto-model']) {
     const select=q(selector);
     if(select?.tagName!=='SELECT')continue;
-    select.innerHTML=profiles.map(p=>`<option value="${esc(p.profile_id)}">${esc(p.model)} · ${esc(p.profile_id)}</option>`).join('');
+    select.innerHTML=profiles.map(p=>`<option value="${esc(p.profile_id)}">${esc(SHAQConnections.connectionLabel(p,profiles))}</option>`).join('');
     select.value=profile.profile_id;
+  }
+  if(typeof bindAnalysisModel==='function') {
+    wb.runModelChoice={profile_id:profile.profile_id,model:profile.model};
+    wb.autoModelChoice={...wb.runModelChoice};
+    void bindAnalysisModel('#run-profile','#run-model','#run-model-status','#refresh-run-models',wb.runModelChoice,()=>{estimate();updatePrimaryAction()});
+    void bindAnalysisModel('#auto-model','#auto-model-name','#auto-model-status','#refresh-auto-models',wb.autoModelChoice);
   }
   if(typeof estimate==='function')estimate();
   return true;

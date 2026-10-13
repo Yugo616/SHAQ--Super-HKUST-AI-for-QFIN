@@ -466,6 +466,8 @@ class AccountStore:
                      _completion(row) < _time(policy['activated_at']) else 'forward')
             pending.append(dict(batch_id=row['batch_id'], variant_key=row['variant_key'],
                 trade_date=row['trade_date'], label=row['label'], model=row.get('model'),
+                **{key: row[key] for key in ('series_key', 'method_identity', 'model_identity',
+                    'account_model_identity', 'model_link_receipt_hash') if key in row},
                 scope=scope, source_scope=scope, status='pending', trades=[], orders=[],
                 engine=ENGINE_ID, engine_version=ENGINE_VERSION, policy_id=POLICY_ID,
                 legacy=False, reconciliation_pending=True))

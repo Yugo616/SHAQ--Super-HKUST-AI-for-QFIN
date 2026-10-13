@@ -10,6 +10,88 @@ import test_research_lab_foundation as foundation
 
 
 class ModelSelectionTests(unittest.TestCase):
+    def test_selected_catalog_model_reaches_job_without_changing_saved_or_scheduled_model(self):
+        import threading
+        from shaq_daily_oracle.lab_service import LabService
+        for protocol in ('codex-cli', 'claude-code'):
+            with self.subTest(protocol=protocol), tempfile.TemporaryDirectory() as tmp:
+                lab = LabService(foundation.ResearchLabFoundationTests().paths(Path(tmp)))
+                old = backends.ModelProfile('connection', protocol, '', 'saved-model').public_dict()
+                lab.save_model_profile(old, secret='', probe=False)
+                schedule = lab.paths.research_root / 'schedule.json'
+                schedule.write_text(json.dumps({'enabled': False, 'model_profile_id': 'connection', 'model': 'scheduled-model'}))
+                before = schedule.read_bytes()
+                done, captured = threading.Event(), {}
+                def run(**kwargs):
+                    captured['profile'] = kwargs['profile']
+                    kwargs['task_lock'].release()
+                    done.set()
+                with patch.object(lab, '_require_today_available'), \
+                     patch.object(lab, '_resolve_variants', return_value=[]), \
+                     patch.object(lab, '_run_batch_job', side_effect=run), \
+                     patch('shaq_daily_oracle.model_catalog.local_model_catalog', return_value={
+                         'protocol': protocol, 'models': [{'id': 'selected-model', 'label': 'Selected'}]}):
+                    job = lab.start_batch(selections=[], model_profile_id='connection', model='selected-model')
+                    self.assertTrue(done.wait(5))
+                self.assertEqual(job.get('model'), 'selected-model')
+                self.assertEqual(captured['profile'].model, 'selected-model')
+                self.assertEqual(captured['profile'].protocol, protocol)
+                self.assertEqual(lab.settings.model_profile('connection').model, 'saved-model')
+                self.assertEqual(schedule.read_bytes(), before)
+
+    def test_saved_explicit_model_remains_usable_without_model_listing(self):
+        from shaq_daily_oracle.lab_service import LabService
+        with tempfile.TemporaryDirectory() as tmp:
+            lab = LabService(foundation.ResearchLabFoundationTests().paths(Path(tmp)))
+            profile = backends.ModelProfile('api', 'openai-chat-completions', 'https://relay.example/v1', 'saved-model')
+            with patch.object(lab.settings, 'model_profile', return_value=profile), \
+                 patch('shaq_daily_oracle.model_catalog.api_model_catalog', side_effect=RuntimeError('listing unavailable')) as catalog:
+                self.assertEqual(lab.selected_model_profile('api', 'saved-model', verify=True), profile)
+                catalog.assert_not_called()
+                with self.assertRaisesRegex(RuntimeError, 'listing unavailable'):
+                    lab.selected_model_profile('api', 'different-model', verify=True)
+
+    def test_legacy_job_model_comes_only_from_verified_frozen_profile(self):
+        from shaq_daily_oracle.lab_service import LabService
+        from shaq_daily_oracle.hashing import sha256_payload
+        with tempfile.TemporaryDirectory() as tmp:
+            lab = LabService(foundation.ResearchLabFoundationTests().paths(Path(tmp)))
+            profile = backends.ModelProfile('connection', 'codex-cli', '', 'original-model')
+            lab.save_model_profile({**profile.public_dict(), 'model':'current-model'}, secret='', probe=False)
+            batch_id = 'LAB-frozen-fixture'
+            root = lab.paths.batches_root / batch_id
+            root.mkdir(parents=True)
+            identity = {'model_profile_hash': profile.identity()}
+            manifest = {'batch_id': batch_id, 'batch_identity': identity, 'batch_identity_sha256': sha256_payload(identity),
+                        'model_profile': profile.public_dict()}
+            path = root / 'batch_manifest.json'
+            path.write_text(json.dumps(manifest))
+            lab._set_job('job-fixture', status='complete', batch_id=batch_id, model_profile_id='connection')
+            saved = (lab.paths.research_root / 'jobs/job-fixture.json').read_bytes()
+            self.assertEqual(lab.job_statuses()[0].get('model'), 'original-model')
+            manifest['batch_id'] = 'LAB-other-batch'
+            path.write_text(json.dumps(manifest))
+            self.assertFalse(lab.job_statuses()[0].get('model'))
+            manifest['batch_id'] = batch_id
+            manifest['model_profile']['model'] = 'tampered-model'
+            path.write_text(json.dumps(manifest))
+            self.assertFalse(lab.job_statuses()[0].get('model'))
+            self.assertEqual((lab.paths.research_root / 'jobs/job-fixture.json').read_bytes(), saved)
+
+    def test_other_connections_model_is_rejected_before_analysis(self):
+        from shaq_daily_oracle.lab_service import LabService, LabServiceError
+        with tempfile.TemporaryDirectory() as tmp:
+            lab = LabService(foundation.ResearchLabFoundationTests().paths(Path(tmp)))
+            profile = backends.ModelProfile('codex', 'codex-cli', '', 'saved-model').public_dict()
+            lab.save_model_profile(profile, secret='', probe=False)
+            with patch.object(lab, '_require_today_available'), \
+                 patch.object(lab, '_resolve_variants', return_value=[]), \
+                 patch('shaq_daily_oracle.model_catalog.local_model_catalog', return_value={
+                     'protocol': 'codex-cli', 'models': [{'id': 'codex-model', 'label': 'Codex'}]}):
+                with self.assertRaisesRegex(LabServiceError, '可选模型'):
+                    lab.start_batch(selections=[], model_profile_id='codex', model='claude-model')
+            self.assertFalse(lab.jobs)
+
     def test_endpoint_change_cannot_persist_old_key_even_without_probe(self):
         from shaq_daily_oracle.lab_service import LabService, LabServiceError
         with tempfile.TemporaryDirectory() as tmp:

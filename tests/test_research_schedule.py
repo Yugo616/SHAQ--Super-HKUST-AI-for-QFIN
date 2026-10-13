@@ -16,6 +16,26 @@ from shaq_daily_oracle.background_process import background_process_options
 
 
 class ResearchScheduleTests(unittest.TestCase):
+    def test_schedule_retains_explicit_model_and_passes_it_to_the_worker(self):
+        selected = []
+        class Lab:
+            def start_batch(self, **kwargs):
+                selected.append(kwargs)
+                return {'job_id':'chosen','status':'complete'}
+            def job_statuses(self):
+                return [{'job_id':'chosen','status':'complete'}]
+        with tempfile.TemporaryDirectory() as directory:
+            paths = SimpleNamespace(research_root=Path(directory))
+            saved = schedule.save_schedule(paths, Mock(), {
+                'enabled':False,'start_et':'08:35','selections':[],
+                'model_profile_id':'claude-connection','model':'claude-choice'})
+            self.assertEqual(saved.get('model'), 'claude-choice')
+            with patch('shaq_daily_oracle.lab_service.LabService', return_value=Lab()), \
+                 patch.object(schedule, 'schedule_status', return_value={**saved,'enabled':True}), \
+                 patch.object(schedule, 'due_status', return_value='due'):
+                self.assertEqual(schedule.run_research_worker(paths), 0)
+        self.assertEqual(selected, [{'selections':[], 'model_profile_id':'claude-connection', 'model':'claude-choice'}])
+
     def test_due_until_actual_session_open_not_old_evidence_deadline(self):
         from datetime import datetime
         from zoneinfo import ZoneInfo

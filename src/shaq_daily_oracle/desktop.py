@@ -378,20 +378,21 @@ class DesktopBridge:
         )
 
     def estimate_shadow_batch(
-        self, selections: list[dict[str, str]], model_profile_id: str = ""
+        self, selections: list[dict[str, str]], model_profile_id: str = "", model: str = ""
     ) -> dict[str, Any]:
         return self._result(
             self.lab.estimate_batch,
             selections,
             model_profile_id=model_profile_id,
+            model=model,
         )
 
     def start_shadow_batch(
-        self, selections: list[dict[str, str]], model_profile_id: str = ""
+        self, selections: list[dict[str, str]], model_profile_id: str = "", model: str = ""
     ) -> dict[str, Any]:
         return self._result(
             self.lab.start_batch,
-            selections=selections, model_profile_id=model_profile_id,
+            selections=selections, model_profile_id=model_profile_id, model=model,
         )
 
     def get_shadow_batch(self, batch_id: str, include_accounts: bool = True) -> dict[str, Any]:
@@ -703,6 +704,8 @@ def _bind_gui_smoke_fixture(bridge, fixture_state, fixture_detail):
     bridge.save_lab_model_profile = MethodType(fixture_model_api, bridge)
     bridge.list_local_models = MethodType(lambda self, protocol: {'ok': True, 'value': {
         'protocol': protocol, 'models': [{'id': 'fixture-model', 'label': 'Fixture model'}]}}, bridge)
+    bridge.list_api_models = MethodType(lambda self, profile, secret: {'ok': True, 'value': {
+        'protocol': profile['protocol'], 'models': [{'id': profile['model'], 'label': profile['model']}]}}, bridge)
     bridge.check_software_update = MethodType(fixture_update_api, bridge)
     bridge.open_method_transfer = MethodType(fixture_transfer_api, bridge)
     bridge.transfer_methods = MethodType(fixture_transfer_write_api, bridge)

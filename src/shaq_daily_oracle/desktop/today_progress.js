@@ -97,10 +97,10 @@ const SHAQProgress = (() => {
     const last=(job.research_progress||[]).filter(e=>String(e.stage||'').startsWith('data_')).at(-1);
     return ['data_retry_scheduled','data_retry_started'].includes(last?.stage)?last:null;
   }
-  function primaryAction(jobs, selections, now, profileId) {
+  function primaryAction(jobs, selections, now, profileId, model) {
     const selected=new Set(selections||[]),day=etDay(now);
     const job=currentJobs(jobs||[],now).find(row=>(active(row)||etDay(row.started_at_et)===day)&&
-      profileId&&row.model_profile_id===profileId&&selected.size&&
+      profileId&&row.model_profile_id===profileId&&(model===undefined||(model&&row.model===model))&&selected.size&&
       [...selected].every(key=>key in (row.variant_progress||{})));
     if(!job)return {action:'start',label:'开始今日分析'};
     if(active(job)){

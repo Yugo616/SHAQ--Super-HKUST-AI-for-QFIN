@@ -169,11 +169,11 @@ assert.match(historical,/data-progress-retry="old"/);
 """)
     def test_workbench_render_applies_backend_guard_and_shows_reason(self):
         root = Path(__file__).resolve().parents[1] / 'src/shaq_daily_oracle/desktop'
-        source = (root/'today_progress.js').read_text() + '\n' + '''
+        source = (root/'today_progress.js').read_text() + '\n' + (root/'connections.js').read_text() + '\n' + '''
 const window={showCandidate(){}};const document={activeElement:null};
 let renderEditor=()=>{},renderHistory=()=>{},renderBatch=()=>{},loadSkill=()=>{},renderRun=()=>{},
     showPage=()=>{},saveDraft=()=>{},estimate=()=>{};
-const startBatch=()=>{},tickLocalClock=()=>{},setInterval=()=>{},esc=String,qa=()=>[],versionKey=v=>v.author+'/'+v.version_id,selectedVersions=()=>[];
+const startBatch=()=>{},tickLocalClock=()=>{},setInterval=()=>{},esc=String,qa=()=>[],versionKey=v=>v.author+'/'+v.version_id,selectedVersions=()=>[],api=async()=>({models:[]});
 const nodes={};const q=s=>nodes[s]||=( {parentElement:{prepend(){}},classList:{toggle(){}},contains(){return false},replaceWith(){},disabled:false,textContent:'',innerHTML:''} );
 const state={runSelections:null,data:{settings:{model_profiles:[{model:'fixture',profile_id:'p'}]},
  versions:[],jobs:[],clock:{today_available:false,is_trading_day:false,next_trade_date:'2026-09-14',today_message:'今日休市；不启动今日研究。'}}};

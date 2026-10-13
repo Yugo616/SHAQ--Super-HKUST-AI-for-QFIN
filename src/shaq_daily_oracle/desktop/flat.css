@@ -13,3 +13,4 @@ main{margin-left:204px;width:calc(100% - 204px);padding:18px 36px 64px;min-width
 @media(prefers-reduced-motion:reduce){button,progress::-webkit-progress-value{transition:none}}
 
 select{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16'%3E%3Cpath d='m5 6 3 3 3-3' fill='none' stroke='%23888' stroke-width='1.5'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 9px center;padding-right:30px!important}
+.run-models{display:flex;flex-wrap:wrap;align-items:center;gap:12px 24px;margin:22px 0 12px}.run-models .run-model{margin:0;gap:10px;min-width:0}.run-models select{max-width:100%;min-width:140px}.run-models>.text-button{font-size:12px}#automatic-settings .run-models{margin-block:16px}

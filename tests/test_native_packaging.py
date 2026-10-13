@@ -78,7 +78,7 @@ class NativePackagingTests(unittest.TestCase):
         self.assertIn('$applicationSha -ne $env:APPLICATION_REF -or (git status --porcelain)', native)
         self.assertIn('application_sha=$applicationSha;validation_sha=$env:SHAQ_LAYOUT_VALIDATION_SHA', native)
         self.assertIn('python $env:SHAQ_EXTERNAL_LAYOUT_HARNESS --output', native)
-        self.assertIn("if: inputs.target != 'windows-validated'\n        run: python tests/native_layout_check.py", native)
+        self.assertIn("if: inputs.target != 'windows-validated' && inputs.target != 'macos-intel-validated'\n        run: python tests/native_layout_check.py", native)
         self.assertIn('$env:SHAQ_LAYOUT_APPLICATION_SHA -or (git status --porcelain)', native)
         # Builds remain frozen; reviewed tests require identical runtime files.
         self.assertIn('validation_tests.py" --application "$PWD" --output', native)

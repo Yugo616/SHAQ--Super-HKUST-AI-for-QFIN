@@ -191,6 +191,7 @@ class BatchRecoveryTests(unittest.TestCase):
             def visible_before_thread(paths,thread):
                 saved=json.loads((paths.research_root/'jobs'/('resume-'+first['status']['batch_id']+'.json')).read_text())
                 self.assertEqual(saved['status'],'queued')
+                self.assertEqual(saved.get('model'),profile.model)
                 self.assertTrue(saved['started_at_et'])
                 self.assertTrue(saved['variant_progress'])
                 thread.run()

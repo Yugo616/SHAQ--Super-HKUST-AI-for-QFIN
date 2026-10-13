@@ -108,9 +108,14 @@ def save_schedule(paths, lab, submitted):
         if not selected:
             raise ValueError("请先选择自动运行的版本")
         lab._resolve_variants(selected)
-        lab.settings.model_profile(submitted.get("model_profile_id"))
+        if submitted.get('model'):
+            lab.selected_model_profile(submitted.get('model_profile_id', ''), submitted['model'], verify=True)
+        else:
+            lab.settings.model_profile(submitted.get("model_profile_id"))
     value = {"enabled": enabled, "start_et": start.isoformat(), "selections": selected,
              "model_profile_id": str(submitted.get("model_profile_id", ""))}
+    if submitted.get('model'):
+        value['model'] = str(submitted['model'])
     for key, default, maximum in [('collection_max_recoveries', 1, 3),
                                   ('collection_recovery_delay_seconds', 30, 300)]:
         previous_path = paths.research_root / 'schedule.json'
@@ -251,7 +256,8 @@ def run_research_worker(paths):
                 'message': '正在恢复行情采集，复用已取得的历史行情', 'heartbeat': now.isoformat()})
         _atomic_json(ledger, {"status": "running", "started_at": now.isoformat(),
                               'collection_recovery_count': recovery_count})
-        job = lab.start_batch(selections=value["selections"], model_profile_id=value["model_profile_id"])
+        job = lab.start_batch(selections=value["selections"], model_profile_id=value["model_profile_id"],
+                              **({'model': value['model']} if value.get('model') else {}))
         while True:
             current = next((x for x in lab.job_statuses() if x["job_id"] == job["job_id"]), job)
             _atomic_json(paths.research_root / "schedule_status.json", {"message": current.get("message", "运行中"), "heartbeat": datetime.now(ET).isoformat()})

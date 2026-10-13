@@ -8,6 +8,77 @@ ROOT = Path(__file__).parents[1]
 
 
 class WorkbenchControlsTests(unittest.TestCase):
+    def test_analysis_picker_uses_each_connection_catalog_and_keeps_choices_separate(self):
+        source = (ROOT / 'src/shaq_daily_oracle/desktop/connections.js').read_text()
+        available = subprocess.check_output(['node', '-'], input=source +
+            '\nconsole.log(typeof SHAQConnections.modelPicker);', text=True).strip()
+        self.assertEqual(available, 'function', 'The run model selector must load its connection catalogue')
+        result = self.node('connections.js', '''
+(async()=>{
+const calls=[];
+const picker=SHAQConnections.modelPicker(async(name,...args)=>{
+ calls.push([name,...args]);
+ if(name==='list_api_models')return {models:[{id:'relay-only',label:'Relay'}]};
+ return {protocol:args[0],models:args[0]==='codex-cli'?
+  [{id:'codex-small',label:'Small'},{id:'codex-large',label:'Large'}]:[{id:'claude-only',label:'Claude'}]};
+},()=>{});
+await picker.load({profile_id:'codex',protocol:'codex-cli',model:'codex-small'});
+picker.choose('codex-large');const codex=picker.value;
+await picker.load({profile_id:'claude',protocol:'claude-code',model:'retired-model'});
+const absent=picker.value;picker.choose('claude-only');const claude=picker.value;
+await picker.load({profile_id:'relay',protocol:'openai-chat-completions',base_url:'https://relay.test/v1',model:'relay-only'});
+console.log(JSON.stringify({calls,codex,absent,claude,relay:picker.value}));
+})();''')
+        self.assertEqual(result['codex']['model'], 'codex-large')
+        self.assertEqual(result['codex']['models'], [{'id':'codex-small','label':'Small'}, {'id':'codex-large','label':'Large'}])
+        self.assertEqual(result['absent']['model'], '')
+        self.assertEqual(result['claude']['model'], 'claude-only')
+        self.assertEqual(result['relay']['model'], 'relay-only')
+        self.assertEqual([call[0] for call in result['calls']], ['list_local_models','list_local_models','list_api_models'])
+        self.assertEqual([call[1] for call in result['calls'][:2]], ['codex-cli','claude-code'])
+        self.assertEqual(result['calls'][2][1]['base_url'], 'https://relay.test/v1')
+        self.assertEqual(result['calls'][2][2], '')
+
+    def test_analysis_picker_ignores_late_catalog_and_clears_failed_choices(self):
+        result = self.node('connections.js', '''
+(async()=>{
+const pending={},picker=SHAQConnections.modelPicker((name,protocol)=>new Promise((resolve,reject)=>pending[protocol]={resolve,reject}),()=>{});
+const old=picker.load({profile_id:'codex',protocol:'codex-cli',model:'codex-model'});
+const current=picker.load({profile_id:'claude',protocol:'claude-code',model:'claude-model'});
+pending['claude-code'].resolve({models:[{id:'claude-model',label:'Claude'}]});await current;
+pending['codex-cli'].resolve({models:[{id:'codex-model',label:'Codex'}]});await old;
+const chosen=picker.value;
+const retry=picker.load({profile_id:'claude',protocol:'claude-code',model:'claude-model'},'different-unsaved-model');
+pending['claude-code'].reject(Error('list unavailable'));await retry;
+console.log(JSON.stringify({chosen,failed:picker.value}));
+})();''')
+        self.assertEqual(result['chosen']['profile_id'], 'claude')
+        self.assertEqual(result['chosen']['model'], 'claude-model')
+        self.assertEqual(result['failed']['status'], 'failed')
+        self.assertEqual(result['failed']['model'], '')
+        self.assertEqual(result['failed']['models'], [])
+
+    def test_catalog_failure_retains_only_that_connections_saved_explicit_model(self):
+        result = self.node('connections.js', '''
+(async()=>{
+const picker=SHAQConnections.modelPicker(async()=>{throw Error('listing unavailable')},()=>{});
+const profile={profile_id:'relay',protocol:'openai-chat-completions',model:'saved-model'};
+await picker.load(profile);const saved=picker.value;picker.choose('saved-model');
+await picker.load(profile,'unsaved-model');const unsaved=picker.value;
+await picker.load({...profile,model:'subscription-default'});const opaque=picker.value;
+const mismatch=SHAQConnections.modelPicker(async()=>({protocol:'claude-code',models:[{id:'saved-model'}]}),()=>{});
+await mismatch.load(profile);
+console.log(JSON.stringify({saved,unsaved,opaque,mismatch:mismatch.value}));
+})();''')
+        self.assertEqual(result['saved']['status'], 'saved')
+        self.assertEqual(result['saved']['profile_id'], 'relay')
+        self.assertEqual(result['saved']['model'], 'saved-model')
+        self.assertEqual([row['id'] for row in result['saved']['models']], ['saved-model'])
+        self.assertIn('listing unavailable', result['saved']['message'])
+        for name in ('unsaved', 'opaque', 'mismatch'):
+            self.assertEqual(result[name]['status'], 'failed')
+            self.assertEqual(result[name]['model'], '')
+
     def test_model_choices_use_native_selects_not_webkit_datalists(self):
         from html.parser import HTMLParser
         elements = {}

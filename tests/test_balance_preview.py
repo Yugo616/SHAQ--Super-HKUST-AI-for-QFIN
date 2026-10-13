@@ -9,6 +9,25 @@ from shaq_daily_oracle.balance_preview import project_saved_balances
 
 
 class BalancePreviewTests(unittest.TestCase):
+    def test_pending_view_keeps_linked_model_identity_and_does_not_add_empty_accounts(self):
+        from shaq_daily_oracle.virtual_accounts import AccountStore
+        for method in ('gate', 'synthesis'):
+            with self.subTest(method=method), tempfile.TemporaryDirectory() as tmp:
+                source = dict(self.row('2026-09-10', None, method=method, status='pending'),
+                              series_key=method + ':new-model', model_identity='new-model',
+                              account_model_identity='original-model', model_link_receipt_hash='verified-link')
+                pending = AccountStore(Path(tmp)).view([source])['results'][0]
+                old = dict(self.row('2026-09-09', 4, method=method), model_identity='original-model')
+                before = copy.deepcopy([old, source])
+                daily = {key: value for key, value in source.items()
+                         if key not in ('account_model_identity', 'model_link_receipt_hash')}
+                projected = self.project([old, pending], [daily])
+                self.assertEqual(len(projected['accounts']), 1)
+                self.assertEqual(projected['accounts'][0]['equity'], 10004)
+                self.assertEqual(pending.get('account_model_identity'), 'original-model')
+                self.assertIsNone(projected['results'][1]['account_balance'])
+                self.assertEqual([old, source], before)
+
     def test_dashboard_preview_is_opt_in_and_formal_payload_is_unchanged(self):
         from shaq_daily_oracle.research_dashboard import ResearchDashboardIndex
         source=dict(rules={'initial_cash':10000},results=[self.row('2026-09-09',5)],accounts=[])

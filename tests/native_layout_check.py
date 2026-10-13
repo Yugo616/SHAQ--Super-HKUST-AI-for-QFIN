@@ -22,7 +22,23 @@ def bind_layout_fixture(bridge, fixture_state, fixture_detail):
     # Full-state reads and native activity notifications must share one date.
     # The layout fixture exercises the saved job's day, not the wall clock.
     fixture_state['clock']['et'] = fixture_state['jobs'][0]['started_at_et']
-    return _bind_gui_smoke_fixture(bridge, fixture_state, fixture_detail)
+    fixture_state['clock']['today_available'] = True
+    from types import MethodType
+    _bind_gui_smoke_fixture(bridge, fixture_state, fixture_detail)
+    fixture_state['settings']['model_profiles'].extend([
+        {'profile_id':'codex-picker','protocol':'codex-cli','model':'fixture-model'},
+        {'profile_id':'claude-picker','protocol':'claude-code','model':'fixture-model'},
+    ])
+    bridge.list_local_models = MethodType(lambda self, protocol: {'ok':True,'value': {
+        'protocol':protocol,'models':[{'id':'fixture-model','label':'Saved fixture'},
+            {'id':'fixture-'+protocol+'-only','label':'Choice from '+protocol}]}}, bridge)
+    bridge.get_research_schedule = MethodType(lambda self: {'ok':True,'value': {
+        'enabled':False,'start_et':'08:35:00','selections':[],
+        'model_profile_id':'codex-picker','model':'fixture-model'}}, bridge)
+    def record_selection(self, selections, model_profile_id='', model=''):
+        fixture_state['fixture_model_selection'] = {'profile_id':model_profile_id,'model':model}
+        return {'ok':True,'value':{'status':'complete','message':'Fixture selection captured'}}
+    bridge.start_shadow_batch = MethodType(record_selection, bridge)
 
 
 def main():
@@ -73,6 +89,24 @@ def main():
         def inspect():
             try:
                 wait("Boolean(document.querySelector('#run .version-check'))")
+                wait("Boolean(document.querySelector('#run-model')?.value)")
+                wait("Boolean(document.querySelector('#auto-model-name')?.value)")
+                for profile_id, protocol in [('codex-picker','codex-cli'),('claude-picker','claude-code')]:
+                    choice = 'fixture-'+protocol+'-only'
+                    window.evaluate_js("document.querySelector('#run-profile').value="+json.dumps(profile_id)+
+                        ";document.querySelector('#run-profile').dispatchEvent(new Event('change'))")
+                    wait("[...document.querySelector('#run-model').options].some(o=>o.value==="+json.dumps(choice)+")")
+                    window.evaluate_js("document.querySelector('#run-model').value="+json.dumps(choice)+
+                        ";document.querySelector('#run-model').dispatchEvent(new Event('change'))")
+                    if window.evaluate_js("document.querySelector('#auto-model-name').value") != 'fixture-model':
+                        raise AssertionError('Manual model selection overwrote the scheduled model')
+                    window.evaluate_js("document.querySelector('#start-batch').click()")
+                    wait("state.data.fixture_model_selection?.model==="+json.dumps(choice))
+                    selected = window.evaluate_js('state.data.fixture_model_selection')
+                    if selected != {'profile_id':profile_id,'model':choice}:
+                        raise AssertionError('Analysis request did not use the selected connection model')
+                report['connection_catalog_choices_reach_analysis'] = True
+                report['manual_model_does_not_change_schedule'] = True
                 if not window.evaluate_js("[...document.querySelectorAll('.version-check')].every(box=>"
                     "box.checked===state.runSelections.has(box.dataset.author+'/'+box.dataset.version))"):
                     raise AssertionError('Visible method selection differs from selected analysis methods')
