@@ -71,15 +71,29 @@ jobs:
           assert all(e[k].isdigit() for k in ('SOURCE_RUN','SOURCE_ARTIFACT','SOURCE_JOB'))
           assert re.fullmatch('[0-9a-f]{40}',e['SOURCE_SHA'])
           assert re.fullmatch(r'\d+\.\d+\.\d+',e['RELEASE_VERSION'])
+          run=api(f'actions/runs/{e["SOURCE_RUN"]}')
           job=api(f'actions/jobs/{e["SOURCE_JOB"]}')
           artifact=api(f'actions/artifacts/{e["SOURCE_ARTIFACT"]}')
-          assert job['run_id']==int(e['SOURCE_RUN']) and job['conclusion']=='success'
-          assert artifact['workflow_run']['id']==int(e['SOURCE_RUN']) and not artifact['expired']
+          assert run['id']==int(e['SOURCE_RUN']) and run['status']=='completed'
+          assert run['path']=='.github/workflows/build-desktop.yml'
+          assert run['repository']['full_name']==e['GH_REPO']
+          assert re.fullmatch('[0-9a-f]{40}',run['head_sha'])
+          assert job['id']==int(e['SOURCE_JOB']) and job['run_id']==run['id']
+          assert job['status']=='completed' and job['conclusion']=='success'
+          assert e['TARGET_PLATFORM'] in job['name']
+          assert artifact['id']==int(e['SOURCE_ARTIFACT']) and artifact['expired'] is False
+          assert artifact['workflow_run']['id']==run['id']
+          assert artifact['workflow_run']['head_sha']==run['head_sha']
+          assert artifact['workflow_run']['repository_id']==run['repository']['id']
+          assert artifact['workflow_run']['head_repository_id']==run['repository']['id']
+          assert re.fullmatch('sha256:[0-9a-f]{64}',artifact['digest'])
           assert artifact['name']=='SHAQ-Daily-Oracle-Lab-'+e['TARGET_PLATFORM']
           suffix='windows' if e['TARGET_PLATFORM']=='Windows-x64' else 'macos'
           tag=f'lab-v{e["RELEASE_VERSION"]}-{suffix}'
           release=next(r for r in api('releases?per_page=100') if r['tag_name']==tag)
           assert release['draft'] and release['target_commitish']==e['SOURCE_SHA']
+          with open('native-source.json','w') as f:
+              json.dump(dict(repository=e['GH_REPO'],run=run,job=job,artifact=artifact),f)
           with open(e['GITHUB_ENV'],'a') as f: f.write(f'RELEASE_TAG={tag}\n')
           PY
       - uses: actions/download-artifact@v4
@@ -89,9 +103,27 @@ jobs:
           artifact-ids: ${{ inputs.artifact_id }}
           merge-multiple: true
           path: native-artifact
+      - name: Read external layout hashes from the actual source run commit
+        run: |
+          python - <<'PY'
+          import base64,hashlib,json,os,subprocess
+          from pathlib import Path
+          source=json.loads(Path('native-source.json').read_text())
+          if Path('native-artifact/dist/diagnostic/external-layout-source.json').exists():
+              hashes={}
+              for relative in ('tests/native_layout_check.py','tests/native_geometry.py'):
+                  endpoint=f'repos/{os.environ["GH_REPO"]}/contents/{relative}?ref={source["run"]["head_sha"]}'
+                  content=json.loads(subprocess.check_output(['gh','api',endpoint]))
+                  assert content['type']=='file' and content['path']==relative and content['encoding']=='base64'
+                  raw=base64.b64decode(''.join(content['content'].split()),validate=True)
+                  assert len(raw)==content['size']
+                  hashes[relative]=hashlib.sha256(raw).hexdigest()
+              source['validation_files_sha256']=hashes
+              Path('native-source.json').write_text(json.dumps(source,indent=2)+'\n')
+          PY
       - name: Validate complete native acceptance and package hashes
         run: |
-          python packaging/stage_verified_assets.py --artifact native-artifact --output public-assets --platform "$TARGET_PLATFORM" --version "$RELEASE_VERSION" --commit "$SOURCE_SHA" --job-url "https://github.com/$GH_REPO/actions/runs/$SOURCE_RUN/job/$SOURCE_JOB"
+          python packaging/stage_verified_assets.py --artifact native-artifact --output public-assets --platform "$TARGET_PLATFORM" --version "$RELEASE_VERSION" --commit "$SOURCE_SHA" --job-url "https://github.com/$GH_REPO/actions/runs/$SOURCE_RUN/job/$SOURCE_JOB" --native-source native-source.json
       - name: Replace only unpublished draft assets
         run: gh release upload "$RELEASE_TAG" public-assets/* --clobber
       - name: Verify remote upload digests
@@ -115,5 +147,6 @@ jobs:
         with:
           name: verified-release-metadata-${{ inputs.platform }}
           path: |
+            native-source.json
             public-assets/Acceptance-*.json
             public-assets/SHA256SUMS-*.txt

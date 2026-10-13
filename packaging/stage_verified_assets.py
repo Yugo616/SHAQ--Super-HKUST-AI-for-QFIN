@@ -3,6 +3,7 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+import re
 import shutil
 import tarfile
 
@@ -23,6 +24,55 @@ def digest(path):
         return hashlib.file_digest(stream, 'sha256').hexdigest()
 
 
+def native_identity(source, commit, platform, job_url, layout, external):
+    if source is None:
+        if external is not None or layout.get('validation_sha'):
+            raise ValueError('External layout: independent native source metadata is required')
+        return None, None
+    run, job, artifact = (source.get(name, {}) for name in ('run', 'job', 'artifact'))
+    repository = source.get('repository', '')
+    origin, repo = artifact.get('workflow_run', {}), run.get('repository', {})
+    head = run.get('head_sha', '')
+    if (not re.fullmatch(r'[\w.-]+/[\w.-]+', repository) or
+            not re.fullmatch('[a-f0-9]{40}', head) or
+            any(type(row.get('id')) is not int or row['id'] <= 0 for row in (run, job, artifact)) or
+            run.get('path') != '.github/workflows/build-desktop.yml' or
+            run.get('status') != 'completed' or not run.get('conclusion') or
+            repo.get('full_name') != repository or not repo.get('id') or
+            job.get('run_id') != run['id'] or job.get('status') != 'completed' or
+            job.get('conclusion') != 'success' or platform not in job.get('name', '') or
+            origin.get('id') != run['id'] or origin.get('head_sha') != head or
+            origin.get('repository_id') != repo['id'] or origin.get('head_repository_id') != repo['id'] or
+            artifact.get('expired') is not False or
+            artifact.get('name') != 'SHAQ-Daily-Oracle-Lab-' + platform or
+            not re.fullmatch('sha256:[a-f0-9]{64}', artifact.get('digest', '')) or
+            job_url != f'https://github.com/{repository}/actions/runs/{run["id"]}/job/{job["id"]}'):
+        raise ValueError('Native source: source run/job/artifact identity mismatch')
+    binding = dict(repository=repository, application_sha=commit, platform=platform,
+        run_id=run['id'], run_head_sha=head, run_conclusion=run['conclusion'],
+        job_id=job['id'], job_name=job['name'], job_conclusion=job['conclusion'],
+        artifact_id=artifact['id'], artifact_name=artifact['name'], artifact_digest=artifact['digest'])
+    if external is None:
+        if head != commit or layout.get('application_sha') or layout.get('validation_sha'):
+            raise ValueError('External layout: source metadata is missing for the validation branch')
+        return binding, None
+    expected = dict(application_sha=commit, validation_sha=head,
+                    application_clean_before=True, application_clean_after=True)
+    if (any(external.get(key) != value for key, value in expected.items()) or
+            any(external.get(key) is not True for key in ('application_clean_before', 'application_clean_after')) or
+            layout.get('application_sha') != commit or layout.get('validation_sha') != head):
+        raise ValueError('External layout: application, validation or clean-check identity mismatch')
+    hashes = source.get('validation_files_sha256', {})
+    for field, path in (('layout_sha256', 'tests/native_layout_check.py'),
+                        ('geometry_sha256', 'tests/native_geometry.py')):
+        actual = hashes.get(path, '')
+        if not re.fullmatch('[a-f0-9]{64}', actual) or external.get(field) != actual:
+            raise ValueError('External layout: harness hash differs from the actual run commit')
+        expected[field] = actual
+    expected['source'] = 'GitHub commit content verified independently'
+    return binding, expected
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument('--artifact', type=Path, required=True)
@@ -32,6 +82,7 @@ def main():
     p.add_argument('--commit', required=True)
     p.add_argument('--job-url', required=True)
     p.add_argument('--native-public-recheck', type=Path)
+    p.add_argument('--native-source', type=Path)
     a = p.parse_args()
     root = a.artifact
     dist = root / 'dist'
@@ -39,6 +90,10 @@ def main():
     if meta['source_sha'] != a.commit or meta['source_dirty'] or meta['source_version'] != a.version:
         raise ValueError('Wrong source identity')
     layout = passed(dist / 'diagnostic/desktop-layout.json')
+    external_layout = dist / 'diagnostic/external-layout-source.json'
+    native_source, harness = native_identity(
+        read(a.native_source) if a.native_source else None, a.commit, a.platform, a.job_url,
+        layout, read(external_layout) if external_layout.exists() else None)
     transition = passed(dist / 'installed-update/acceptance.json')
     windows = a.platform == 'Windows-x64'
     reports = dist / 'diagnostic' if windows else dist
@@ -105,6 +160,10 @@ def main():
         limitations=['Native CI does not certify every personal Windows or Mac installation.',
             'Model calls use deterministic substitutes, not personal credentials.',
             'Live provider entitlement, regional connectivity and predictive performance are not certified.'])
+    if native_source is not None:
+        receipt['native_source'] = native_source
+    if harness is not None:
+        receipt['external_layout_harness'] = harness
     external = reports / 'validation-tests.json'
     if external.exists():
         validation = passed(external)
