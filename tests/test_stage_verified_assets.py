@@ -15,6 +15,18 @@ VALIDATION = 'b' * 40
 REPO = 'fixture/SHAQ'
 LAYOUT = hashlib.sha256(b'reviewed layout fixture').hexdigest()
 GEOMETRY = hashlib.sha256(b'unchanged geometry fixture').hexdigest()
+WINDOWS_BEFORE = 'Verify frozen application checkout and record both identities'
+WINDOWS_AFTER = 'Full installed frozen-app acceptance with bounded pre-apply setup recovery'
+WINDOWS_WORKFLOW = f'''jobs:
+  native:
+    steps:
+      - name: {WINDOWS_BEFORE}
+        run: |
+          if ($applicationSha -ne $env:APPLICATION_REF -or (git status --porcelain)) {{ throw 'Application must be the exact clean requested commit' }}
+      - name: {WINDOWS_AFTER}
+        run: |
+          if ((git rev-parse HEAD).Trim() -ne $env:SHAQ_LAYOUT_APPLICATION_SHA -or (git status --porcelain)) {{ throw 'Installed validation changed frozen application source' }}
+'''
 
 
 def write_json(path, data):
@@ -184,6 +196,41 @@ class StageVerifiedAssetsTests(unittest.TestCase):
         result = self.stage()
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('Acceptance failed: installed-native-audit.json', result.stderr)
+
+    def windows_external_fixture(self):
+        self.source = source_fixture(platform='Windows-x64')
+        self.source['job']['steps'] = [dict(name=name, status='completed', conclusion='success')
+                                       for name in (WINDOWS_BEFORE, WINDOWS_AFTER)]
+        self.source['validation_workflow_content'] = WINDOWS_WORKFLOW
+        self.source['validation_files_sha256']['.github/workflows/build-desktop.yml'] = hashlib.sha256(WINDOWS_WORKFLOW.encode()).hexdigest()
+        self.external = {key: value.upper() if key.endswith('_sha256') else value
+                         for key, value in self.external.items() if not key.startswith('application_clean_')}
+        self.populate(platform='Windows-x64')
+
+    def test_windows_legacy_receipt_uses_successful_clean_gates_bound_to_workflow(self):
+        self.windows_external_fixture()
+        result = self.stage()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        proof = self.receipt()['external_layout_harness']
+        self.assertIs(proof['application_clean_before'], True)
+        self.assertIs(proof['application_clean_after'], True)
+        self.assertEqual(proof['layout_sha256'], LAYOUT)
+        self.assertEqual(proof['clean_check_evidence']['after_step'], WINDOWS_AFTER)
+
+    def test_windows_clean_gates_cannot_be_inferred_from_overall_job_success(self):
+        for change in ('failed_step', 'missing_step', 'changed_command', 'wrong_workflow_hash', 'explicit_false'):
+            with self.subTest(change=change):
+                self.windows_external_fixture()
+                if change == 'failed_step': self.source['job']['steps'][-1]['conclusion'] = 'failure'
+                if change == 'missing_step': self.source['job']['steps'].pop()
+                if change == 'changed_command':
+                    self.source['validation_workflow_content'] = WINDOWS_WORKFLOW.replace('git status --porcelain', 'Write-Output passed')
+                    self.source['validation_files_sha256']['.github/workflows/build-desktop.yml'] = hashlib.sha256(self.source['validation_workflow_content'].encode()).hexdigest()
+                if change == 'wrong_workflow_hash': self.source['validation_files_sha256']['.github/workflows/build-desktop.yml'] = 'e' * 64
+                if change == 'explicit_false':
+                    self.external['application_clean_after'] = False
+                    write_json(self.dist / 'diagnostic/external-layout-source.json', self.external)
+                self.assert_rejected('External layout:')
 
     def test_existing_installer_checksum_is_still_required(self):
         (self.dist / f'SHAQ-Daily-Oracle-Lab-{self.platform}.dmg').write_bytes(b'corrupt installer')

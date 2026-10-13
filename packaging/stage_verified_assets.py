@@ -24,6 +24,33 @@ def digest(path):
         return hashlib.file_digest(stream, 'sha256').hexdigest()
 
 
+def windows_clean_gates(source):
+    """Older Windows receipts record clean checks in CI steps, not JSON flags."""
+    workflow = source.get('validation_workflow_content', '')
+    workflow_hash = source.get('validation_files_sha256', {}).get('.github/workflows/build-desktop.yml')
+    if not workflow or hashlib.sha256(workflow.encode()).hexdigest() != workflow_hash:
+        raise ValueError('External layout: independently bound workflow is required')
+    gates = (
+        ('Verify frozen application checkout and record both identities',
+         "if ($applicationSha -ne $env:APPLICATION_REF -or (git status --porcelain)) { throw 'Application must be the exact clean requested commit' }"),
+        ('Full installed frozen-app acceptance with bounded pre-apply setup recovery',
+         "if ((git rev-parse HEAD).Trim() -ne $env:SHAQ_LAYOUT_APPLICATION_SHA -or (git status --porcelain)) { throw 'Installed validation changed frozen application source' }"),
+    )
+    lines = workflow.splitlines()
+    for name, guard in gates:
+        runs = [step for step in source['job'].get('steps', []) if step.get('name') == name]
+        starts = [i for i, line in enumerate(lines) if line.strip() == '- name: ' + name]
+        if len(runs) != 1 or runs[0].get('status') != 'completed' or runs[0].get('conclusion') != 'success' or len(starts) != 1:
+            raise ValueError('External layout: required clean gate did not pass')
+        start = starts[0]
+        indent = len(lines[start]) - len(lines[start].lstrip())
+        end = next((i for i in range(start + 1, len(lines))
+                    if lines[i].strip().startswith('- ') and len(lines[i]) - len(lines[i].lstrip()) <= indent), len(lines))
+        if guard not in [line.strip() for line in lines[start + 1:end]]:
+            raise ValueError('External layout: workflow clean guard differs')
+    return dict(workflow_sha256=workflow_hash, before_step=gates[0][0], after_step=gates[1][0])
+
+
 def native_identity(source, commit, platform, job_url, layout, external):
     if source is None:
         if external is not None or layout.get('validation_sha'):
@@ -56,6 +83,11 @@ def native_identity(source, commit, platform, job_url, layout, external):
         if head != commit or layout.get('application_sha') or layout.get('validation_sha'):
             raise ValueError('External layout: source metadata is missing for the validation branch')
         return binding, None
+    external = dict(external)
+    clean_evidence = None
+    if platform == 'Windows-x64' and not any(key in external for key in ('application_clean_before', 'application_clean_after')):
+        clean_evidence = windows_clean_gates(source)
+        external.update(application_clean_before=True, application_clean_after=True)
     expected = dict(application_sha=commit, validation_sha=head,
                     application_clean_before=True, application_clean_after=True)
     if (any(external.get(key) != value for key, value in expected.items()) or
@@ -66,10 +98,12 @@ def native_identity(source, commit, platform, job_url, layout, external):
     for field, path in (('layout_sha256', 'tests/native_layout_check.py'),
                         ('geometry_sha256', 'tests/native_geometry.py')):
         actual = hashes.get(path, '')
-        if not re.fullmatch('[a-f0-9]{64}', actual) or external.get(field) != actual:
+        if not re.fullmatch('[a-f0-9]{64}', actual) or str(external.get(field, '')).lower() != actual:
             raise ValueError('External layout: harness hash differs from the actual run commit')
         expected[field] = actual
     expected['source'] = 'GitHub commit content verified independently'
+    if clean_evidence is not None:
+        expected['clean_check_evidence'] = clean_evidence
     return binding, expected
 
 

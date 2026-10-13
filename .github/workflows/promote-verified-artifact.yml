@@ -111,13 +111,18 @@ jobs:
           source=json.loads(Path('native-source.json').read_text())
           if Path('native-artifact/dist/diagnostic/external-layout-source.json').exists():
               hashes={}
-              for relative in ('tests/native_layout_check.py','tests/native_geometry.py'):
+              paths=['tests/native_layout_check.py','tests/native_geometry.py']
+              if os.environ['TARGET_PLATFORM']=='Windows-x64':
+                  paths.append('.github/workflows/build-desktop.yml')
+              for relative in paths:
                   endpoint=f'repos/{os.environ["GH_REPO"]}/contents/{relative}?ref={source["run"]["head_sha"]}'
                   content=json.loads(subprocess.check_output(['gh','api',endpoint]))
                   assert content['type']=='file' and content['path']==relative and content['encoding']=='base64'
                   raw=base64.b64decode(''.join(content['content'].split()),validate=True)
                   assert len(raw)==content['size']
                   hashes[relative]=hashlib.sha256(raw).hexdigest()
+                  if relative=='.github/workflows/build-desktop.yml':
+                      source['validation_workflow_content']=raw.decode('utf-8')
               source['validation_files_sha256']=hashes
               Path('native-source.json').write_text(json.dumps(source,indent=2)+'\n')
           PY

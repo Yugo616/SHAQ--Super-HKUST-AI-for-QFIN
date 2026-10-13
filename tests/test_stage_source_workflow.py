@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from test_stage_verified_assets import APP, VALIDATION, REPO, source_fixture, write_json
+from test_stage_verified_assets import APP, VALIDATION, REPO, source_fixture, write_json, WINDOWS_WORKFLOW
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -93,6 +93,20 @@ class StageSourceWorkflowTests(unittest.TestCase):
         self.execute('Read external layout hashes from the actual source run commit')
         source = json.loads((self.root / 'native-source.json').read_text())
         self.assertNotIn('validation_files_sha256', source)
+
+    def test_windows_clean_gate_source_is_fetched_from_actual_run_commit(self):
+        self.env['TARGET_PLATFORM'] = 'Windows-x64'
+        write_json(self.root / 'native-source.json', self.source)
+        write_json(self.root / 'native-artifact/dist/diagnostic/external-layout-source.json', {})
+        for relative, raw in [('tests/native_layout_check.py', b'layout'), ('tests/native_geometry.py', b'geometry'),
+                              ('.github/workflows/build-desktop.yml', WINDOWS_WORKFLOW.encode())]:
+            self.api[f'contents/{relative}?ref={VALIDATION}'] = dict(type='file', path=relative, encoding='base64',
+                size=len(raw), content=base64.b64encode(raw).decode())
+        self.execute('Read external layout hashes from the actual source run commit')
+        source = json.loads((self.root / 'native-source.json').read_text())
+        self.assertEqual(source['validation_workflow_content'], WINDOWS_WORKFLOW)
+        self.assertEqual(source['validation_files_sha256']['.github/workflows/build-desktop.yml'],
+                         hashlib.sha256(WINDOWS_WORKFLOW.encode()).hexdigest())
 
 if __name__ == '__main__':
     unittest.main()
