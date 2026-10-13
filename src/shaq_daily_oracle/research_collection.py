@@ -682,6 +682,10 @@ def collect_research_evidence(
         for packet in public_packets:
             name = packet["provider"]
             packet_status = packet["status"]
+            if name == 'nasdaq_earnings':
+                packet.update(directional_event_eligible=False,
+                    interpretation_boundary='A scheduled earnings calendar and pre-release expectations only. '
+                        'This does not establish released results, an earnings surprise, or a directional company event.')
             public_completed += packet_status == "collected"
             public_with_data += packet_status == "collected" and bool(packet.get("data"))
             public_failed |= packet_status == "provider_error"
@@ -691,7 +695,8 @@ def collect_research_evidence(
                 files[f"raw/public/{name}.source"] = raw
             files[f"raw/public/{name}.json"] = _json_bytes(packet)
             if packet["status"] == "collected" and packet.get("data"):
-                records.append({"evidence_id": "ev_public_"+name, "domain": "market", "provider": name,
+                records.append({"evidence_id": "ev_public_"+name,
+                    "domain": "event" if name == 'nasdaq_earnings' else "market", "provider": name,
                     "source_uri": packet["source_uri"], "captured_at": packet["captured_at"],
                     "raw_file_path": f"raw/public/{name}.json",
                     "scope_symbols": [str(r['symbol']) for r in packet['data'] if r.get('symbol')] if name == 'nasdaq_earnings' else ["*"],

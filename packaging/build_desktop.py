@@ -179,8 +179,17 @@ def stage_version(root, version):
     return target
 
 
+def native_icon(root, suffix):
+    path = root / 'packaging/icons' / ('shaq.' + suffix)
+    if not path.is_file():
+        raise FileNotFoundError(f'Missing native application icon: {path}')
+    return path
+
+
 def pyinstaller_args(root, output, name, blosc2_library=None, project_metadata=None):
+    suffix = {'darwin': 'icns', 'win32': 'ico'}.get(sys.platform, 'png')
     args = ['--noconfirm', '--clean', '--windowed', '--onedir', '--name', name,
+            '--icon', str(native_icon(root, suffix)),
             '--paths', str(root / 'src'), '--distpath', str(output),
             '--runtime-hook', str(root / 'packaging/frozen_native.py'),
             '--workpath', str(root / 'build/desktop-native'), '--specpath', str(root / 'build')]
@@ -198,6 +207,8 @@ def pyinstaller_args(root, output, name, blosc2_library=None, project_metadata=N
         args += ['--collect-data', package]
     for resource in ('config', 'governance', 'schemas', 'skills', 'decision', 'bundled_versions'):
         args += ['--add-data', f'{root / resource}:{resource}']
+    for suffix in ('png', 'ico', 'icns'):
+        args += ['--add-data', f'{native_icon(root, suffix)}:packaging/icons']
     args += ['--add-data', f'{project_metadata or root / "pyproject.toml"}:.',
              '--add-data', f'{root / "src/shaq_daily_oracle/desktop"}:shaq_daily_oracle/desktop',
              '--add-data', f'{root / "build/third-party"}:third-party',
@@ -211,8 +222,12 @@ def set_macos_bundle_identity(root, app, version=None):
         raise ValueError('Native bundle version must be a final numeric project triplet')
     path = app / 'Contents/Info.plist'
     data = plistlib.loads(path.read_bytes())
+    icon = native_icon(root, 'icns')
+    resources = app / 'Contents/Resources'
+    resources.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(icon, resources / icon.name)
     data.update(CFBundleVersion=version, CFBundleShortVersionString=version,
-                CFBundleIdentifier='io.shaq.dailyoracle.lab')
+                CFBundleIdentifier='io.shaq.dailyoracle.lab', CFBundleIconFile=icon.name)
     path.write_bytes(plistlib.dumps(data))
 
 
@@ -338,6 +353,7 @@ def managed_pack_args(root, payload, output, version, system, machine):
     args = ['pack', '--packId', updates['package_id'], '--packVersion', version,
             '--packDir', str(payload), '--mainExe', main, '--packTitle', payload.stem,
             '--runtime', tools['runtimes'][key], '--channel', updates['channels'][key],
+            '--icon', str(native_icon(root, 'icns' if system == 'Darwin' else 'ico')),
             '--outputDir', str(output)]
     if system == 'Darwin':
         args += ['--noInst', 'true', '--signAppIdentity', '-']

@@ -65,8 +65,25 @@ class DesktopBridge:
                 gate.finish_restart(application_version(self.paths.package_root))
                 self._startup_confirmation_pending = False
             self._software_updater().start_automatic_checks()
+            self._start_notifications()
             return {'ready':True}
         return self._result(confirm, _update_control=True)
+
+    def _start_notifications(self):
+        if self.window is None or getattr(self, '_notifications', None) is not None:
+            return
+        from .desktop_activity import DesktopNotifications, event_script
+        config = json.loads((Path(__file__).with_name('desktop') / 'interface.json').read_text())
+        def activity(revision):
+            result = self.get_lab_activity(revision)
+            if not result['ok']:
+                raise RuntimeError(result['error'])
+            return result['value']
+        self._notifications = DesktopNotifications(activity,
+            lambda: self._software_updater().notification_status(),
+            lambda name, value: self.window.run_js(event_script(name, value)),
+            interval=float(config['notification_interval_seconds']))
+        self._notifications.start()
 
     def _result(self, action, *args, _update_control=False, **kwargs) -> dict[str, Any]:
         try:
@@ -690,6 +707,17 @@ def _bind_gui_smoke_fixture(bridge, fixture_state, fixture_detail):
     bridge.transfer_methods = MethodType(fixture_transfer_write_api, bridge)
 
 
+def _close_desktop_resources(bridge, lifetime, temporary):
+    if temporary:
+        # An admitted ready callback can still start notification readers.
+        # Drain fixture RPCs first; ordinary windows do not wait for analysis.
+        lifetime.close()
+    if getattr(bridge, '_notifications', None) is not None:
+        bridge._notifications.close()
+    if temporary:
+        temporary.cleanup()
+
+
 def launch_desktop(*, smoke_output: Path | None = None) -> int:
     if sys.platform == 'win32' and getattr(sys, 'frozen', False) and smoke_output is None:
         # Upgrade from an installer created under another user must not leave
@@ -757,7 +785,7 @@ def launch_desktop(*, smoke_output: Path | None = None) -> int:
         width=1320,
         height=860,
         min_size=(980, 680),
-        background_color="#f4f7fb",
+        background_color="#ffffff",
     )
     bridge.window = window
     result = {'status': 'failed', 'pages': [], 'model_calls': 'not tested'}
@@ -877,7 +905,7 @@ def launch_desktop(*, smoke_output: Path | None = None) -> int:
                 raise RuntimeError('Native connection retry failed')
             result['connection_retry_fixture'] = True
             window.evaluate_js("document.querySelector('#close-setup').click(); "
-                               "document.querySelector('#software-update-button').click()")
+                               "document.querySelector('#manual-software-update').click()")
             deadline = time.monotonic() + 6
             while time.monotonic() < deadline:
                 if window.evaluate_js("document.querySelector('#software-update-modal').open && "
@@ -1001,12 +1029,7 @@ def launch_desktop(*, smoke_output: Path | None = None) -> int:
             bridge._software_updater().gui_session = session
             webview.start(inspect_window if smoke_output else None, debug=False, private_mode=True)
     finally:
-        if temporary:
-            # pywebview dispatches RPCs on independent threads. Stop admissions
-            # and drain those short fixture requests before deleting their root.
-            # Ordinary window closure never waits for or kills analysis workers.
-            lifetime.close()
-            temporary.cleanup()
+        _close_desktop_resources(bridge, lifetime, temporary)
     return 0 if not smoke_output or result['status'] == 'passed' else 2
 
 

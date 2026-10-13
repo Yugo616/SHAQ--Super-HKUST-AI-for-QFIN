@@ -188,6 +188,7 @@ async function loadState(showError=true){
     // Keep that live state without discarding the completed history response.
     if(state.activityRevision!==activityRevision&&state.data){
       value.jobs=state.data.jobs;value.result_refresh=state.data.result_refresh;
+      value.formal_operator=state.data.formal_operator;
       value.clock={...value.clock,...state.data.clock};
     }
     // Read user-owned view state after the asynchronous response, not before it.
@@ -258,7 +259,8 @@ function preserveReadingView(root){
     for(let node=element;node&&node!==root;node=node.parentElement){
       const data=node.dataset||{};
       const key=data.viewKey||data.progressJob||data.researchSection||data.batch||data.accountBatch||(data.version?`${data.author||'team'}/${data.version}`:null);
-      if(key)parts.push(node.tagName+':'+key);
+      if(node.id)parts.push('#'+node.id);
+      else if(key)parts.push(node.tagName+':'+key);
       else if(node.tagName==='DETAILS')parts.push('details:'+node.querySelector?.(':scope > summary')?.textContent?.trim());
       else if(node.name)parts.push(node.tagName+':'+node.name);
     }
@@ -288,12 +290,9 @@ function preserveReadingView(root){
     root.scrollTop=top;root.scrollLeft=left;
   };
 }
-async function pollDesktopActivity(){
-  if(!state.data||pollDesktopActivity.busy)return;
-  pollDesktopActivity.busy=true;
-  try{
-    const value=await api('get_lab_activity',state.activityRevision||'');
-    if(!value.changed){
+function applyDesktopActivity(value){
+    if(!state.data)return;
+    if(!value.changed||value.revision===state.activityRevision){
       if(typeof SHAQProgress!=='undefined')SHAQProgress.updateClocks(state.data.jobs||[],value.observed_at);
       return;
     }
@@ -301,26 +300,39 @@ async function pollDesktopActivity(){
     const pageScroll=window.scrollY||0,restore=preserveReadingView(q('#'+state.page));
     state.activityRevision=value.revision;
     state.data.jobs=value.jobs;state.data.result_refresh=value.result_refresh;
+    if(value.formal_operator)state.data.formal_operator=value.formal_operator;
     state.data.clock={...state.data.clock,...value.clock,et:value.observed_at};
     if(typeof updateRunClockStatus==='function')updateRunClockStatus();
     render(false,false);
     if(typeof refreshRunProgress==='function')refreshRunProgress();
+    if(typeof refreshFormalProgress==='function')refreshFormalProgress();
     restore();window.scrollTo?.(0,pageScroll);
     // Show live work before the slower immutable-history verification.
     const terminal=job=>!['queued','running'].includes(job.status);
     const finished=value.jobs.some(job=>terminal(job)&&!previous.some(old=>old.job_id===job.job_id&&old.status===job.status));
     if(finished||(['complete','partial_failure','failed'].includes(value.result_refresh.status)&&
        JSON.stringify(oldRefresh)!==JSON.stringify(value.result_refresh)))void load(false);
+}
+async function pollDesktopActivity(){
+  if(!state.data||pollDesktopActivity.busy)return;
+  pollDesktopActivity.busy=true;
+  const revision=state.activityRevision||'';
+  try{
+    const value=await api('get_lab_activity',revision);
+    if((state.activityRevision||'')===revision)applyDesktopActivity(value);
   }catch(error){
-    // Keep current reports on a transient polling failure; do not mark research failed.
+    // A reconnect read keeps the current report visible on temporary failure.
     const target=q('#activity-status');if(target)target.textContent='进度同步暂未完成，稍后自动重试。';
   }finally{pollDesktopActivity.busy=false}
 }
 function tickLocalClock(now=new Date()){
   const element=q('#local-clock');
   if(element)element.textContent='本地 '+now.toLocaleTimeString('zh-CN',{hour12:false});
+  if(typeof state!=='undefined'&&state.data&&typeof SHAQProgress!=='undefined')SHAQProgress.updateClocks(state.data.jobs||[],now.toISOString());
 }
 async function startDesktop(){if(await load()){await api('confirm_desktop_ready');void api('check_result_refresh_due').catch(()=>{});}}
-qa('.nav').forEach(b=>b.onclick=()=>showPage(b.dataset.page));q('#refresh-button').onclick=async()=>{try{const value=await api('refresh_prices_and_results');state.data.result_refresh=value;render(false,false);await load(false)}catch(e){notice(e.message,true)}};window.addEventListener('pywebviewready',()=>startDesktop().catch(e=>notice(e.message,true)));setInterval(()=>{void pollDesktopActivity()},10000);setInterval(async()=>{try{const r=await api("check_result_refresh_due");if(["running","already_running"].includes(r.status))await load(false)}catch(e){}},60*1000);
+qa('.nav').forEach(b=>b.onclick=()=>showPage(b.dataset.page));q('#refresh-button').onclick=async()=>{try{const value=await api('refresh_prices_and_results');state.data.result_refresh=value;render(false,false);await load(false)}catch(e){notice(e.message,true)}};window.addEventListener('pywebviewready',()=>startDesktop().catch(e=>notice(e.message,true)));setInterval(async()=>{try{await api('check_result_refresh_due')}catch(e){}},60*1000);
+window.addEventListener('shaq:activity',event=>applyDesktopActivity(event.detail));
+window.addEventListener('shaq:activity-status',event=>{const target=q('#activity-status');if(target)target.textContent=event.detail.connected?'':'进度连接恢复中，分析继续运行。';});
 setInterval(()=>tickLocalClock(),1000);
 document.addEventListener('visibilitychange',()=>{if(!document.hidden){tickLocalClock();void pollDesktopActivity();}});

@@ -120,9 +120,14 @@ def _verified_model_call(path: Path) -> dict[str, Any]:
     if sha256_payload(value.get("audit")) != value.get("audit_sha256"):
         raise ResearchDashboardError("model call audit hash mismatch")
     audit = value.get("audit", {})
+    from .model_execution import verified_request_prompt
+    try:
+        actual_prompt = verified_request_prompt(value)
+    except ValueError as exc:
+        raise ResearchDashboardError(str(exc)) from exc
     if (
         audit.get("profile_sha256") != key_document.get("profile_sha256")
-        or audit.get("prompt_sha256") != key_document.get("prompt_sha256")
+        or audit.get("prompt_sha256") != hashlib.sha256(actual_prompt.encode('utf-8')).hexdigest()
         or audit.get("schema_sha256") != key_document.get("schema_sha256")
         or audit.get("output_sha256") != value.get("result_sha256")
     ):
@@ -626,6 +631,7 @@ class ResearchDashboardIndex:
                 "completed_at_et": audit.get("completed_at_et"),
             })
         variants = {}
+        candidate_recoveries = {}
         expected_model_calls: dict[str, str] = {}
         for path in sorted((root / "variants").glob("*/variant_result.json")):
             result = _verified_variant(path)
@@ -645,6 +651,20 @@ class ResearchDashboardIndex:
                 if previous != document_hash:
                     raise ResearchDashboardError("variant model call hash conflict")
             variants[key] = result
+            recovery_path = path.parent / 'candidate_recovery.json'
+            if recovery_path.is_file():
+                recovery = json.loads(recovery_path.read_text(encoding='utf-8'))
+                if (recovery.get('recovery_sha256') != sha256_payload({k:v for k,v in recovery.items() if k!='recovery_sha256'})
+                        or recovery.get('variant_result_sha256') != result['variant_result_sha256']
+                        or set(recovery.get('reports_by_symbol', {})) != set(result.get('excluded_candidates', {}))):
+                    raise ResearchDashboardError('candidate recovery integrity mismatch')
+                from .research_batch import validate_candidate_recovery
+                try:
+                    validate_candidate_recovery(recovery, result, evidence, skill_snapshots[key]['documents'],
+                        manifest, call_documents)
+                except (ValueError, KeyError, TypeError) as exc:
+                    raise ResearchDashboardError('candidate recovery report verification failed') from exc
+                candidate_recoveries[key] = recovery
         actual_model_calls = {
             row["cache_key"]: row["cache_document_sha256"] for row in model_calls
         }
@@ -658,8 +678,26 @@ class ResearchDashboardIndex:
         if extras:
             from .research_batch import authenticated_failed_checkpoints
             try:
+                recoverable = {**failed, **{key: {} for key, value in variants.items()
+                                           if value.get('excluded_candidates')}}
+                for path in sorted((root/'attempts').glob('*.json')):
+                    try:
+                        previous = _read(path, {})
+                        if not isinstance(previous, dict) or path.stem != sha256_payload(previous):
+                            continue
+                        previous = _verified_batch_status(previous, batch_id)
+                        previous_failed = previous.get('failed_variants', {})
+                        previous_completed = previous.get('completed_variants', [])
+                        if (not isinstance(previous_failed, dict) or not isinstance(previous_completed, list)
+                                or not set(previous_failed) <= set(skill_snapshots)
+                                or not set(previous_completed) <= set(skill_snapshots)
+                                or set(previous_failed) & set(previous_completed)):
+                            continue
+                    except (OSError, ValueError, TypeError):
+                        continue  # An invalid old attempt cannot authorize an extra checkpoint.
+                    recoverable.update(previous_failed)
                 authenticated = authenticated_failed_checkpoints(evidence=evidence, manifest=manifest,
-                    skill_snapshots=skill_snapshots, failed_variants=failed, calls=call_documents)
+                    skill_snapshots=skill_snapshots, failed_variants=recoverable, calls=call_documents)
             except (ValueError, KeyError, TypeError) as exc:
                 raise ResearchDashboardError('failed variant checkpoint authentication failed') from exc
             if not extras <= authenticated:
@@ -694,6 +732,7 @@ class ResearchDashboardIndex:
             models[key] = display_model(value, model_calls, annotation)
         return {
             "batch_id": batch_id, "manifest": manifest, "status": status,
+            "candidate_recoveries": candidate_recoveries,
             "replay_summaries": summaries, "version_comparisons": comparisons,
             "evidence": {
                 "evidence_hash": evidence.manifest["evidence_hash"],

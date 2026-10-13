@@ -134,7 +134,7 @@ class UpdateRuntime:
         self._lock = threading.RLock()
         self._state = {'status': 'unchecked', 'mode': 'installer_only'}
         self._manager = self._info = None
-        self._last_attempt = 0
+        self._last_attempt = None
 
     def _read_local(self, name, default):
         try:
@@ -151,6 +151,15 @@ class UpdateRuntime:
                     'target_version':self._state.get('latest_version') or self._read_local('software-update-check.json', {}).get('target_version'),
                     'last_checked_at':self._read_local('software-update-check.json', {}).get('checked_at')}
 
+    def notification_status(self):
+        """Skip a busy updater so its network work cannot delay desktop activity."""
+        if not self._lock.acquire(blocking=False):
+            return None
+        try:
+            return self.status()
+        finally:
+            self._lock.release()
+
     def set_automatic(self, enabled):
         from .settings import _atomic_json
         from .update_admission import gate_for
@@ -161,27 +170,24 @@ class UpdateRuntime:
         return self.status()
 
     def automatic_step(self):
-        from .update_admission import UpdateBusy
         with self._lock:
             self._runtime_admission.assert_current()
             if self._state.get('queued_apply_method') == 'manual' and self._state['status'] == 'ready':
                 if self._state.get('queued_apply_target_version') != self._state.get('latest_version'):
                     raise ValueError('等待更新的目标版本发生变化，请重新确认')
                 return self.apply(method='manual')
-            if not self.status()['automatic_enabled']:
-                return self.status()
+            automatic = self.status()['automatic_enabled']
             state = self._state['status']
             if state == 'ready':
-                return self.apply(method='automatic')
-            if state == 'available' and self._state.get('mode') == 'managed':
+                return self.apply(method='automatic') if automatic else self.status()
+            if automatic and state == 'available' and self._state.get('mode') == 'managed':
                 return self.download()
             if state in {'downloading','applying'}:
                 return self.status()
             config = json.loads((self.paths.package_root / 'config/software-updates.json').read_text(encoding='utf-8'))
-            if time.monotonic() - self._last_attempt >= config['automatic_check_interval_seconds']:
-                self._last_attempt = time.monotonic()
+            if self._last_attempt is None or time.monotonic() - self._last_attempt >= config['automatic_check_interval_seconds']:
                 self.check()
-                if self._state['status'] == 'available' and self._state.get('mode') == 'managed':
+                if automatic and self._state['status'] == 'available' and self._state.get('mode') == 'managed':
                     return self.download()
             return self.status()
 
@@ -204,6 +210,7 @@ class UpdateRuntime:
         with self._lock, self._runtime_admission.work():
             if self._state['status'] in {'downloading', 'ready', 'applying'}:
                 return self.status()
+            self._last_attempt = time.monotonic()
             self._manager = self._info = None
             self._state = {**self._state, 'status': 'checking'}
             try:

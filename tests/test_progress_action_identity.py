@@ -70,6 +70,7 @@ const retry={{dataset:{{progressRetry:'j'}},disabled:false}};
 const main={{dataset:{{author:'team',version:'main'}},checked:true}};
 const failed={{dataset:{{author:'team',version:'failed'}},checked:false}};
 const target={{innerHTML:''}};
+global.SHAQDOM={{update:(target,html)=>{{target.innerHTML=html}}}};
 let starts=0,estimates=0,updates=0;
 const state={{page:'run',runSelections:new Set(['team/main']),data:{{jobs:[{{job_id:'j',status:'failed',variant_progress:{{'team/main':'complete','team/failed':'failed'}}}}],versions:[],clock:{{et:'2026-09-23T08:35:00-04:00'}}}}}};
 const q=key=>key==='#today-progress'?target:{{focus(){{}}}};

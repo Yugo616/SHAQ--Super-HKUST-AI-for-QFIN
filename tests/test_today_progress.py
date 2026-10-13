@@ -5,6 +5,22 @@ from pathlib import Path
 
 
 class TodayProgressTests(unittest.TestCase):
+    def test_live_clock_changes_text_without_replacing_progress_or_details(self):
+        self.run_js(r'''
+const assert=require('node:assert/strict');
+const timer={textContent:''}, attempt={dataset:{callStart:'2026-09-17T08:35:00-04:00'},textContent:''};
+const summary={set outerHTML(value){throw new Error('replaced progress');}};
+const article={dataset:{progressJob:'live'},querySelector:q=>q==='[data-progress-clock]'?timer:summary,
+ querySelectorAll:()=>[attempt]};
+global.document={querySelectorAll:()=>[article]};
+const job={job_id:'live',status:'running',progress_summary:{stage:'domain_analysis',started_at:'2026-09-17T08:35:00-04:00',last_event_at:'2026-09-17T08:36:00-04:00'}};
+ui.updateClocks([job],'2026-09-17T08:36:01-04:00');
+assert.match(timer.textContent,/1分1秒/);assert.match(attempt.textContent,/61秒/);
+const previous=timer.textContent;
+ui.updateClocks([{...job,status:'complete'}],'2026-09-17T10:00:00-04:00');
+assert.equal(timer.textContent,previous,'terminal clocks stop');
+''')
+
     def test_supplementary_volume_failure_does_not_overwrite_ready_prices(self):
         self.run_js(r'''
 const assert=require('node:assert/strict');

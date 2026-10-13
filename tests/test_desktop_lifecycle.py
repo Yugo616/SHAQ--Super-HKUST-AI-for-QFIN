@@ -7,6 +7,52 @@ from shaq_daily_oracle.desktop import desktop_api
 
 
 class DesktopLifecycleTests(unittest.TestCase):
+    def test_fixture_close_drains_ready_rpc_before_stopping_its_new_readers(self):
+        from types import MethodType, SimpleNamespace
+        from unittest.mock import patch
+        from shaq_daily_oracle.desktop import DesktopBridge, GuiRequestLifetime, _close_desktop_resources
+        from shaq_daily_oracle.desktop_activity import DesktopNotifications
+        entered, release, closed = threading.Event(), threading.Event(), threading.Event()
+        bridge = DesktopBridge.__new__(DesktopBridge)
+        bridge._startup_confirmation_pending = False
+        bridge.window = SimpleNamespace(run_js=lambda script: None)
+        updater = SimpleNamespace(start_automatic_checks=lambda: None, notification_status=lambda: None)
+        bridge._software_updater = lambda: updater
+        bridge.get_lab_activity = MethodType(lambda self, revision='': {'ok': True, 'value': {'changed': False}}, bridge)
+        class DelayedNotifications(DesktopNotifications):
+            def __init__(self, *args, **kwargs):
+                entered.set()
+                if not release.wait(5):
+                    raise RuntimeError('ready callback was not released')
+                super().__init__(*args, **kwargs)
+        lifetime = GuiRequestLifetime()
+        api = desktop_api(bridge, lifetime=lifetime)
+        reader_states = []
+        temporary = SimpleNamespace(cleanup=lambda: reader_states.extend(
+            thread.is_alive() for thread in bridge._notifications._threads))
+        def close():
+            _close_desktop_resources(bridge, lifetime, temporary)
+            closed.set()
+        with patch('shaq_daily_oracle.desktop_activity.DesktopNotifications', DelayedNotifications):
+            ready = threading.Thread(target=api.confirm_desktop_ready)
+            closer = threading.Thread(target=close)
+            try:
+                ready.start()
+                self.assertTrue(entered.wait(5))
+                closer.start()
+                self.assertFalse(closed.wait(.05))
+                release.set()
+                ready.join(5); closer.join(5)
+                self.assertTrue(closed.is_set())
+                self.assertEqual(reader_states, [False, False], 'temporary data cleanup overtook newly admitted readers')
+            finally:
+                release.set()
+                ready.join(5)
+                if closer.ident is not None:
+                    closer.join(5)
+                if getattr(bridge, '_notifications', None) is not None:
+                    bridge._notifications.close()
+
     def test_smoke_price_refresh_updates_dashboard_and_detail_together(self):
         from types import SimpleNamespace
         from shaq_daily_oracle.desktop import _bind_gui_smoke_fixture

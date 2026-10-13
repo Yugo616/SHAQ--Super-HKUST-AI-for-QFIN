@@ -188,6 +188,7 @@ class LabService:
         )
         self.jobs: dict[str, dict[str, Any]] = {}
         self.jobs_lock = threading.Lock()
+        self._activity_lock = threading.Lock()
         from .virtual_accounts import AccountStore, AccountRules
         account_store = AccountStore(paths.research_root / 'virtual_accounts')
         if not (account_store.root / 'activation.json').exists():
@@ -518,6 +519,12 @@ class LabService:
 
     def activity_status(self, revision: str = '') -> dict[str, Any]:
         """Discover external scheduler writes without indexing history or keys."""
+        with self._activity_lock:
+            return self._activity_status(revision)
+
+    def _activity_status(self, revision: str) -> dict[str, Any]:
+        from .job_corrections import observed_job_status
+        from .operator_control import status as operator_status
         root = self.paths.research_root
         files = [self._result_refresh_receipt]
         for directory in ('jobs', 'job_corrections', 'automatic_runs'):
@@ -532,17 +539,31 @@ class LabService:
                 continue
         with self.jobs_lock:
             memory = {key: dict(value) for key, value in self.jobs.items()}
-        jobs = self.job_statuses()
         refresh = self.result_refresh_status()
         clock = today_collection_status(datetime.now(ET))
-        current = sha256_payload({'files': stamps, 'jobs': memory,
-            'live_jobs': [(row.get('job_id'), row.get('status'), row.get('live_state')) for row in jobs],
+        formal = operator_status(self.paths)
+        source = sha256_payload({'files': stamps, 'jobs': memory,
+            'formal_operator': formal,
             'refresh_status': refresh.get('status'),
             'clock': {key: clock.get(key) for key in ('trade_date','today_available','today_message')}})
+        cached = getattr(self, '_activity_cache', None)
+        if cached and cached['source'] == source:
+            # Only active lock ownership can change without a file write. Keep
+            # checking it, but do not reread/summarize every historical report.
+            jobs = cached['jobs']
+            if any(observed_job_status(root, row).get('status') != row.get('status')
+                   for row in jobs if row.get('status') in {'queued', 'running'}):
+                jobs = self.job_statuses()
+        else:
+            jobs = self.job_statuses()
+        current = sha256_payload({'source': source,
+            'live_jobs': [(row.get('job_id'), row.get('status'), row.get('live_state')) for row in jobs],
+        })
+        self._activity_cache = {'source': source, 'jobs': jobs}
         value = dict(revision=current, changed=current != revision,
                      observed_at=datetime.now(ET).isoformat(), clock=clock)
         if value['changed']:
-            value.update(jobs=jobs, result_refresh=refresh)
+            value.update(jobs=jobs, result_refresh=refresh, formal_operator=formal)
         return value
 
     def compare_methods(
@@ -1383,7 +1404,10 @@ class LabService:
             )
             completed = result["status"]["all_variants_completed"]
             completed_count = len(result['status'].get('completed_variants', []))
-            variant_errors = result['status'].get('failed_variants', {})
+            variant_errors = {**result['status'].get('failed_variants', {}),
+                              **result['status'].get('incomplete_variants', {})}
+            for key in result['status'].get('incomplete_variants', {}):
+                self._variant_progress(job_id, key, 'partial_failure')
             final_status = 'complete' if completed else ('partial_failure' if completed_count else 'failed')
             self._set_job(
                 job_id, status=final_status,

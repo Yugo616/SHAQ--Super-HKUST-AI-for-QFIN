@@ -37,12 +37,15 @@ class BackgroundLifecycleTests(unittest.TestCase):
         import threading
         with tempfile.TemporaryDirectory() as tmp:
             lab=LabService.__new__(LabService)
-            lab.paths=SimpleNamespace(research_root=Path(tmp))
-            lab.jobs_lock=threading.Lock();lab.jobs={}
+            lab.paths=SimpleNamespace(research_root=Path(tmp),runtime_root=Path(tmp)/'runtime',
+                                      config_root=Path(tmp)/'config',data_root=Path(tmp))
+            lab.jobs_lock=threading.Lock();lab._activity_lock=threading.Lock()
+            lab.jobs={'job-x':{'job_id':'job-x','status':'running','execution_lock_protocol':1}}
             lab.result_refresh_status=lambda:{'status':'idle'}
-            lab.job_statuses=Mock(return_value=[{'job_id':'job-x','status':'running'}])
-            first=lab.activity_status()
-            lab.job_statuses.return_value=[{'job_id':'job-x','status':'incomplete','live_state':'interrupted'}]
+            (Path(tmp)/'jobs').mkdir()
+            with FileLock(str(Path(tmp)/'jobs/job-x.lock')):
+                first=lab.activity_status()
+                self.assertEqual(first['jobs'][0]['status'],'running')
             second=lab.activity_status(first['revision'])
             self.assertTrue(second['changed'])
             self.assertEqual(second['jobs'][0]['status'],'incomplete')

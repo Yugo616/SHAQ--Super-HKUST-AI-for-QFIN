@@ -49,7 +49,7 @@ class ModelRetryProgressTests(unittest.TestCase):
         self.assertEqual(len(restarted), 1)
         for event, attempt in [(failed[0], 1), (scheduled[0], 2), (restarted[0], 2)]:
             self.assertEqual(event['attempt'], attempt)
-            self.assertEqual(event['max_attempts'], 2)
+            self.assertEqual(event['max_attempts'], 3)  # transport + citation correction budgets
             self.assertEqual(event['domain'], failed[0]['domain'])
             self.assertEqual(event['symbols'], failed[0]['symbols'])
             self.assertEqual(event['call_id'], failed[0]['call_id'])

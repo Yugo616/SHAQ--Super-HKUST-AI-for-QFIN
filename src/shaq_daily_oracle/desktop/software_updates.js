@@ -1,9 +1,15 @@
-let softwareUpdateTimer;
 function renderSoftwareUpdate(value) {
+  if(!value||typeof value!=='object')return;
   const target=q('#software-update-detail');
   const labels={available:'有新版本可下载',current:'已是最新发布版',local_newer:'本机版本比公开安装包更新',
     no_release:'还没有适合这台电脑的安装包',unsupported:'暂不提供此平台安装包',unknown_local_version:'无法识别本机版本',
-    downloading:'正在后台下载并校验',ready:'更新已准备就绪',applying:'正在更新并重启',download_failed:'下载或校验失败'};
+    downloading:'正在后台下载并校验',ready:'更新已准备就绪',applying:'正在更新并重启',download_failed:'下载或校验失败',
+    checking:'正在检查软件更新',check_failed:'暂时无法检查软件更新',unchecked:'尚未检查软件更新'};
+  const indicator=q('#software-update-button');
+  indicator.hidden=!['available','downloading','ready','download_failed'].includes(value.status);
+  indicator.dataset.status=value.status||'unchecked';
+  indicator.title=labels[value.status]||'软件更新';
+  indicator.ariaLabel=indicator.title;
   const managed=value.mode==='managed';
   const timestamp=value=>value?`<time datetime="${esc(value)}">${esc(new Date(value).toLocaleString())}</time>`:'暂无记录';
   const size=bytes=>`${(Number(bytes||0)/1048576).toFixed(1)} MB`;
@@ -16,8 +22,8 @@ function renderSoftwareUpdate(value) {
   target.innerHTML=`<h3>${labels[value.status]||'检查完成'}</h3><p>${esc(value.platform||'')} · 当前 ${esc(value.current_version)}${value.latest_version?` · 最新 ${esc(value.latest_version)}${value.internal_test_release?'（内部测试版）':''}`:''}</p>
     <p>${esc(value.waiting_for_idle?'已下载，等待本地任务运行完更新':value.message||'旧安装仅提供完整安装包：请等待分析和结算结束，关闭应用后安装。')}</p>
     ${value.target_version?`<p>更新目标版本：${esc(value.target_version)}</p>`:''}
-    <label class="check-row"><input type="checkbox" id="automatic-software-update" ${value.automatic_enabled?'checked':''}>自动软件更新（默认关闭）</label>
-    <p>仅在应用打开时自动检查、下载，并等待所有本地任务结束后更新重启；不会更改自动预测开关、模型或方法包。</p>
+    <label class="check-row"><input type="checkbox" id="automatic-software-update" ${value.automatic_enabled?'checked':''}>自动下载并安装更新（默认关闭）</label>
+    <p>应用打开时会自动检查新版；启用后自动下载，并等待所有本地任务结束后更新重启。不会更改自动预测开关、模型或方法包。</p>
     <p>最近检查：${timestamp(value.last_checked_at)}<br>上次成功更新：${value.last_update?`${esc(value.last_update.version)} · ${value.last_update.method==='automatic'?'自动':'手动'} · ${timestamp(value.last_update.completed_at)}`:'暂无已确认记录'}</p>
     ${managed?`<p>预计下载 ${size(value.download_size_bytes)}；完整包 ${size(value.size_bytes)}</p>`:''}
     ${value.status==='downloading'?`<progress max="100" value="${Number(value.progress)||0}"></progress><span>${Number(value.progress)||0}%</span>`:''}
@@ -52,13 +58,6 @@ function renderSoftwareUpdate(value) {
   };
   if(!['downloading','applying'].includes(value.status))q('#retry-software-check').onclick=checkSoftwareUpdate;
   }
-  clearTimeout(softwareUpdateTimer);
-  if(q('#software-update-modal').open&&(value.status==='downloading'||value.waiting_for_idle||value.automatic_enabled))softwareUpdateTimer=setTimeout(pollSoftwareUpdate,700);
-}
-async function pollSoftwareUpdate() {
-  if(!q('#software-update-modal').open||q('#software-update-detail').dataset.checking==='true')return;
-  try {renderSoftwareUpdate(await api('software_update_status'));}
-  catch(error){q('#software-update-error').textContent=error.message;softwareUpdateTimer=setTimeout(pollSoftwareUpdate,2000);}
 }
 async function checkSoftwareUpdate() {
   const target=q('#software-update-detail');
@@ -79,5 +78,7 @@ async function checkSoftwareUpdate() {
     }
   } finally {target.dataset.checking='false';}
 }
+window.SHAQSoftwareUpdates={applyStatus:renderSoftwareUpdate,manualCheck:checkSoftwareUpdate};
+window.addEventListener('shaq:software-update',event=>renderSoftwareUpdate(event.detail));
 document.querySelector('#software-update-button').onclick=checkSoftwareUpdate;
-document.querySelector('#software-update-modal').addEventListener('close',()=>clearTimeout(softwareUpdateTimer));
+document.querySelector('#manual-software-update')?.addEventListener('click',checkSoftwareUpdate);

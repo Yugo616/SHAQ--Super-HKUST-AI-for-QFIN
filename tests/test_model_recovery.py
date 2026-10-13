@@ -257,7 +257,11 @@ class BatchRecoveryTests(unittest.TestCase):
             result=runner.run(evidence=evidence,variants=[helper.main_variant(registry)],
                 profile=helper.profile(),secret='',caller=initial)
             self.assertEqual(failed,['AAPL','AAPL'])
-            self.assertEqual(len(list((Path(result['batch_root'])/'model_calls').glob('*.json'))),2)
+            # Each market task is now stock-isolated and MSFT's review may finish
+            # while AAPL remains incomplete. Its valid result must stay visible.
+            self.assertEqual(len(list((Path(result['batch_root'])/'model_calls').glob('*.json'))),4)
+            self.assertIn('team/main',result['results'])
+            self.assertEqual(set(result['results']['team/main']['excluded_candidates']),{'AAPL'})
             recalled=[]
             def resumed(**kwargs):
                 if 'FROZEN TASKS:\n' in kwargs['prompt']:
@@ -305,7 +309,7 @@ class BatchRecoveryTests(unittest.TestCase):
             self.assertEqual(len(seen),2)
             self.assertEqual(done['manifest']['batch_identity'],identity)
 
-    def test_failed_domain_does_not_stop_independent_domains_and_resume_uses_snapshot(self):
+    def test_failed_candidate_stops_fresh_domains_and_resume_uses_snapshot(self):
         from shaq_daily_oracle.research_batch import ResearchBatchRunner
         helper=fixtures.ResearchBatchTests()
         with tempfile.TemporaryDirectory() as name:
@@ -323,9 +327,9 @@ class BatchRecoveryTests(unittest.TestCase):
                 else:self.fail('downstream call before all reports complete')
                 return model(**kwargs)
             result=runner.run(evidence=evidence,variants=[variant],profile=helper.profile(),secret='',caller=fail_market)
-            self.assertEqual(attempted,['market','market','price_volume'])
+            self.assertEqual(attempted,['market','market'])
             self.assertFalse(result['status']['all_variants_completed'])
-            self.assertEqual(len(list((Path(result['batch_root'])/'model_calls').glob('*.json'))),1)
+            self.assertEqual(len(list((Path(result['batch_root'])/'model_calls').glob('*.json'))),0)
             resumed_calls=[]
             def resume_caller(**kwargs):
                 resumed_calls.append(kwargs['prompt'])
@@ -334,7 +338,7 @@ class BatchRecoveryTests(unittest.TestCase):
                 resumed=runner.resume(batch_id=result['status']['batch_id'],evidence=evidence,
                     profile=helper.profile(),secret='',caller=resume_caller)
             self.assertTrue(resumed['status']['all_variants_completed'])
-            self.assertEqual(len(resumed_calls),2)
+            self.assertEqual(len(resumed_calls),3)
             self.assertFalse(next(iter(resumed['results'].values()))['score_eligible'])
             completed=next(iter(resumed['results'].values()))['completed_at_et']
             again=runner.resume(batch_id=result['status']['batch_id'],evidence=evidence,

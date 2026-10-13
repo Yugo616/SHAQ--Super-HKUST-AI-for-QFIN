@@ -194,6 +194,90 @@ class UpdateRuntimeTests(unittest.TestCase):
             fixture_version.start()
             self.addCleanup(fixture_version.stop)
 
+    def test_discovery_checks_at_startup_and_interval_without_automatic_installation(self):
+        interval = json.loads((ROOT / 'config/software-updates.json').read_text())['automatic_check_interval_seconds']
+        with tempfile.TemporaryDirectory() as directory:
+            runtime, manager, selected, feed = self.runtime(directory)
+            transfers = []
+            manager.download_updates = lambda *args: transfers.append('download')
+            manager.apply_updates_and_restart = lambda *args: transfers.append('apply')
+            clock = [0]
+            with patch.object(updates.time, 'monotonic', side_effect=lambda: clock[0]), \
+                    patch.object(updates, 'check_releases', return_value=selected) as discovery, \
+                    patch.object(updates.platform, 'system', return_value='Darwin'), \
+                    patch.object(updates.platform, 'machine', return_value='arm64'), \
+                    patch.object(updates, 'read_update_feed', return_value=feed):
+                state = runtime.automatic_step()
+                self.assertEqual(state['status'], 'available')
+                self.assertFalse(state['automatic_enabled'])
+                self.assertTrue(state['last_checked_at'])
+                self.assertEqual(discovery.call_count, 1)
+                clock[0] = interval - 1
+                runtime.automatic_step()
+                self.assertEqual(discovery.call_count, 1)
+                clock[0] = interval
+                runtime.automatic_step()
+                self.assertEqual(discovery.call_count, 2)
+            self.assertEqual(transfers, [])
+            self.assertFalse((Path(directory) / 'software-update-preferences.json').exists())
+
+    def test_failed_discovery_waits_for_configured_interval_with_automatic_off(self):
+        interval = json.loads((ROOT / 'config/software-updates.json').read_text())['automatic_check_interval_seconds']
+        with tempfile.TemporaryDirectory() as directory:
+            runtime, _, _, _ = self.runtime(directory)
+            clock = [0]
+            with patch.object(updates.time, 'monotonic', side_effect=lambda: clock[0]), \
+                    patch.object(updates, 'check_releases', side_effect=OSError('offline')) as discovery:
+                with self.assertRaises(OSError):
+                    runtime.automatic_step()
+                self.assertEqual(runtime.status()['status'], 'check_failed')
+                clock[0] = interval - 1
+                self.assertEqual(runtime.automatic_step()['status'], 'check_failed')
+                self.assertEqual(discovery.call_count, 1)
+                clock[0] = interval
+                with self.assertRaises(OSError):
+                    runtime.automatic_step()
+                self.assertEqual(discovery.call_count, 2)
+
+    def test_manual_check_resets_periodic_discovery_deadline(self):
+        interval = json.loads((ROOT / 'config/software-updates.json').read_text())['automatic_check_interval_seconds']
+        with tempfile.TemporaryDirectory() as directory:
+            runtime, _, selected, feed = self.runtime(directory)
+            runtime.set_automatic(True)
+            selected.update(status='current', latest_version='0.6.2')
+            with patch.object(updates.time, 'monotonic', return_value=interval):
+                self.check(runtime, selected, feed)
+            with patch.object(updates.time, 'monotonic', return_value=interval + 1), \
+                    patch.object(updates, 'check_releases', return_value=selected) as discovery, \
+                    patch.object(updates.platform, 'system', return_value='Darwin'), \
+                    patch.object(updates.platform, 'machine', return_value='arm64'):
+                self.assertEqual(runtime.automatic_step()['status'], 'current')
+                self.assertEqual(discovery.call_count, 0)
+            self.assertTrue(runtime.status()['automatic_enabled'])
+
+    def test_notification_status_skips_busy_lock_and_returns_current_snapshot_afterward(self):
+        with tempfile.TemporaryDirectory() as directory:
+            runtime, _, _, _ = self.runtime(directory)
+            self.assertTrue(callable(getattr(runtime, 'notification_status', None)))
+            locked, release = threading.Event(), threading.Event()
+            def hold_update_lock():
+                with runtime._lock:
+                    locked.set()
+                    release.wait(3)
+            worker = threading.Thread(target=hold_update_lock)
+            worker.start()
+            try:
+                self.assertTrue(locked.wait(3))
+                self.assertIsNone(runtime.notification_status())
+                self.assertFalse(release.is_set())
+            finally:
+                release.set()
+                worker.join(3)
+            snapshot = runtime.notification_status()
+            self.assertEqual(snapshot, runtime.status())
+            snapshot['status'] = 'changed by caller'
+            self.assertEqual(runtime.status()['status'], 'unchecked')
+
     def test_feed_without_content_identity_explicitly_uses_full_not_delta(self):
         with tempfile.TemporaryDirectory() as directory:
             runtime,manager,selected,feed=self.runtime(directory,delta=True)
@@ -305,7 +389,8 @@ class UpdateRuntimeTests(unittest.TestCase):
                 self.assertFalse(old._result(lambda:'old write')['ok'])
                 self.assertTrue((gate.root/'installing.json').exists())
                 self.assertFalse((paths.data_root/'software-update-history.json').exists())
-                self.assertTrue(bridge.confirm_desktop_ready()['ok'])
+                with patch.object(bridge._software_updater(), 'start_automatic_checks'):
+                    self.assertTrue(bridge.confirm_desktop_ready()['ok'])
                 self.assertTrue(bridge._result(lambda:'still current')['ok'])
             self.assertFalse((gate.root/'installing.json').exists())
             self.assertEqual(json.loads((paths.data_root/'software-update-history.json').read_text())['version'],'0.6.2')
@@ -364,7 +449,6 @@ class UpdateRuntimeTests(unittest.TestCase):
             runtime,manager,selected,feed=self.runtime(directory)
             self.assertTrue(hasattr(runtime,'automatic_step'))
             self.assertFalse(runtime.status()['automatic_enabled'])
-            self.assertEqual(runtime.automatic_step()['status'],'unchecked')
             runtime.set_automatic(True)
             manager.download_updates=lambda info,progress:None
             applied=[];manager.apply_updates_and_restart=lambda info:applied.append(info)

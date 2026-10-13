@@ -66,6 +66,10 @@ def main():
         def inspect():
             try:
                 wait("Boolean(document.querySelector('#run .version-check'))")
+                if not window.evaluate_js("[...document.querySelectorAll('.version-check')].every(box=>"
+                    "box.checked===state.runSelections.has(box.dataset.author+'/'+box.dataset.version))"):
+                    raise AssertionError('Visible method selection differs from selected analysis methods')
+                report['method_selection_matches_controls'] = True
                 report['initial_geometry'] = capture_geometry(window)
                 for width in (1320, 980):
                     resize_css_width(window, width, report['geometry'])
@@ -92,7 +96,7 @@ def main():
                     window.evaluate_js("document.querySelector('#execution-policy-form').closest('details').open=true")
                     measure(f'{width} advanced execution policy', '#execution-policy-form')
                     window.evaluate_js("document.querySelector('#close-setup').click(); "
-                        "document.querySelector('#software-update-button').click()")
+                        "document.querySelector('#manual-software-update').click()")
                     wait("Boolean(document.querySelector('#automatic-software-update'))")
                     measure(f'{width} software update', '#software-update-modal')
                     window.evaluate_js("document.querySelector('#software-update-modal').close(); "
@@ -157,6 +161,51 @@ def main():
                 wait("Boolean(document.querySelector('[data-progress-job=resume-fixture-original-batch] .overall-progress'))")
                 report['external_job_discovery'] = True
                 report['backend_total_progress'] = True
+                report['progress_node_checks'] = window.evaluate_js("""
+                    window.fixtureLiveBar=document.querySelector('.overall-progress progress');
+                    window.fixtureLiveSummary=document.querySelector('.overall-progress');
+                    window.fixtureLiveDetails=document.querySelector('[data-progress-variant]');
+                    fixtureLiveDetails.open=true;
+                    const live=JSON.parse(JSON.stringify(state.data.jobs));
+                    const visible=live.find(job=>job.job_id===fixtureLiveBar.closest('[data-progress-job]').dataset.progressJob);
+                    visible.progress_summary.completed_tasks+=1;
+                    visible.progress_summary.total_tasks=Math.max(visible.progress_summary.total_tasks,visible.progress_summary.completed_tasks+1);
+                    window.dispatchEvent(new CustomEvent('shaq:activity',{detail:{
+                        changed:true,revision:'native-fixture-progress',jobs:live,
+                        result_refresh:state.data.result_refresh,clock:state.data.clock,
+                        observed_at:state.data.clock.et}}));
+                    tickLocalClock(new Date(state.data.clock.et));
+                    ({bar:fixtureLiveBar===document.querySelector('.overall-progress progress'),
+                      summary:fixtureLiveSummary===document.querySelector('.overall-progress'),
+                      details:fixtureLiveDetails===document.querySelector('[data-progress-variant]'),
+                      open:fixtureLiveDetails.open,
+                      value:fixtureLiveBar.value===visible.progress_summary.completed_tasks});
+                """)
+                if not all(report['progress_node_checks'].values()):
+                    raise AssertionError('Native notification replaced a live progress/control node')
+                report['native_notification_retained_progress_nodes'] = True
+                report['formal_node_checks'] = window.evaluate_js("""
+                    state.data.formal_operator={connected:true,session_date:'fixture',
+                        service:{state:'workflow_running'},runs:[]};
+                    refreshFormalProgress();
+                    window.fixtureFormalLive=document.querySelector('#formal-live');
+                    window.fixtureFormalDetail=document.querySelector('#formal-detail');
+                    fixtureFormalDetail.textContent='opened report';
+                    state.data.formal_operator.service.state='workflow_complete';
+                    refreshFormalProgress();
+                    const retained={live:fixtureFormalLive===document.querySelector('#formal-live'),
+                        detail:fixtureFormalDetail===document.querySelector('#formal-detail'),
+                        content:fixtureFormalDetail.textContent==='opened report',
+                        status:fixtureFormalLive.textContent.includes('正式流程完成')};
+                    state.data.formal_operator.connected=false;refreshFormalProgress();
+                    retained.disconnected=!document.querySelector('#formal-operator');
+                    retained;
+                """)
+                if not all(report['formal_node_checks'].values()):
+                    raise AssertionError('Formal status update lost the report or retained disconnected controls')
+                if not window.evaluate_js("document.querySelector('#software-update-button').hidden"):
+                    raise AssertionError('No-release fixture displayed an update button')
+                report['no_release_hides_update_button'] = True
                 window.evaluate_js("document.querySelector('#connections-button').click()")
                 wait("Boolean(document.querySelector('#execution-policy-form').onsubmit)")
                 if not window.evaluate_js("document.querySelector('#execution-policy-form').elements.timeout_seconds.value==='600' && "
@@ -171,7 +220,7 @@ def main():
                 report['advanced_execution_policy_submit'] = True
                 report['status'] = 'failed' if report['failures'] else 'passed'
                 if args.hold:
-                    window.evaluate_js("document.querySelector('#software-update-button').click()")
+                    window.evaluate_js("document.querySelector('#manual-software-update').click()")
                     time.sleep(args.hold)
             except Exception as exc:
                 report['status'] = 'failed'

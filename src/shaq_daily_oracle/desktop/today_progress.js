@@ -31,7 +31,7 @@ const SHAQProgress = (() => {
   }
   function attemptStatus(event, now){
     if(!event)return '等待';
-    if(event.stage==='model_retry_scheduled')return `正在自动重试 · 第 ${Number(event.attempt||1)} / ${Number(event.max_attempts||1)} 次尝试${event.next_retry_at?' · 下一次 '+new Date(event.next_retry_at).toLocaleTimeString('zh-CN',{hour12:false}):''}`;
+    if(event.stage==='model_retry_scheduled')return `${event.retry_reason==='citation_validation'?'引用校验未通过，正在重新生成':'正在自动重试'} · 第 ${Number(event.attempt||1)} / ${Number(event.max_attempts||1)} 次尝试${event.next_retry_at?' · 下一次 '+new Date(event.next_retry_at).toLocaleTimeString('zh-CN',{hour12:false}):''}`;
     if(event.status==='failed')return failureText(event);
     const start=Date.parse(event.occurred_at_et),end=Date.parse(now);
     const elapsed=Number.isFinite(start)&&Number.isFinite(end)?`，已用时 ${Math.max(0,Math.floor((end-start)/1000))}秒`:'';
@@ -86,7 +86,7 @@ const SHAQProgress = (() => {
   }
   function retryVersions(job) {
     return Object.entries(job.variant_progress || {}).filter(([,status]) =>
-      status === 'failed' || status === 'incomplete' || (['failed','incomplete'].includes(job.status) && status !== 'complete'))
+      status === 'failed' || status === 'incomplete' || status === 'partial_failure' || (['failed','incomplete'].includes(job.status) && status !== 'complete'))
       .map(([key]) => {const [author, ...rest] = key.split('/'); return {author,version_id:rest.join('/')};});
   }
   function scheduleText(value) {
@@ -150,24 +150,28 @@ const SHAQProgress = (() => {
     });
     return rows.length?`<section class="finalization-progress"><h4>3 · 汇总结果</h4>${rows.join('')}</section>`:'';
   }
-  function overallHtml(job,now){
-    const value=job.progress_summary;if(!value)return '';
-    const known=Number.isInteger(value.total_tasks),done=job.status==='complete';
-    const amount=known?`${value.completed_tasks} / ${value.total_tasks} 项`:(done?'已完成':'等待任务清单');
-    const bar=done?'<progress max="1" value="1" aria-label="整体进度"></progress>':known?`<progress max="${Math.max(1,value.total_tasks)}" value="${value.completed_tasks}" aria-label="整体进度"></progress>`:'';
+  function progressClock(job,now){
+    const value=job.progress_summary||{};
     const stage={preparation:'准备数据',screening:'筛选候选',domain_analysis:'六领域分析',adversary:'反方审查',decision:'最终决策',complete:'已完成',incomplete:'未完成'}[value.stage]||'准备中';
     const duration=seconds=>seconds<60?`${seconds}秒`:`${Math.floor(seconds/60)}分${seconds%60}秒`;
     const started=Date.parse(value.started_at),end=Date.parse(active(job)?now:value.completed_at);
     const elapsed=Number.isFinite(started)&&Number.isFinite(end)?` · ${active(job)?'已运行':'用时'} ${duration(Math.max(0,Math.floor((end-started)/1000)))}`:'';
     const observed=Date.parse(value.last_event_at),time=Date.parse(now);
     const age=active(job)&&Number.isFinite(observed)&&Number.isFinite(time)?` · 最近进展 ${duration(Math.max(0,Math.floor((time-observed)/1000)))}前`:'';
-    return `<section class="overall-progress"><b>${done?'今日研究已完成':`当前阶段：${esc(stage)}`}</b><label>整体进度 · ${esc(amount)}${bar}</label><small>${esc(stage+elapsed+age)}</small></section>`;
+    return stage+elapsed+age;
+  }
+  function overallHtml(job,now){
+    const value=job.progress_summary;if(!value)return '';
+    const known=Number.isInteger(value.total_tasks),done=job.status==='complete';
+    const amount=known?`${value.completed_tasks} / ${value.total_tasks} 项`:(done?'已完成':'等待任务清单');
+    const bar=done?'<progress max="1" value="1" aria-label="整体进度"></progress>':known?`<progress max="${Math.max(1,value.total_tasks)}" value="${value.completed_tasks}" aria-label="整体进度"></progress>`:'';
+    return `<section class="overall-progress"><b>${done?'今日研究已完成':'当前研究进度'}</b><label>整体进度 · ${esc(amount)}${bar}</label><small data-progress-clock>${esc(progressClock(job,now))}</small></section>`;
   }
   function updateClocks(jobs,now){
     for(const article of document.querySelectorAll('[data-progress-job]')){
       const job=jobs.find(row=>row.job_id===article.dataset.progressJob);
-      const summary=article.querySelector('.overall-progress');
-      if(job&&active(job)&&summary)summary.outerHTML=overallHtml(job,now);
+      const clock=article.querySelector('[data-progress-clock]');
+      if(job&&active(job)&&clock)clock.textContent=progressClock(job,now);
       if(job&&active(job))for(const node of article.querySelectorAll('[data-call-start]')){
         node.textContent=attemptStatus({occurred_at_et:node.dataset.callStart},now);
       }
@@ -202,7 +206,7 @@ const SHAQProgress = (() => {
           progress.total===null?'':`<progress max="${Math.max(1,progress.total)}" value="${progress.complete}" aria-label="${esc(names(key))}：${esc(text)}"></progress>`;
         return `<details class="research-progress variant-progress" data-view-key="${esc(key)}" data-progress-variant="${esc(key)}"><summary><span>${esc(names(key))} · ${esc(status(executionState))}</span>${bar}<small>${text}</small></summary>${reason}${compactResearchHtml(progress,executionState,now)}</details>`;
       }).join('');
-      return `<article class="progress-batch" data-progress-job="${esc(job.job_id)}"><header><span>${esc(previousDay?carry.slice(3):'本次运行')}</span><b>${esc(status(job.status))}</b></header>${overallHtml(job,now)}${preparationHtml(job)}${versionsHtml?'<h4>2 · 两版分析</h4>'+versionsHtml:''}${finalizationHtml(job,names)}<div class="progress-actions">${job.batch_id ? `<button class="text-button" data-progress-result="${esc(job.batch_id)}">查看结果</button>` : ''}${retryVersions(job).length && !active(job) ? `<button class="secondary" data-progress-retry="${esc(job.job_id)}">${job.batch_id?'继续未完成分析':'重试数据准备'}</button>` : ''}</div></article>`;
+      return `<article class="progress-batch" data-progress-job="${esc(job.job_id)}"><header><span>${esc(previousDay?carry.slice(3):'本次运行')}</span><b>${esc(status(job.status))}</b></header>${overallHtml(job,now)}${versionsHtml}<details class="progress-stage-details" data-view-key="stages"><summary>数据与汇总详情</summary>${preparationHtml(job)}${finalizationHtml(job,names)}</details><div class="progress-actions">${job.batch_id ? `<button class="text-button" data-progress-result="${esc(job.batch_id)}">查看结果</button>` : ''}${retryVersions(job).length && !active(job) ? `<button class="secondary" data-progress-retry="${esc(job.job_id)}">${job.batch_id?'继续未完成分析':'重试数据准备'}</button>` : ''}</div></article>`;
     }).join('');
   }
   function researchHtml(events, legacyReports, selection={}) {

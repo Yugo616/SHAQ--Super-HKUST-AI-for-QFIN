@@ -123,6 +123,18 @@ if(typeof document!=='undefined'){
   window.showCandidate=function(batchId,key,symbol){
     beforeCandidate(batchId,key,symbol);
     const batch=state.selectedBatch,variant=batch?.variants?.[key];
+    const recovered=batch?.candidate_recoveries?.[key];
+    const recoveredReports=recovered?.reports_by_symbol?.[symbol];
+    if(recoveredReports){
+      const area=q('#candidate-analysis .domains');
+      if(area)area.innerHTML=recoveredReports.map(r=>`<article class="domain"><h4>${esc(moduleName(r.domain))} · ${dir(r.verdict)}</h4><p><b>支持理由：</b>${esc(r.thesis)}</p><p><b>反方：</b>${esc(r.antithesis)}</p><p><b>未知：</b>${esc((r.unknowns||[]).join('；')||'无')}</p><p><b>失效条件：</b>${esc((r.invalidation||[]).join('；')||'无')}</p></article>`).join('');
+      const review=q('#candidate-analysis .adversary');
+      if(review)review.textContent='补充反方审查：'+(recovered.adversary_by_symbol?.[symbol]?.strongest_countercase||'—');
+      const title=q('#candidate-analysis h2');if(title)title.textContent=symbol+' · 分析已补齐，原发布结果保持不变';
+      const catalog=Object.fromEntries((batch.evidence?.catalog||[]).map(row=>[row.evidence_id,row]));
+      const ids=[...new Set(recoveredReports.flatMap(row=>row.evidence_ids||[]))];
+      q('#candidate-analysis')?.insertAdjacentHTML('beforeend',`<details><summary>补充分析引用依据</summary>${ids.map(id=>{const e=catalog[id]||{};return `<p>${esc(id)} · ${esc(e.provider||'')}<br>${esc(e.source_uri||'')}<br>${esc(e.captured_at||'')} · ${esc(e.raw_sha256||'')}</p>`}).join('')}</details>`);
+    }
     const prediction=variant?.predictions?.find(row=>row.symbol===symbol)||{};
     const value=SHAQResults.outcome(batch?.labels?.labels?.[symbol],prediction);
     const panel=q('#candidate-analysis .aftermarket');
@@ -130,7 +142,7 @@ if(typeof document!=='undefined'){
     const trade=day?.trades?.find(row=>row.symbol===symbol);
     const clock=value=>value?String(value).slice(11,16)+' ET':'时间未记录';
     if(panel)panel.innerHTML=`<b>盘后方向成绩</b><div class="replay-price-grid"><section><b>官方开盘 → 收盘</b><p>开盘 ${SHAQAccounts.usd(value.opening)} · 收盘 ${SHAQAccounts.usd(value.closing)}</p><p>开收涨跌幅 ${value.change===null?'—':value.change.toFixed(2)+'%'} · ${value.correct===null?'—':value.correct?'正确':'错误'}</p></section><section><b>模拟开仓 → 平仓</b>${trade?`<p>${esc(clock(trade.entry_reference_at_et||day.entry_reference_at_et))} 参考价 ${SHAQAccounts.usd(trade.entry_reference_open)} · 模拟成交价 ${SHAQAccounts.usd(trade.entry_price)}</p><p>${esc(clock(trade.exit_reference_at_et||day.exit_reference_at_et))} 参考价 ${SHAQAccounts.usd(trade.exit_reference_open)} · 模拟成交价 ${SHAQAccounts.usd(trade.exit_price)}</p><p>${esc(trade.quantity??'—')} 股 · 净盈亏 ${SHAQAccounts.usd(trade.status==='closed'?trade.net_pnl:null)}</p>`:'<p>尚无模拟成交记录</p>'}</section></div>`;
-    qa('#candidate-analysis .domain h4').forEach((heading,index)=>{const report=variant?.reports_by_symbol?.[symbol]?.[index];if(report)heading.textContent=moduleName(report.domain)+' · '+dir(report.verdict)});
+    qa('#candidate-analysis .domain h4').forEach((heading,index)=>{const report=(recoveredReports||variant?.reports_by_symbol?.[symbol])?.[index];if(report)heading.textContent=moduleName(report.domain)+' · '+dir(report.verdict)});
   };
 
   renderHistory=function(){

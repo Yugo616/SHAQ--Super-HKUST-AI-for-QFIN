@@ -5,22 +5,23 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>SHAQ Daily Oracle Lab</title>
   <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="flat.css">
 </head>
 <body>
   <aside class="sidebar">
-    <div class="brand"><div class="mark">S</div><div><strong>SHAQ</strong><span>DAILY ORACLE LAB</span></div></div>
-    <nav>
-      <button class="nav active" data-page="run">开始运行</button>
-      <button class="nav" data-page="editor">修改版本</button>
-      <button class="nav" data-page="history">查看结果</button>
+    <div class="brand"><img class="brand-icon" src="brand.svg" alt=""><strong>SHAQ</strong></div>
+    <nav aria-label="工作区">
+      <button class="nav active" data-page="run"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 11 7-11 7Z"/></svg><span>运行分析</span></button>
+      <button class="nav" data-page="editor"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h9M4 12h6M4 18h12m1-13 3 3-8 8-4 1 1-4Z"/></svg><span>修改方法</span></button>
+      <button class="nav" data-page="history"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4v16h15M9 15l4-5 3 2 4-7"/></svg><span>查看结果</span></button>
       <button class="nav hidden" id="operator-nav" data-page="operator">Mac 操作员</button>
     </nav>
-    <div class="sidebar-foot"><span id="service-dot" class="dot"></span><span id="service-text">正在读取本地记录</span></div>
+    <div class="sidebar-bottom"><button class="nav" id="connections-button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 17h16M9 4v6m6 4v6"/></svg><span>连接与设置</span></button><div class="sidebar-foot"><span id="service-dot" class="dot"></span><span id="service-text">正在读取本地记录</span></div></div>
   </aside>
   <main>
-    <header>
+    <header class="workspace-header">
       <div><h1 id="page-title">开始运行</h1></div>
-      <div class="header-actions"><button class="secondary" id="connections-button">连接设置</button><button class="secondary" id="software-update-button">软件更新</button></div>
+      <div class="header-actions"><button class="update-indicator" id="software-update-button" hidden aria-label="下载软件更新" title="下载软件更新"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11m-4-4 4 4 4-4M5 16v4h14v-4"/></svg></button></div>
     </header>
     <section id="result-update-controls" hidden>
       <div class="header-actions"><span id="refresh-status" role="status"></span><progress id="refresh-progress" hidden aria-label="更新价格与成绩"></progress><button class="secondary" id="refresh-button">更新价格与成绩</button></div>
@@ -88,6 +89,7 @@
         <section><b>3</b><div><h3>SEC 研究身份</h3><form id="research-form" class="form-grid"><label class="wide">团队名称与联系邮箱<input name="sec_identity" placeholder="Research Team contact@example.edu" required></label><button class="primary wide" type="submit">保存身份</button></form><p id="research-status" class="inline-status"></p></div></section>
         <section><b>4</b><div><h3>数据连接</h3><div id="data-connections"></div></div></section>
         <section><b>5</b><div><h3>数据与本地空间</h3><p>检查版本化股票池、数据配置和本机研究目录是否可写。</p><button class="secondary" id="check-research-environment">检查并进入工作台</button><p id="environment-status" class="inline-status"></p></div></section>
+        <section><b>6</b><div><h3>软件更新</h3><p>后台自动检查新版本，有更新时会在工作台显示下载按钮。</p><button class="secondary" id="manual-software-update" type="button">检查软件更新</button></div></section>
       </div>
     </div>
   </div>
@@ -105,6 +107,7 @@
     <div id="software-update-detail"></div>
   </dialog>
   <script src="comparison.js"></script>
+  <script src="dom.js"></script>
   <script src="app.js"></script>
   <script src="today_progress.js"></script>
   <script src="workbench.js"></script>

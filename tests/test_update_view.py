@@ -5,6 +5,60 @@ import unittest
 
 
 class UpdateViewTests(unittest.TestCase):
+    def run_update_view(self, body):
+        source = (Path(__file__).parents[1] / 'src/shaq_daily_oracle/desktop/software_updates.js').read_text()
+        script = '''
+const nodes=new Map(),calls=[],timers=[],listeners=new Map();
+const q=s=>{if(!nodes.has(s))nodes.set(s,{dataset:{},innerHTML:'',open:false,hidden:true,scrollTop:0,
+  contains(){return false},querySelector:q,addEventListener(){},showModal(){this.open=true},setAttribute(name,value){this[name]=value}});return nodes.get(s)};
+const document={querySelector:q};const window={addEventListener(name,handler){listeners.set(name,handler)}};
+const esc=x=>String(x||'');const setTimeout=(handler,delay)=>{timers.push(delay);return timers.length};const clearTimeout=()=>{};
+const api=async name=>{calls.push(name);return {status:'current',mode:'managed',current_version:'1.0.0',automatic_enabled:false}};
+''' + source + '\n' + body
+        result = subprocess.run(['node', '-'], input=script, text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return json.loads(result.stdout)
+
+    def test_header_update_control_shows_only_actionable_release_states(self):
+        value = self.run_update_view('''
+const states=['unchecked','checking','current','local_newer','no_release','unsupported','unknown_local_version',
+  'available','downloading','ready','applying','check_failed','download_failed'];
+const visible=states.map(status=>{renderSoftwareUpdate({status,mode:'managed',current_version:'1.0.0'});
+  return [status,!q('#software-update-button').hidden]});
+console.log(JSON.stringify({visible}));
+''')
+        self.assertEqual(value['visible'], [
+            ['unchecked', False], ['checking', False], ['current', False], ['local_newer', False],
+            ['no_release', False], ['unsupported', False], ['unknown_local_version', False],
+            ['available', True], ['downloading', True], ['ready', True], ['applying', False],
+            ['check_failed', False], ['download_failed', True],
+        ])
+
+    def test_native_update_notifications_render_without_frontend_polling(self):
+        value = self.run_update_view('''
+q('#software-update-modal').open=true;
+renderSoftwareUpdate({status:'downloading',mode:'managed',current_version:'1.0.0',automatic_enabled:true,progress:25});
+listeners.get('shaq:software-update')?.({detail:{status:'ready',mode:'managed',current_version:'1.0.0',progress:100}});
+console.log(JSON.stringify({timers,calls,html:q('#software-update-detail').innerHTML,
+  visible:!q('#software-update-button').hidden,exported:Boolean(window.SHAQSoftwareUpdates?.applyStatus)}));
+''')
+        self.assertEqual(value['timers'], [])
+        self.assertEqual(value['calls'], [])
+        self.assertTrue(value['visible'])
+        self.assertTrue(value['exported'])
+        self.assertIn('id="apply-software"', value['html'])
+
+    def test_manual_settings_check_opens_panel_while_header_indicator_is_hidden(self):
+        value = self.run_update_view('''
+(async()=>{await window.SHAQSoftwareUpdates?.manualCheck();
+console.log(JSON.stringify({open:q('#software-update-modal').open,calls,
+  hidden:q('#software-update-button').hidden,html:q('#software-update-detail').innerHTML}));})();
+''')
+        self.assertTrue(value['open'])
+        self.assertEqual(value['calls'], ['check_software_update'])
+        self.assertTrue(value['hidden'])
+        self.assertIn('automatic-software-update', value['html'])
+
     def test_startup_ack_only_after_real_load_and_render_succeed(self):
         source=(Path(__file__).parents[1]/'src/shaq_daily_oracle/desktop/app.js').read_text()
         functions=source[source.index('async function load('):source.index("qa('.nav').forEach")]
@@ -27,7 +81,7 @@ await startDesktop();console.log(JSON.stringify({failed,success:calls}));})();
         source=(Path(__file__).parents[1]/'src/shaq_daily_oracle/desktop/software_updates.js').read_text()
         script='''
 const nodes=new Map();const q=s=>{if(!nodes.has(s))nodes.set(s,{dataset:{},innerHTML:'',open:false,scrollTop:0,contains(){return false},querySelector:q,addEventListener(){}});return nodes.get(s)};
-const document={querySelector:q};const esc=x=>String(x||'');const setTimeout=()=>0;const clearTimeout=()=>{};
+const window={addEventListener(){}};const document={querySelector:q};const esc=x=>String(x||'');
 const api=async()=>({status:'ready',mode:'managed',waiting_for_idle:true,queued_apply_method:'manual',message:'已下载，等待本地任务运行完更新'});
 '''+source+'''
 (async()=>{renderSoftwareUpdate({status:'ready',mode:'managed'});await q('#apply-software').onclick();
@@ -44,7 +98,7 @@ console.log(JSON.stringify({html:q('#software-update-detail').innerHTML}));})();
         script='''
 const nodes=new Map();const calls=[];
 const q=s=>{if(!nodes.has(s))nodes.set(s,{dataset:{},innerHTML:'',open:false,scrollTop:0,contains(){return false},querySelector:q,addEventListener(){},showModal(){this.open=true},checked:false});return nodes.get(s)};
-const document={querySelector:q};const esc=x=>String(x||'');const setTimeout=()=>0;const clearTimeout=()=>{};
+const window={addEventListener(){}};const document={querySelector:q};const esc=x=>String(x||'');
 const api=async(method,value)=>{calls.push(method);if(method==='check_software_update')throw Error('offline');
 return {status:'check_failed',automatic_enabled:method==='software_update_status',last_update:{version:'0.6.2',method:'manual',completed_at:'2026-09-14T01:00:00Z'}};};
 '''+source+'''
@@ -57,23 +111,23 @@ await q('#automatic-software-update').onchange();console.log(JSON.stringify({cal
         self.assertIn('set_automatic_software_update',value['calls'])
         self.assertIn('0.6.2',value['html'])
 
-    def test_real_handlers_download_poll_and_apply_without_browser(self):
+    def test_real_handlers_download_receive_ready_and_apply_without_browser(self):
         source=(Path(__file__).parents[1]/'src/shaq_daily_oracle/desktop/software_updates.js').read_text()
         script='''
 const nodes=new Map();const calls=[];
 const q=s=>{if(!nodes.has(s))nodes.set(s,{dataset:{},innerHTML:'',open:false,scrollTop:0,contains(){return false},querySelector:q,addEventListener(){},showModal(){this.open=true}});return nodes.get(s)};
-const document={querySelector:q};const esc=x=>String(x||'');const notice=()=>{};
-const setTimeout=()=>0;const clearTimeout=()=>{};
+const window={addEventListener(){}};const document={querySelector:q};const esc=x=>String(x||'');
 async function api(method){calls.push(method);return {mode:'managed',status:method==='check_software_update'?'available':method==='download_software_update'?'downloading':'ready',current_version:'0.6.2',latest_version:'0.7.0',size_bytes:1024,download_size_bytes:100,progress:100,notes:'Fix'};}
 '''+source+'''
 (async()=>{await checkSoftwareUpdate();await q('#download-software').onclick();
-await pollSoftwareUpdate();await q('#apply-software').onclick();
+window.SHAQSoftwareUpdates.applyStatus({status:'ready',mode:'managed',current_version:'0.6.2',latest_version:'0.7.0'});
+await q('#apply-software').onclick();
 console.log(JSON.stringify({calls,html:q('#software-update-detail').innerHTML}));})();
 '''
         result=subprocess.run(['node','-'],input=script,text=True,capture_output=True)
         self.assertEqual(result.returncode,0,result.stderr)
         value=json.loads(result.stdout)
-        self.assertEqual(value['calls'],['check_software_update','download_software_update','software_update_status','apply_software_update'])
+        self.assertEqual(value['calls'],['check_software_update','download_software_update','apply_software_update'])
         self.assertNotIn('open_software_release',value['calls'])
 
     def test_toggle_uses_independent_automatic_software_update_api_and_shows_history(self):
@@ -81,7 +135,7 @@ console.log(JSON.stringify({calls,html:q('#software-update-detail').innerHTML}))
         script='''
 const nodes=new Map();const calls=[];
 const q=s=>{if(!nodes.has(s))nodes.set(s,{dataset:{},innerHTML:'',open:false,scrollTop:0,contains(){return false},querySelector:q,addEventListener(){},showModal(){this.open=true},checked:false});return nodes.get(s)};
-const document={querySelector:q};const esc=x=>String(x||'');const setTimeout=()=>0;const clearTimeout=()=>{};
+const window={addEventListener(){}};const document={querySelector:q};const esc=x=>String(x||'');
 const api=async(method,value)=>{calls.push([method,value]);return {status:'ready',mode:'managed',automatic_enabled:value,last_update:{version:'0.6.2',method:'automatic',completed_at:'2026-09-14T01:00:00Z'}};};
 '''+source+'''
 (async()=>{renderSoftwareUpdate({status:'ready',mode:'managed',waiting_for_idle:true,last_update:{version:'0.6.2',method:'automatic',completed_at:'2026-09-14T01:00:00Z'}});

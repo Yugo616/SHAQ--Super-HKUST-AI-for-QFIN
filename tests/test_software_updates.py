@@ -64,6 +64,8 @@ class SoftwareUpdateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory);app=root/'Test.app';(app/'Contents').mkdir(parents=True)
             import plistlib
+            (root/'packaging/icons').mkdir(parents=True)
+            (root/'packaging/icons/shaq.icns').write_bytes((ROOT/'packaging/icons/shaq.icns').read_bytes())
             (root/'pyproject.toml').write_text('[project]\nversion="0.6.2"\n',encoding='utf-8')
             path=app/'Contents/Info.plist';path.write_bytes(plistlib.dumps({'CFBundleName':'Test'}))
             module.set_macos_bundle_identity(root,app)
@@ -71,5 +73,8 @@ class SoftwareUpdateTests(unittest.TestCase):
             self.assertEqual(value['CFBundleVersion'],'0.6.2')
             self.assertEqual(value['CFBundleShortVersionString'],'0.6.2')
             self.assertEqual(value['CFBundleIdentifier'],'io.shaq.dailyoracle.lab')
+            self.assertEqual(value['CFBundleIconFile'],'shaq.icns')
+            self.assertEqual((app/'Contents/Resources'/value['CFBundleIconFile']).read_bytes(),
+                             (ROOT/'packaging/icons/shaq.icns').read_bytes())
             (root/'pyproject.toml').write_text('[project]\nversion="0.6.2.dev3"\n',encoding='utf-8')
             with self.assertRaises(ValueError):module.set_macos_bundle_identity(root,app)

@@ -14,11 +14,11 @@ SHAQ brings six specialist research domains, adversarial review and a brokerless
 
 ## Download
 
-The downloads below target **0.7.10**. Choose your operating system and, on Mac, your chip. Each platform page contains its installer, checksums and acceptance record.
+The downloads below target **0.7.12**. Choose your operating system and, on Mac, your chip. Each platform page contains its installer, checksums and acceptance record.
 
-This update fixes saved data connections, routes supplemental premarket inputs to the analysis, adds credit background and optional historical option quotes, and improves bounded retries and research recovery. Alpaca keys saved by older releases need one re-entry; daily use then avoids system credential prompts. See the [update guide](docs/software-updates.md).
+This update introduces a flat three-page workbench and a Q market-signal icon. Progress updates preserve reading position. Failed candidates receive bounded retries and isolated recovery while healthy candidates continue. Software discovery is automatic; the circular download control appears only when an update is available. See the [update guide](docs/software-updates.md).
 
-This update groups daily selections, separates per-stock P&L from daily totals, connects counted balance history and displays recorded model names. Evidence must be acquired before the decision, and the decision saved before the regular session opens. The latest valid pre-open result per method/model/day is counted; original forecasts and timestamps remain intact. See the [timing and replay policy](docs/research-timing.md).
+Daily results group selections, separates per-stock P&L from daily totals, connects counted balance history and displays recorded model names. Evidence must be acquired before the decision, and the decision saved before the regular session opens. The latest valid pre-open result per method/model/day is counted; original forecasts and timestamps remain intact. See the [timing and replay policy](docs/research-timing.md).
 
 Choose your connection, then an explicit model in **Connection Settings**. Change it there at any time: a successful save applies to subsequent manual and scheduled runs, not an in-progress batch. Local model lists come from Codex/Claude Code; APIs can list models when supported or accept an explicit identifier. Older default-model connections require selection once. No model is silently chosen for you.
 
@@ -26,11 +26,11 @@ Optional free Alpaca market data is configured in Connection Settings. SEC earni
 
 | Your computer | Download |
 |---|---|
-| Windows 10/11, x64 | [Windows 0.7.10 installer](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.10-windows) |
-| Mac with Apple Silicon (M series), macOS 15+ | [Apple Silicon 0.7.10 DMG](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.10-macos) |
-| Intel Mac, macOS 15+ | [Intel 0.7.10 DMG](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.10-macos) |
+| Windows 10/11, x64 | [Windows 0.7.12 installer](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.12-windows) |
+| Mac with Apple Silicon (M series), macOS 15+ | [Apple Silicon 0.7.12 DMG](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.12-macos) |
+| Intel Mac, macOS 15+ | [Intel 0.7.12 DMG](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.12-macos) |
 
-Previous managed release: [Windows 0.7.9](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.9-windows), [macOS 0.7.9](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.9-macos).
+Previous managed release: [Windows 0.7.10](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.10-windows), [macOS 0.7.10](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.10-macos).
 
 Download the **`.exe`** or **`.dmg`** only. Other assets serve the updater, checksum verification and third-party notices. Installers include Python and the simulation engine: Git, Python, Futu and a brokerage account are not end-user prerequisites. Windows requires WebView2; the installer checks it. These are internally tested prereleases without commercial signing or notarization. Check the release page before accepting an operating-system source warning.
 
@@ -59,7 +59,7 @@ Click **Sign in to GitHub (`登录 GitHub`)**, confirm in the browser, and enter
 
 ### 4. Run both methods and open results
 
-On **Start Runs (`开始运行`)**, select one model and both bundled methods, then click **Start Today's Analysis (`开始今日分析`)**. The main action changes to progress, resume or results according to the real state. SHAQ collects once, freezes the evidence and runs the comparison. Expand progress to inspect finished reports. On **View Results (`查看结果`)**, click a row for full replay or select two runs to compare them.
+On **Run Analysis (`运行分析`)**, select one model and both bundled methods, then click **Start Today's Analysis (`开始今日分析`)**. The main action changes to progress, resume or results according to the real state. SHAQ collects once, freezes the evidence and runs the comparison. Expand progress to inspect finished reports. On **View Results (`查看结果`)**, click a row for full replay or select two runs to compare them.
 
 Runs use the New York trading calendar. Weekends/holidays, times before 04:00 ET and absent current-day premarket observations are blocked with an explanation. A Monday in Asia can still be Sunday in New York. Late research stays visible but does not enter on-time premarket performance. Automatic runs require explicit activation and an awake, online computer.
 
@@ -100,8 +100,8 @@ These names identify experimental roles, not proven superiority. Both are resear
 
 ## Edit, share, compare
 
-1. **Start Runs:** select versions and a model; run now or configure automatic research; inspect today's progress.
-2. **Edit Versions:** create a local draft, edit a domain's method/references/role or supported rule code, then save an immutable version. **Download** and **Upload** open multi-select team dialogs; content hashes prevent duplicate transfers.
+1. **Run Analysis:** select versions and a model; run now or configure automatic research; inspect today's progress.
+2. **Edit Methods:** create a local draft, edit a domain's method/references/role or supported rule code, then save an immutable version. **Download** and **Upload** open multi-select team dialogs; content hashes prevent duplicate transfers.
 3. **View Results:** compare predictions, correct/incorrect counts and virtual balances; open any day to inspect screening, each stock's six reports, adversarial review and final decision.
 
 Methods come from the [`versions` branch](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/tree/versions/shadow_versions). Software comes from Releases. Downloading a method does not replace the app; updating the app does not rewrite method snapshots or historical predictions.
@@ -114,7 +114,7 @@ No brokerage connection is required. After the close, **Zipline** replays frozen
 
 ## Updates
 
-Use **Software Update (`软件更新`)** for manual checks or optional automatic updates. Downloaded updates wait for running tasks and unsaved edits before replacing the app. Version and update time are displayed; records, balances and drafts stay in the separate user-data directory.
+The app checks for updates automatically and shows a circular download control when a newer release is available. Manual checks and optional automatic installation are in **Connection Settings → Software Update (`连接与设置 → 软件更新`)**. Downloaded updates wait for running tasks and unsaved edits before replacing the app. Version and update time are displayed; records, balances and drafts stay in the separate user-data directory.
 
 Legacy 0.6.x users must install 0.7.0 or a later full package once. After that, a matching published delta can reduce downloads; otherwise the updater uses a verified full package. A patch release does not guarantee a small download on every platform. [Update guide](docs/software-updates.md)
 

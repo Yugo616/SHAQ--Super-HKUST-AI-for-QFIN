@@ -7,6 +7,18 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class WorkflowSurfaceTests(unittest.TestCase):
+    def test_citation_retry_explains_correction_without_claiming_completed_analysis(self):
+        self.node(r'''
+const assert=require('assert/strict'),p=require('./src/shaq_daily_oracle/desktop/today_progress.js');
+const now='2026-10-12T08:48:42-04:00',key='team/a';
+const job={job_id:'j',status:'running',started_at_et:now,variant_progress:{[key]:'running'},research_progress:[
+ {variant_key:key,stage:'tasks_planned',tasks:[{task_id:'report:CMG:price_volume',symbol:'CMG',domain:'price_volume'}]},
+ {variant_key:key,stage:'model_retry_scheduled',call_id:'c',domain:'price_volume',symbols:['CMG'],attempt:2,max_attempts:3,retry_reason:'citation_validation',occurred_at_et:now,status:'scheduled'}]};
+const html=p.progressHtml([job],[],now);
+assert.match(html,/引用校验未通过/);assert.match(html,/重新生成/);
+assert.match(html,/value="0"/);
+''')
+
     def node(self, script):
         subprocess.run(['node', '-'], input=script, text=True, encoding='utf-8', cwd=ROOT, check=True)
 

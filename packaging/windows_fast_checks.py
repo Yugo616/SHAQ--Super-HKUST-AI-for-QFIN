@@ -5,6 +5,8 @@ import unittest
 
 
 TESTS = (
+    'test_desktop_notifications',
+    'test_desktop_icons',
     'test_file_revisions',
     'test_metadata_transport',
     'test_background_lifecycle.BackgroundLifecycleTests.test_existing_job_lock_is_authority_not_stale_running_json',
@@ -37,6 +39,7 @@ TESTS = (
     # and requires QuickJS. Keep it in full discovery, not this lightweight gate.
     'test_desktop_lifecycle.DesktopLifecycleTests.test_api_retains_bound_method_discovery_and_rpc_parameter_names',
     'test_desktop_lifecycle.DesktopLifecycleTests.test_disposable_api_drains_admitted_writer_and_rejects_late_requests',
+    'test_desktop_lifecycle.DesktopLifecycleTests.test_fixture_close_drains_ready_rpc_before_stopping_its_new_readers',
     'test_desktop_lifecycle.DesktopLifecycleTests.test_request_exception_releases_lifetime_without_exposing_private_methods',
     'test_worker_protocol_acceptance',
     'test_result_recovery',

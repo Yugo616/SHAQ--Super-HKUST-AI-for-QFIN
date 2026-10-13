@@ -31,11 +31,11 @@ renderRun=function(){
   const focusedAutomatic=previousPanel?.contains(document.activeElement)?document.activeElement:null;
   const progressJobs=(state.data.jobs||[]).map(job=>({...job,research_selection:wb.researchSelections[job.job_id]||{}}));
   if(state.runSelections===null)state.runSelections=new Set(versions.filter(v=>v.status_badge==='正式基准').map(versionKey));
-  const rows=versions.map(v=>`<tr><td><input class="version-check" type="checkbox" data-author="${esc(v.author||'team')}" data-version="${esc(v.version_id)}" ${state.runSelections.has(versionKey(v))?'checked':''}></td><td>${esc(versionName(v))} <span class="method-badge">${esc(v.status_badge||'本地版本')}</span><br><small>${esc(v.description||'')}</small></td><td>${esc(v.author||'团队')}</td><td>${esc(changed(v))}</td></tr>`).join('');
-  q('#run').innerHTML=`<div class="run-toolbar"><span></span><time id="local-clock"></time><button class="text-button" id="show-data">查看数据时间</button><label>模型 <select id="run-profile">${profiles.map(p=>`<option value="${esc(p.profile_id)}" ${p.profile_id===s.active_model_profile_id?'selected':''}>${esc(p.model)} · ${esc(p.profile_id)}</option>`).join('')}</select></label></div>
-    <div class="sheet"><table class="table"><thead><tr><th></th><th>方法版本</th><th>作者</th><th>修改模块</th></tr></thead><tbody>${rows}</tbody></table><div class="run-actions"><button class="text-button" id="select-all">全选</button><button class="primary" id="start-batch" ${profiles.length?'':'disabled'}>开始今日分析</button></div><div id="estimate" class="estimate"></div></div>
-    <div class="run-actions"><button class="secondary" id="edit-automatic">自动运行设置</button><span id="automatic-summary">读取自动运行设置…</span></div><section class="sheet hidden" id="automatic-panel"><div id="automatic-settings"></div></section>
-    <section class="sheet"><h3>当日运行进度</h3><div id="today-progress">${SHAQProgress.progressHtml(progressJobs,versions,state.data.clock?.et||new Date().toISOString())}</div></section>`;
+  const rows=versions.map(v=>`<label class="method-row"><input class="version-check" type="checkbox" data-author="${esc(v.author||'team')}" data-version="${esc(v.version_id)}" ${state.runSelections.has(versionKey(v))?'checked':''}><span class="method-copy"><strong>${esc(versionName(v))}</strong></span></label>`).join('');
+  q('#run').innerHTML=`<div class="run-toolbar"><span></span><time id="local-clock"></time><button class="text-button" id="show-data">查看数据</button></div>
+    <section class="run-methods"><div class="section-head"><h3>选择方法</h3><button class="text-button" id="select-all">全选</button></div><div class="method-list">${rows}</div><label class="run-model">分析模型 <select id="run-profile">${profiles.map(p=>`<option value="${esc(p.profile_id)}" ${p.profile_id===s.active_model_profile_id?'selected':''}>${esc(p.model)}${profiles.filter(other=>other.model===p.model).length>1?' · '+esc(p.profile_id):''}</option>`).join('')}</select></label><div class="run-actions"><button class="primary" id="start-batch" ${profiles.length?'':'disabled'}>开始今日分析</button><span id="estimate" class="estimate"></span></div></section>
+    <div class="automatic-row"><span id="automatic-summary">读取自动运行设置…</span><button class="text-button" id="edit-automatic">自动运行设置</button></div><section class="sheet hidden" id="automatic-panel"><div id="automatic-settings"></div></section>
+    <section class="run-progress"><div class="section-head"><h3>当日进度</h3><span id="activity-status" role="status"></span></div><div id="today-progress">${SHAQProgress.progressHtml(progressJobs,versions,state.data.clock?.et||new Date().toISOString())}</div></section>`;
   q('#start-batch').onclick=startBatch;
   q('#select-all').onclick=()=>{const boxes=qa('.version-check'),on=boxes.some(b=>!b.checked);boxes.forEach(b=>b.checked=on);rememberSelections();estimate();updatePrimaryAction()};
   qa('.version-check').forEach(b=>b.onchange=()=>{rememberSelections();estimate();updatePrimaryAction()});
@@ -106,10 +106,9 @@ function updatePrimaryAction(){
 function refreshRunProgress(){
   const target=q('#today-progress');if(!target||state.page!=='run')return;
   const html=SHAQProgress.progressHtml(state.data.jobs||[],state.data.versions||[],state.data.clock?.et||new Date().toISOString());
-  // Only the progress region is replaced. Version/model selection, schedule
-  // editor and every surrounding scroll container retain their actual nodes.
+  // Keep live bars and expanded reports mounted when only their values change.
   if(target.innerHTML!==html){
-    const restore=preserveReadingView(target);target.innerHTML=html;restore();
+    const restore=preserveReadingView(target);SHAQDOM.update(target,html);restore();
     qa('[data-progress-result]').forEach(b=>b.onclick=()=>{showPage('history');loadBatch(b.dataset.progressResult)});
     bindProgressRetries();
   }
@@ -162,7 +161,7 @@ function plotResults(rows){
 }
 renderHistory=function(){oldRenderHistory();const rows=state.data.dashboard.daily_results||[],versionOptions=new Map(),models=[...new Set(rows.map(r=>r.model||'未记录模型'))];for(const row of rows){const x=historyIdentity(row);if(!versionOptions.has(x.filter_key))versionOptions.set(x.filter_key,historyMethod(row))}const tools=document.createElement('div');tools.className='history-filters';tools.innerHTML=`<label>开始日期<input id="history-from" type="date" value="${esc(wb.filters.from||'')}"></label><label>结束日期<input id="history-to" type="date" value="${esc(wb.filters.to||'')}"></label><label>版本<select id="history-version"><option value="">全部版本</option>${[...versionOptions].map(([key,label])=>`<option value="${esc(key)}" ${wb.filters.version===key?'selected':''}>${esc(label)}</option>`).join('')}</select></label><label>模型<select id="history-model"><option value="">全部模型</option>${models.map(v=>`<option ${wb.filters.model===v?'selected':''}>${esc(v)}</option>`).join('')}</select></label>`;q('#history').prepend(tools);const filtered=rows.filter(r=>(!wb.filters.from||r.trade_date>=wb.filters.from)&&(!wb.filters.to||r.trade_date<=wb.filters.to)&&(!wb.filters.version||historyIdentity(r).filter_key===wb.filters.version)&&(!wb.filters.model||(r.model||'未记录模型')===wb.filters.model));const kept=new Set(filtered.map(r=>r.batch_id+'|'+r.variant_key));qa('#history tr[data-batch]').forEach(r=>r.classList.toggle('hidden',!kept.has(r.dataset.batch+'|'+r.dataset.variantKey)));q('#history .metrics').outerHTML=`<div class="result-summary">${(()=>{const scored=filtered.filter(r=>r.score_eligible!==false&&r.status==='final'),good=scored.reduce((s,r)=>s+r.correct,0),bad=scored.reduce((s,r)=>s+r.incorrect,0);return `已核验 ${good+bad} 次 · 正确 ${good} / 错误 ${bad} · 命中率 ${good+bad?(100*good/(good+bad)).toFixed(1)+'%':'—'} · 空榜 ${filtered.filter(r=>r.status==='empty'&&r.score_eligible!==false).length} 次`})()}<span>固定一股 · 零费用纸面回放</span></div><div class="sheet">${plotResults(filtered)}</div>`;for(const [id,key] of [['history-from','from'],['history-to','to'],['history-version','version'],['history-model','model']])q('#'+id).onchange=e=>{wb.filters[key]=e.target.value;renderHistory()};};
 renderBatch=function(batch,key,symbol){oldRenderBatch(batch,key,symbol);const head=q('.batch-head');if(!head)return;head.insertAdjacentHTML('beforeend',`<label>对比本次另一版本 <select id="compare-version"><option value="">选择版本</option>${Object.entries(batch.variants||{}).filter(([k])=>k!==key).map(([k,v])=>`<option value="${esc(k)}">${esc(historyMethod({variant_key:k,label:v.variant?.label}))}</option>`).join('')}</select></label><div id="version-comparison"></div>`);q('#compare-version').onchange=e=>{const v=batch.variants[e.target.value];q('#version-comparison').innerHTML=v?`<table class="table"><thead><tr><th>股票</th><th>对照版本结论</th><th>理由</th></tr></thead><tbody>${Object.entries(v.integration_audit||{}).map(([s,a])=>`<tr><td>${esc(s)}</td><td>${dir(v.predictions?.find(p=>p.symbol===s)?.direction||'neutral')}</td><td>${esc(a.decision_reason||(a.rejection_reasons||[]).join('；'))}</td></tr>`).join('')}</tbody></table>`:''}};
-showPage=function(page){state.page=page;qa('main>.page,.nav').forEach(e=>e.classList.remove('active'));q('#'+page).classList.add('active');q(`.nav[data-page="${page}"]`)?.classList.add('active');q('#page-title').textContent={run:'开始运行',editor:'修改版本',history:'查看结果'}[page]||'SHAQ';q('#result-update-controls').hidden=page!=='history';renderPage()};
+showPage=function(page){state.page=page;qa('main>.page,.nav').forEach(e=>e.classList.remove('active'));q('#'+page).classList.add('active');q(`.nav[data-page="${page}"]`)?.classList.add('active');q('#page-title').textContent={run:'运行分析',editor:'修改方法',history:'查看结果'}[page]||'SHAQ';q('#result-update-controls').hidden=page!=='history';renderPage()};
 q('#connections-button').onclick=()=>q('#setup').classList.remove('hidden');q('#close-setup').onclick=()=>q('#setup').classList.add('hidden');q('#model-step').parentElement.prepend(q('#model-step'));
 const editorWithLayout=renderEditor;
 const skillModuleIds={'market-common-shock':'market','pit-peer-spillover':'relationships','primary-event-reasoner':'event','capital-order-flow':'capital','derivatives-evidence':'derivatives','price-volume-structure':'price_volume'};
@@ -210,7 +209,8 @@ const renderRunSurface=renderRun;
 renderRun=function(){
   renderRunSurface();updateRunClockStatus();
   const updated=state.data.data_status?.items?.[0]?.updated_at;
-  q('#show-data').textContent=updated?'数据 '+new Date(updated).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}):'数据将在运行时更新';
+  q('#show-data').textContent='查看数据';
+  if(updated)q('#show-data').title='最近更新 '+new Date(updated).toLocaleString('zh-CN');
   tickLocalClock();updatePrimaryAction();
 };
 function updateRunClockStatus(){
@@ -223,7 +223,7 @@ function updateRunClockStatus(){
 }
 
 
-estimate=async function(){const target=q('#estimate');if(!target)return;const items=selectedVersions();if(!items.length){target.textContent='至少选择一个版本。';return}try{const v=await api('estimate_shadow_batch',items,q('#run-profile')?.value||'');target.innerHTML=`${v.selected_versions} 个版本 · 采集后按资料量拆分调用，已成功的相同分析直接复用。<br><small>主要可用：${esc(v.available_domains.join('、'))}；${esc([...v.limited_domains,...v.unavailable_domains].join('；'))}</small>`}catch(e){target.textContent=e.message}};
+estimate=async function(){const target=q('#estimate');if(!target)return;const items=selectedVersions();target.textContent=items.length?`已选 ${items.length} 个方法`:'请先选择方法';};
 
 // Workflow timing and the paper ledger are program-owned, not editable research modules.
 const loadEditableSkill=loadSkill;
@@ -247,14 +247,18 @@ renderBatch=function(batch,key,symbol){const chosen=key&&batch.variants?.[key]?k
 const renderResearchAndFormal=renderRun;
 renderRun=function(){
   renderResearchAndFormal();
-  const formal=state.data.formal_operator;if(!formal?.connected)return;
-  const section=document.createElement('section');section.className='sheet';section.id='formal-operator';
-  section.innerHTML=`<div class="section-head"><h3>原正式版 · 富途模拟盘</h3><button class="primary" id="start-formal">开始／恢复今天正式版</button></div><p>${esc(formal.session_date)} · ${esc(formalState(formal.service?.state))}</p><p>${esc(formal.service?.message||'沿用原正式数据、模型与每票一股规则；下方版本列表只运行研究Shadow。')}</p>${formal.runs.map(r=>`<p>${esc(r.run_id)} · ${esc(r.stage)} · ${esc(r.status)} ${esc(r.detail||'')} ${r.has_frozen_result?`<button class="text-button" data-formal-run="${esc(r.run_id)}">查看正式结果</button>`:''}</p>`).join('')}<div id="formal-detail"></div>`;
-  q('#run').prepend(section);
+  refreshFormalProgress();
+};
+function refreshFormalProgress(){
+  if(state.page!=='run')return;
+  let section=q('#formal-operator');
+  const formal=state.data.formal_operator;
+  if(!formal?.connected){section?.remove();return;}
+  if(!section){section=document.createElement('section');section.className='sheet';section.id='formal-operator';section.innerHTML='<div id="formal-live"></div><div id="formal-detail"></div>';q('#run').prepend(section);}
+  SHAQDOM.update(q('#formal-live'),`<div class="section-head"><h3>原正式版 · 富途模拟盘</h3><button class="primary" id="start-formal">开始／恢复今天正式版</button></div><p>${esc(formal.session_date)} · ${esc(formalState(formal.service?.state))}</p><p>${esc(formal.service?.message||'沿用原正式数据、模型与每票一股规则；下方版本列表只运行研究Shadow。')}</p>${formal.runs.map(r=>`<p data-view-key="${esc(r.run_id)}">${esc(r.run_id)} · ${esc(r.stage)} · ${esc(r.status)} ${esc(r.detail||'')} ${r.has_frozen_result?`<button class="text-button" data-formal-run="${esc(r.run_id)}">查看正式结果</button>`:''}</p>`).join('')}`);
   q('#start-formal').onclick=async()=>{const button=q('#start-formal');button.disabled=true;try{const result=await api('run_today');notice(result.message);await load(false)}catch(e){notice(e.message,true)}finally{button.disabled=false}};
   qa('[data-formal-run]').forEach(b=>b.onclick=()=>showFormalRun(b.dataset.formalRun));
-};
-setInterval(()=>{if(state.page==='run'&&state.data?.formal_operator?.connected&&!q('#formal-symbol'))load(false)},15000);
+}
 
 const showCandidateBeforeSynthesis=window.showCandidate;
 window.showCandidate=function(batchId,key,symbol){

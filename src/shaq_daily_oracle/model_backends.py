@@ -186,7 +186,7 @@ class ModelProfile:
 
 def _validate_result(value: Any, schema: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(value, dict):
-        raise ModelBackendError("model output is not a JSON object")
+        raise ModelBackendError("model output is not a JSON object", diagnostic={'kind': 'output_schema'})
     try:
         import jsonschema  # type: ignore
 
@@ -197,20 +197,21 @@ def _validate_result(value: Any, schema: dict[str, Any]) -> dict[str, Any]:
         path = ".".join(str(part) for part in getattr(exc, "path", ())) or "root"
         validator = str(getattr(exc, "validator", "schema"))
         raise ModelBackendError(
-            f"model output failed JSON Schema validation at {path} ({validator})"
+            f"model output failed JSON Schema validation at {path} ({validator})",
+            diagnostic={'kind': 'output_schema'},
         ) from exc
     return value
 
 
 def _json_from_text(text: Any) -> dict[str, Any]:
     if not isinstance(text, str) or not text.strip():
-        raise ModelBackendError("model returned no text output")
+        raise ModelBackendError("model returned no text output", diagnostic={'kind': 'output_json'})
     try:
         value = json.loads(text)
     except json.JSONDecodeError as exc:
-        raise ModelBackendError("model output is not valid JSON") from exc
+        raise ModelBackendError("model output is not valid JSON", diagnostic={'kind': 'output_json'}) from exc
     if not isinstance(value, dict):
-        raise ModelBackendError("model output must be a JSON object")
+        raise ModelBackendError("model output must be a JSON object", diagnostic={'kind': 'output_json'})
     return value
 
 

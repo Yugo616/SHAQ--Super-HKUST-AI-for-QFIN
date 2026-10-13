@@ -244,6 +244,17 @@ class DownstreamCheckpointTests(unittest.TestCase):
                 root=Path(name);registry=helper.registry(root);evidence=helper.evidence(root)
                 runner=ResearchBatchRunner(batches_root=root/'batches',cache_root=root/'cache',
                     registry=registry,integration_policy=helper.policy())
+                # Build an actual format-2 fixture. New format-3 candidates stop
+                # after an early failure, so their later missing work is not a cache hit.
+                seed=runner.run(evidence=evidence,variants=[helper.main_variant(registry)],
+                    profile=helper.profile(),secret='',
+                    caller=lambda **kw: (_ for _ in ()).throw(ValueError('fixture stopped before calls')))
+                identity={**seed['manifest']['batch_identity'], 'execution_config': {
+                    'prompt_format_version':2, 'price_volume_group_size':1,
+                    'synthesis_citation_contract_version':2}}
+                legacy_manifest={**seed['manifest'], 'batch_identity':identity,
+                    'batch_identity_sha256':sha256_payload(identity),
+                    'batch_id':'LAB-2026-09-04-'+sha256_payload(identity)[:12]}
                 original_call=runner.cache.call
                 def legacy_call(**kw):
                     kw.pop('validate',None)
@@ -258,7 +269,9 @@ class DownstreamCheckpointTests(unittest.TestCase):
                     return result,audit
                 with patch.object(runner.cache,'call',side_effect=legacy_call):
                     first=runner.run(evidence=evidence,variants=[helper.main_variant(registry)],
-                        profile=helper.profile(),secret='',caller=old_model)
+                        profile=helper.profile(),secret='',caller=old_model,
+                        _resume_manifest=legacy_manifest)
+                self.assertEqual(first['manifest']['batch_identity']['execution_config']['prompt_format_version'],2)
                 self.assertFalse(first['status']['all_variants_completed'])
                 batch=Path(first['batch_root'])
                 before={path.name:path.read_bytes() for path in (batch/'model_calls').glob('*.json')}

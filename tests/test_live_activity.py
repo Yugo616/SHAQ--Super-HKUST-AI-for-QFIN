@@ -5,22 +5,71 @@ import threading
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from shaq_daily_oracle.lab_service import LabService
 from shaq_daily_oracle.research_progress import ResearchProgressLog
 
 
 class LiveActivityTests(unittest.TestCase):
+    def test_reading_state_keeps_manual_and_scheduled_selection_separate(self):
+        script = r'''
+const fs=require('fs'),vm=require('vm'),assert=require('assert/strict');
+const source=fs.readFileSync('src/shaq_daily_oracle/desktop/app.js','utf8');
+const fn=source.slice(source.indexOf('function preserveReadingView('),source.indexOf('function applyDesktopActivity('));
+const root={scrollTop:0,scrollLeft:0};
+const scheduled={id:'automatic-settings',tagName:'DIV',parentElement:root};
+const field=(parent,checked)=>({tagName:'INPUT',type:'checkbox',value:'on',checked,
+  dataset:{author:'team',version:'main'},parentElement:parent,scrollTop:0,scrollLeft:0});
+const manual=field(root,true),automatic=field(scheduled,false);
+root.querySelectorAll=()=>[manual,automatic];
+const ctx={document:{activeElement:null}};vm.createContext(ctx);vm.runInContext(fn,ctx);
+const restore=ctx.preserveReadingView(root);
+manual.checked=false;automatic.checked=true;restore();
+assert.equal(manual.checked,true,'scheduled selection overwrote the manual control');
+assert.equal(automatic.checked,false,'manual selection overwrote the schedule');
+'''
+        subprocess.run(['node', '-'], input=script, text=True, encoding='utf-8',
+                       cwd=Path(__file__).resolve().parents[1], check=True)
+
     def service(self, root):
         lab = LabService.__new__(LabService)
-        lab.paths = SimpleNamespace(research_root=root)
+        lab.paths = SimpleNamespace(research_root=root, runtime_root=root/'runtime',
+                                    config_root=root/'config', data_root=root)
         lab.jobs = {}
         lab.jobs_lock = threading.Lock()
+        lab._activity_lock = threading.Lock()
         lab.dashboard = Mock()
         lab.settings = Mock()
         lab.start_result_refresh = Mock(side_effect=AssertionError('poll must be read only'))
         return lab
+
+    def test_unchanged_activity_reuses_reports_but_detects_liveness_loss(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lab = self.service(Path(tmp))
+            lab.jobs = {'job-live': {'job_id': 'job-live', 'status': 'running'}}
+            with patch.object(lab, 'job_statuses', wraps=lab.job_statuses) as read_jobs:
+                first = lab.activity_status()
+                self.assertFalse(lab.activity_status(first['revision'])['changed'])
+                self.assertEqual(read_jobs.call_count, 1, 'idle observation reloaded historical progress')
+                with patch('shaq_daily_oracle.job_corrections.observed_job_status',
+                           side_effect=lambda root, row: {**row, 'status': 'incomplete', 'live_state': 'interrupted'}):
+                    next_value = lab.activity_status(first['revision'])
+                self.assertTrue(next_value['changed'])
+                self.assertEqual(next_value['jobs'][0]['status'], 'incomplete')
+
+    def test_formal_operator_changes_arrive_without_history_reload(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lab = self.service(Path(tmp))
+            lab.paths.runtime_root.mkdir()
+            status = lab.paths.runtime_root/'service_status.json'
+            status.write_text(json.dumps({'state':'waiting'}))
+            first = lab.activity_status()
+            status.write_text(json.dumps({'state':'workflow_complete'}))
+            next_value = lab.activity_status(first['revision'])
+            self.assertTrue(next_value['changed'])
+            self.assertEqual(next_value['formal_operator']['service']['state'], 'workflow_complete')
+            self.assertEqual(lab.dashboard.mock_calls, [])
 
     def test_external_job_discovered_without_index_refresh_or_credentials(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -77,8 +126,8 @@ class LiveActivityTests(unittest.TestCase):
         script = r'''
 const fs=require('fs'),vm=require('vm'),assert=require('assert/strict');
 const source=fs.readFileSync('src/shaq_daily_oracle/desktop/app.js','utf8');
-const start=source.indexOf('async function pollDesktopActivity(');
-assert.ok(start>=0,'missing unconditional lightweight poll');
+const start=source.indexOf('function applyDesktopActivity(');
+assert.ok(start>=0,'missing native notification consumer');
 const code=source.slice(start,source.indexOf('async function startDesktop(',start));
 const calls=[], ctx={state:{data:{jobs:[],clock:{}},page:'run'},
  api:async name=>{calls.push(name);return {changed:true,revision:'new',jobs:[{job_id:'auto',status:'running'}],result_refresh:{status:'idle'},observed_at:'2026-09-17T08:35:10-04:00'}},
@@ -86,7 +135,18 @@ const calls=[], ctx={state:{data:{jobs:[],clock:{}},page:'run'},
 vm.createContext(ctx);vm.runInContext(code,ctx);
 (async()=>{await ctx.pollDesktopActivity();assert.deepEqual(calls,['get_lab_activity']);
  assert.equal(ctx.state.data.jobs[0].job_id,'auto');assert.equal(ctx.state.activityRevision,'new');
- assert.match(source,/setInterval\([^;]*pollDesktopActivity/);
+ assert.doesNotMatch(source,/setInterval\([^;]*pollDesktopActivity/);
+ const before=calls.length;
+ ctx.applyDesktopActivity({changed:true,revision:'pushed',jobs:[{job_id:'native',status:'running'}],result_refresh:{status:'idle'}});
+ assert.equal(calls.length,before,'pushed progress must not fetch history');
+ assert.equal(ctx.state.data.jobs[0].job_id,'native');
+ let finish;ctx.api=()=>new Promise(resolve=>finish=resolve);
+ const reconnect=ctx.pollDesktopActivity();
+ ctx.applyDesktopActivity({changed:true,revision:'newest',jobs:[{job_id:'latest',status:'running'}],result_refresh:{status:'idle'}});
+ finish({changed:true,revision:'stale-reconnect',jobs:[{job_id:'old',status:'running'}],result_refresh:{status:'idle'}});
+ await reconnect;
+ assert.equal(ctx.state.activityRevision,'newest','late reconnect response overwrote a newer notification');
+ assert.equal(ctx.state.data.jobs[0].job_id,'latest');
 })().catch(e=>{console.error(e);process.exitCode=1});
 '''
         subprocess.run(['node', '-'], input=script, text=True, encoding='utf-8',

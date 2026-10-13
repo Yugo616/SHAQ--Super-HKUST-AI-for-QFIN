@@ -25,7 +25,8 @@ from .hashing import sha256_file, sha256_payload
 from .lineage import build_lineage_graph
 from .model_backends import ModelProfile, call_structured, safe_model_error_summary, _validate_result
 from .model_execution import (ExecutionPolicy, execution_policy_scope, transient_model_failure,
-                              compact_market_tables)
+                              compact_market_tables, CitationValidationError,
+                              CITATION_RETRY_PREFIX, verified_request_prompt)
 from .research_progress import safe_observe
 from .sandboxed_codex import (
     DOMAIN_SKILLS,
@@ -39,6 +40,24 @@ from .skill_versions import LocalSkillRegistry, parse_agent_profile
 
 class ResearchBatchError(ValueError):
     """A research batch cannot be reproduced from its immutable inputs."""
+
+
+class IncompleteDomainError(ResearchBatchError):
+    """Retain valid sibling reports without treating a failed report as neutral."""
+
+    def __init__(self, message, reports, audits, failures):
+        super().__init__(message)
+        self.reports, self.audits, self.failures = reports, audits, failures
+
+
+class CandidateReportError(ResearchBatchError):
+    """A returned report is invalid; shared storage and identity checks are distinct."""
+
+
+def _candidate_local_failure(exc):
+    return (isinstance(exc, (CitationValidationError, CandidateReportError))
+            or transient_model_failure(exc)
+            or (getattr(exc, 'diagnostic', None) or {}).get('kind') in {'output_schema', 'output_json'})
 
 
 HORIZON = "official_US_regular_session_open_to_close"
@@ -339,7 +358,7 @@ def _fresh_tasks_for_domain(evidence: FrozenEvidence, domain: str, *, prompt_for
             collection_status = "not_applicable"
         else:
             collection_status = "no_data"
-        tasks.append({
+        task = {
             "task_id": "task_" + sha256_payload({
                 "evidence_hash": evidence.manifest["evidence_hash"],
                 "symbol": symbol,
@@ -351,7 +370,14 @@ def _fresh_tasks_for_domain(evidence: FrozenEvidence, domain: str, *, prompt_for
             "horizon": HORIZON,
             "collection_status": collection_status,
             "evidence": sorted(applicable, key=lambda row: row["evidence_id"]),
-        })
+        }
+        event_inputs = [row for row in own if domain in row.get('consumer_domains', [row['domain']])]
+        if domain == 'event' and event_inputs and all(
+                row.get('root_component_type') == 'event_calendar' for row in event_inputs):
+            # New calendar records are event context, never realized directional catalysts.
+            # Older market-domain calendars retain their original task envelopes.
+            task['event_context_only'] = True
+        tasks.append(task)
     return tasks
 
 
@@ -386,6 +412,7 @@ class ContentAddressedModelCache:
         self.root.mkdir(parents=True, exist_ok=True)
         self._rate_lock = threading.Lock()
         self._call_times: dict[str, deque[float]] = defaultdict(deque)
+        self._call_slots: dict[str, threading.BoundedSemaphore] = {}
 
     def checkpoint_document(self, profile, key):
         path = self.root / profile.request_policy_identity() / f'{key}.json'
@@ -393,6 +420,11 @@ class ContentAddressedModelCache:
 
     def checkpoint_authenticated(self, key):
         pass  # Disk cache documents were already hash-verified on read.
+
+    def _concurrency_slot(self, profile: ModelProfile) -> threading.BoundedSemaphore:
+        with self._rate_lock:
+            return self._call_slots.setdefault(profile.identity(),
+                threading.BoundedSemaphore(profile.max_concurrency))
 
     def _wait_for_rate_slot(self, profile: ModelProfile) -> None:
         """Reserve one request in the configured rolling one-minute window."""
@@ -499,34 +531,52 @@ class ContentAddressedModelCache:
                     return document["result"], self._public_audit(document), True
             policy = execution_policy or ExecutionPolicy()
             attempts = []
+            request_prompt = prompt
+            transport_retries = citation_retries = 0
+            max_attempts = 1 + policy.transient_retries + policy.citation_retries
             invocation_id = uuid.uuid4().hex
             started = time.monotonic()
-            for attempt in range(policy.transient_retries + 1):
-                self._wait_for_rate_slot(profile)
-                if attempt and on_attempt_event:
-                    safe_observe(on_attempt_event, stage='model_retry_started', attempt=attempt + 1,
-                                     max_attempts=policy.transient_retries + 1,
-                                     status='running')
-                if on_model_start:
-                    on_model_start()
+            for attempt in range(max_attempts):
                 attempt_started = time.monotonic()
                 timestamp = datetime.now(ZoneInfo('America/New_York')).isoformat()
                 returned = False
                 try:
-                    with execution_policy_scope(policy):
-                        result, audit = caller(profile=profile, secret=secret, prompt=prompt, schema=schema)
+                    # Every method and candidate shares the same profile budget.
+                    # Cache hits and completed attempts do not occupy a model slot.
+                    with self._concurrency_slot(profile):
+                        self._wait_for_rate_slot(profile)
+                        if attempt and on_attempt_event:
+                            safe_observe(on_attempt_event, stage='model_retry_started', attempt=attempt + 1,
+                                             max_attempts=max_attempts, status='running')
+                        if on_model_start:
+                            on_model_start()
+                        attempt_started = time.monotonic()
+                        timestamp = datetime.now(ZoneInfo('America/New_York')).isoformat()
+                        with execution_policy_scope(policy):
+                            result, audit = caller(profile=profile, secret=secret, prompt=request_prompt, schema=schema)
                     returned = True
                     if validate:
                         validate(result)
                 except Exception as exc:
                     rejected_output = {'result': result, 'audit': audit} if returned else getattr(exc, 'rejected_output', None)
+                    # A backend may reject an enum before the domain validator runs.
+                    # Reclassify only a retained, returned report with a concrete
+                    # reference error, never authentication/transport/provider text.
+                    if (not returned and isinstance(rejected_output, dict) and validate
+                            and (getattr(exc, 'diagnostic', None) or {}).get('kind') == 'output_schema'):
+                        try:
+                            validate(rejected_output['result'])
+                        except CitationValidationError as citation_error:
+                            exc = citation_error
+                        except (ValueError, TypeError, KeyError):
+                            pass
                     rejected_hash = None
                     if rejected_output is not None:
                         # A returned but rejected response is evidence, never a valid checkpoint.
                         rejected = {
                             'schema_version': 1, 'status': 'validation_rejected',
                             'cache_key': cache_key, 'key_document': key_document,
-                            'prompt': prompt, 'schema': schema, **rejected_output,
+                            'prompt': prompt, 'request_prompt': request_prompt, 'schema': schema, **rejected_output,
                             'result_sha256': sha256_payload(rejected_output['result']),
                             'audit_sha256': sha256_payload(rejected_output['audit']),
                             'validation_error': {'kind': getattr(exc, 'kind', 'validation'),
@@ -539,6 +589,7 @@ class ContentAddressedModelCache:
                         _write_json_same_or_once(rejected_root / 'rejected_model_calls' / f'{rejected_hash}.json',
                             {**rejected, 'rejected_document_sha256': rejected_hash})
                     transient = transient_model_failure(exc)
+                    correctable = isinstance(exc, CitationValidationError) and rejected_output is not None
                     diagnostic = getattr(exc, 'diagnostic', None) or {}
                     safe_diagnostic = {key: value for key, value in diagnostic.items()
                         if (key in {'kind', 'backend', 'protocol'} and isinstance(value, str)
@@ -547,6 +598,9 @@ class ContentAddressedModelCache:
                     attempts.append({'attempt': attempt + 1, 'started_at_et': timestamp,
                         'elapsed_seconds': time.monotonic() - attempt_started,
                         'status': 'failed', 'error_type': type(exc).__name__, 'transient': transient,
+                        'request_prompt': request_prompt,
+                        'request_prompt_sha256': hashlib.sha256(request_prompt.encode('utf-8')).hexdigest(),
+                        'citation_validation_failed': correctable,
                         'diagnostic': safe_diagnostic,
                         **({'rejected_document_sha256': rejected_hash} if rejected_hash else {}),
                         'message': safe_model_error_summary(exc, sensitive_values=(secret,))})
@@ -557,18 +611,25 @@ class ContentAddressedModelCache:
                             'execution_policy': policy.public_dict()})
                     if on_attempt_event:
                         safe_observe(on_attempt_event, stage='model_attempt_failed', attempt=attempt + 1,
-                                         max_attempts=policy.transient_retries + 1,
+                                         max_attempts=max_attempts,
                                          status='failed', error_type=type(exc).__name__,
                                          transient=transient)
-                    if not transient or attempt == policy.transient_retries:
+                    if correctable and citation_retries < policy.citation_retries:
+                        citation_retries += 1
+                        request_prompt = CITATION_RETRY_PREFIX + prompt
+                    elif transient and transport_retries < policy.transient_retries:
+                        transport_retries += 1
+                    else:
                         raise
                     if on_attempt_event:
                         safe_observe(on_attempt_event, stage='model_retry_scheduled', attempt=attempt + 2,
-                                         max_attempts=policy.transient_retries + 1,
+                                         max_attempts=max_attempts,
                                          status='scheduled',
+                                         retry_reason='citation_validation' if correctable else 'transport',
                                          waiting_for='rate_slot')
                     continue
                 attempts.append({'attempt': attempt + 1, 'started_at_et': timestamp,
+                    'request_prompt_sha256': hashlib.sha256(request_prompt.encode('utf-8')).hexdigest(),
                     'elapsed_seconds': time.monotonic() - attempt_started, 'status': 'complete'})
                 break
             audit = {**audit, 'attempts': attempts, 'attempt_count': len(attempts),
@@ -581,6 +642,7 @@ class ContentAddressedModelCache:
             unsigned = {
                 "schema_version": 2, "cache_key": cache_key,
                 "key_document": key_document, "prompt": prompt, "schema": schema,
+                **({'request_prompt': request_prompt} if request_prompt != prompt else {}),
                 "result": result, "result_sha256": sha256_payload(result),
                 "audit": audit, "audit_sha256": sha256_payload(audit),
             }
@@ -631,6 +693,7 @@ class ContentAddressedModelCache:
             raise ResearchBatchError("model cache result hash mismatch")
         if sha256_payload(document.get("audit")) != document.get("audit_sha256"):
             raise ResearchBatchError("model cache audit hash mismatch")
+        verified_request_prompt(document)
         return document
 
     def snapshot_calls(
@@ -723,12 +786,27 @@ def _progress_call_id(profile: ModelProfile, prompt: str, schema: dict[str, Any]
     })
 
 
+def _domain_schema(group, prompt_format_version):
+    schema = _report_schema()
+    item = schema['properties']['results']['items']['properties']
+    item['task_id']['enum'] = [task['task_id'] for task in group]
+    if prompt_format_version >= 3:
+        allowed = sorted({row['evidence_id'] for task in group for row in task['evidence']})
+        for report in item['report']['anyOf']:
+            report['properties']['evidence_ids']['items']['enum'] = allowed
+    if group and all(task.get('event_context_only') for task in group):
+        for report in item['report']['anyOf']:
+            verdict = report['properties']['verdict']
+            verdict['enum'] = [value for value in verdict['enum'] if value not in {'bullish', 'bearish'}]
+    return schema
+
+
 def _domain_groups(tasks, domain, documents, profile, prompt_format_version):
     groups, group = [], []
     for task in tasks:
         prompt = _domain_prompt(domain=domain, tasks=group + [task], documents=documents,
                                 prompt_format_version=prompt_format_version)
-        if group and ((prompt_format_version >= 2 and domain == 'price_volume') or
+        if group and ((prompt_format_version >= 3 or (prompt_format_version >= 2 and domain == 'price_volume')) or
                 len(prompt.encode('utf-8')) // 4 + profile.maximum_output_tokens > profile.maximum_context_tokens):
             groups.append(group)
             group = []
@@ -756,8 +834,7 @@ def _unchanged_checkpoint_rows(evidence, tasks, domain, documents, profile, cach
         matching = {t['task_id']: t for t in group if wanted.get(t['task_id']) == t}
         if not matching:
             continue
-        schema = _report_schema()
-        schema['properties']['results']['items']['properties']['task_id']['enum'] = [t['task_id'] for t in group]
+        schema = _domain_schema(group, prompt_format_version)
         prompt = _domain_prompt(domain=domain, tasks=group, documents=documents,
                                 prompt_format_version=prompt_format_version)
         key = sha256_payload({'cache_schema_version': 2, 'profile_sha256': profile.identity(),
@@ -831,14 +908,17 @@ def _run_domain(
     reused_ids = {r['task_id'] for r in rows}
     groups = _domain_groups([t for t in tasks if t['task_id'] not in reused_ids],
                             domain, documents, profile, prompt_format_version)
-    call_by_task, failures = {}, []
+    call_by_task, failures = {}, {}
     evidence_domains = {
         record['evidence_id']: set(record.get('consumer_domains', [record['domain']]))
         for record in evidence.lineage['records']
     }
+    event_calendar_ids = {record['evidence_id'] for record in evidence.lineage['records']
+        if record['domain'] == 'event' and record.get('root_component_type') == 'event_calendar'}
+    company_event_ids = {record['evidence_id'] for record in evidence.lineage['records']
+        if record['domain'] == 'event' and record.get('root_component_type') == 'stock_event'}
     for group in groups:
-        schema = _report_schema()
-        schema['properties']['results']['items']['properties']['task_id']['enum'] = [task['task_id'] for task in group]
+        schema = _domain_schema(group, prompt_format_version)
         prompt = _domain_prompt(domain=domain, tasks=group, documents=documents,
                                 prompt_format_version=prompt_format_version)
         call_id = _progress_call_id(profile, prompt, schema)
@@ -868,18 +948,30 @@ def _run_domain(
             def validate_group(value):
                 group_rows = value.get('results') if isinstance(value, dict) else None
                 if not isinstance(group_rows, list) or len(group_rows) != len(group):
-                    raise ResearchBatchError(f'{domain} model output does not match frozen tasks')
+                    raise CandidateReportError(f'{domain} model output does not match frozen tasks')
                 by_id = {row.get('task_id'): row.get('report') for row in group_rows if isinstance(row, dict)}
                 if set(by_id) != {task['task_id'] for task in group}:
-                    raise ResearchBatchError(f'{domain} model output does not match frozen tasks')
+                    raise CandidateReportError(f'{domain} model output does not match frozen tasks')
                 for task in group:
                     raw = by_id[task['task_id']]
                     if not isinstance(raw, dict) or raw.get('domain') != domain or raw.get('as_of_et') != task['as_of_et']:
-                        raise ResearchBatchError(f'{domain} changed its frozen task identity')
-                    if not set(raw.get('evidence_ids', [])) <= {row['evidence_id'] for row in task['evidence']}:
-                        raise ResearchBatchError(f'{domain} cited evidence outside its frozen task')
-                    validate_domain_report(_bind_verified_lineage(raw, evidence.lineage['evidence_to_roots']),
-                        evidence.lineage['evidence_to_roots'], evidence_domains)
+                        raise CandidateReportError(f'{domain} changed its frozen task identity')
+                    if task.get('event_context_only') and raw.get('verdict') in {'bullish', 'bearish'}:
+                        raise CandidateReportError('event calendar supplies scheduled risk, not a directional company event')
+                    ids = raw.get('evidence_ids')
+                    if (not isinstance(ids, list) or any(not isinstance(e, str) for e in ids)
+                            or len(ids) != len(set(ids))
+                            or not set(ids) <= {row['evidence_id'] for row in task['evidence']}):
+                        raise CitationValidationError(f'{domain} cited evidence outside its frozen task or duplicate evidence')
+                    if (domain == 'event' and raw.get('verdict') in {'bullish', 'bearish'}
+                            and event_calendar_ids & {row['evidence_id'] for row in task['evidence']}
+                            and not company_event_ids & set(ids)):
+                        raise CandidateReportError('event calendar or cross-domain context cannot replace cited company-event evidence')
+                    try:
+                        validate_domain_report(_bind_verified_lineage(raw, evidence.lineage['evidence_to_roots']),
+                            evidence.lineage['evidence_to_roots'], evidence_domains)
+                    except ValueError as invalid:
+                        raise CandidateReportError(str(invalid)) from invalid
             result, audit, cache_hit = cache.call(profile=profile, secret=secret,
                 prompt=prompt, schema=schema, caller=caller, on_model_start=model_start,
                 on_attempt_event=attempt_event,
@@ -888,12 +980,16 @@ def _run_domain(
                 recover_rejected_cache=recover_rejected_cache,
                 snapshot_root=snapshot_root, group_symbols=[task['symbol'] for task in group])
         except Exception as exc:
+            if not _candidate_local_failure(exc):
+                raise ResearchBatchError(f'{domain}: {type(exc).__name__}: {exc}') from exc
             safe_observe(observer, stage="failure", batch_id=batch_id,
                          variant_key=variant_key, domain=domain,
                          symbols=[task["symbol"] for task in group], call_id=call_id,
                          attempt=current_attempt or attempt, status="failed", error_type=type(exc).__name__,
                          message=str(exc), elapsed_seconds=round(time.monotonic()-started, 3))
-            failures.append(f'{domain}: {type(exc).__name__}: {exc}')
+            for task in group:
+                failures[task['symbol']] = {'domain': domain, 'error_type': type(exc).__name__,
+                    'message': safe_model_error_summary(exc, sensitive_values=(secret,))}
             continue
         safe_observe(observer, stage="cache_hit" if cache_hit else "model_returned", batch_id=batch_id,
                      variant_key=variant_key, domain=domain,
@@ -956,7 +1052,8 @@ def _run_domain(
                      status="no_data", elapsed_seconds=round(time.monotonic()-domain_started, 3),
                      report={**report, "original": report, "evidence": []})
     if failures:
-        raise ResearchBatchError('; '.join(failures))
+        raise IncompleteDomainError(f'{domain}: 部分股票分析未完成',
+            [valid_reports.get(task['task_id']) for task in all_tasks], audits, failures)
     return [valid_reports[task['task_id']] for task in all_tasks], audits
 
 
@@ -996,17 +1093,20 @@ def _adversary_prompt(
 def _validated_adversary(value, expected_symbols):
     rows = value.get('results') if isinstance(value, dict) else None
     if not isinstance(rows, list):
-        raise ResearchBatchError('adversary output has no result list')
+        raise CandidateReportError('adversary output has no result list')
     by_symbol = {}
     for row in rows:
         if not isinstance(row, dict):
-            raise ResearchBatchError('adversary returned a non-object result')
+            raise CandidateReportError('adversary returned a non-object result')
         symbol = str(row.get('symbol', '')).upper()
         if symbol in by_symbol:
-            raise ResearchBatchError('adversary returned a duplicate symbol')
-        by_symbol[symbol] = validate_adversary_report(row.get('report', {}))
+            raise CandidateReportError('adversary returned a duplicate symbol')
+        try:
+            by_symbol[symbol] = validate_adversary_report(row.get('report', {}))
+        except ValueError as exc:
+            raise CandidateReportError(str(exc)) from exc
     if set(by_symbol) != set(expected_symbols):
-        raise ResearchBatchError('adversary output does not match frozen candidates')
+        raise CandidateReportError('adversary output does not match frozen candidates')
     return by_symbol
 
 
@@ -1036,8 +1136,9 @@ def authenticated_failed_checkpoints(*, evidence, manifest, skill_snapshots, fai
         raise ResearchBatchError('batch model profile differs from frozen identity')
     config = manifest['batch_identity'].get('execution_config', {})
     prompt_version = config.get('prompt_format_version', 1)
-    if prompt_version not in {1, 2}:
+    if prompt_version not in {1, 2, 3}:
         raise ResearchBatchError('unsupported original prompt format')
+    independent_candidates = config.get('candidate_isolation') and prompt_version >= 3
 
     class SnapshotInputs:
         def __init__(self):
@@ -1056,7 +1157,7 @@ def authenticated_failed_checkpoints(*, evidence, manifest, skill_snapshots, fai
                 'schema_sha256': sha256_payload(schema)})
             document = calls.get(key)
             if document is None:
-                raise ResearchBatchError('frozen checkpoint unavailable')
+                raise CandidateReportError('frozen checkpoint unavailable')
             if document['prompt'] != prompt or document['schema'] != schema:
                 raise ResearchBatchError('frozen checkpoint input mismatch')
             _validate_result(document['result'], schema)
@@ -1076,34 +1177,263 @@ def authenticated_failed_checkpoints(*, evidence, manifest, skill_snapshots, fai
                 reports, _ = _run_domain(domain=domain, evidence=selected, documents=documents,
                     profile=profile, secret='', cache=cache, caller=None,
                     prompt_format_version=prompt_version)
+            except IncompleteDomainError as exc:
+                incomplete = True
+                reports = exc.reports
             except ValueError:
                 incomplete = True
                 continue
             for candidate, report in zip(selected.candidate_intake['candidates'], reports, strict=True):
-                reports_by_symbol[str(candidate['symbol']).upper()].append(report)
-        if incomplete or not reports_by_symbol:
+                if report is not None:
+                    reports_by_symbol[str(candidate['symbol']).upper()].append(report)
+        if independent_candidates:
+            # A sibling may fail after another stock has finished its own review.
+            # Reconstruct only complete single-stock inputs, never partial reports.
+            reports_by_symbol = {symbol: reports for symbol, reports in reports_by_symbol.items()
+                if len(reports) == len(DOMAINS) and {report['domain'] for report in reports} == DOMAINS}
+        elif incomplete:
+            continue
+        if not reports_by_symbol:
             continue
         try:
             from .review_timing import review_timing_context
-            timing_context = (review_timing_context(selected, reports_by_symbol)
-                              if config.get('review_timing_contract_version', 0) == 1 else None)
-            adversary, _, _ = cache.call(profile=profile,
-                prompt=_adversary_prompt(reports_by_symbol=reports_by_symbol, documents=documents,
-                                        timing_context=timing_context),
-                schema=_adversary_schema(), validate=lambda value: _validated_adversary(value, reports_by_symbol))
+            reviews = {}
+            groups = ([{s:r} for s,r in reports_by_symbol.items()] if independent_candidates
+                      else [reports_by_symbol])
+            for group in groups:
+                try:
+                    adversary, _, _ = cache.call(profile=profile,
+                        prompt=_adversary_prompt(reports_by_symbol=group, documents=documents,
+                            timing_context=review_timing_context(selected, group) if config.get('review_timing_contract_version') == 1 else None),
+                        schema=_adversary_schema(), validate=lambda value: _validated_adversary(value, group))
+                    reviews.update(_validated_adversary(adversary, group))
+                except ValueError:
+                    continue
+            if independent_candidates:
+                reports_by_symbol = {symbol: reports for symbol, reports in reports_by_symbol.items()
+                                     if symbol in reviews}
+            elif set(reviews) != set(reports_by_symbol):
+                continue
+            if not reports_by_symbol:
+                continue
             if decision_mode(documents['decision/cases.json']) == 'synthesis':
                 from .synthesis import synthesis_prompt, synthesis_schema, validate_synthesis
                 maximum = decision_parameters(documents['decision/cases.json'])['maximum_predictions']
-                cache.call(profile=profile, prompt=synthesis_prompt(reports=reports_by_symbol,
-                    adversary=_validated_adversary(adversary, reports_by_symbol), documents=documents,
-                    as_of_et=selected.manifest['as_of_et'], maximum_predictions=maximum,
-                    citation_contract_version=config.get('synthesis_citation_contract_version', 1),
-                    timing_context=timing_context),
-                    schema=synthesis_schema(list(reports_by_symbol)), validate=lambda value: validate_synthesis(
-                        value, reports_by_symbol, selected.lineage['evidence_to_roots'], maximum_predictions=maximum))
+                synthesis_groups = {tuple(sorted(reports_by_symbol))}
+                if independent_candidates:
+                    # Earlier failed attempts may have synthesized a smaller,
+                    # complete candidate set before more candidates recovered.
+                    # Stored enums are selection hints only: every byte of the
+                    # request is rebuilt from authenticated reports and reviews.
+                    for document in calls.values():
+                        try:
+                            symbols = document['schema']['properties']['decisions']['items']['properties']['symbol']['enum']
+                        except (KeyError, TypeError):
+                            continue
+                        if (isinstance(symbols, list) and symbols and all(isinstance(s, str) for s in symbols)
+                                and len(symbols) == len(set(symbols)) and set(symbols) <= set(reports_by_symbol)):
+                            synthesis_groups.add(tuple(sorted(symbols)))
+                for symbols in sorted(synthesis_groups):
+                    group = {symbol: reports_by_symbol[symbol] for symbol in symbols}
+                    group_reviews = {symbol: reviews[symbol] for symbol in symbols}
+                    timing_context = (review_timing_context(selected, group)
+                                      if config.get('review_timing_contract_version', 0) == 1 else None)
+                    try:
+                        cache.call(profile=profile, prompt=synthesis_prompt(reports=group,
+                            adversary=group_reviews, documents=documents,
+                            as_of_et=selected.manifest['as_of_et'], maximum_predictions=maximum,
+                            citation_contract_version=config.get('synthesis_citation_contract_version', 1),
+                            timing_context=timing_context),
+                            schema=synthesis_schema(list(group)), validate=lambda value: validate_synthesis(
+                                value, group, selected.lineage['evidence_to_roots'], maximum_predictions=maximum))
+                    except ValueError:
+                        continue
         except ValueError:
             continue
     return cache.authenticated
+
+
+def validate_candidate_recovery(saved, result, evidence, documents, manifest, calls):
+    from .contracts import validate_adversary_report
+    if (saved.get('recovery_sha256') != sha256_payload({k:v for k,v in saved.items() if k!='recovery_sha256'})
+            or saved.get('variant_result_sha256') != result['variant_result_sha256']
+            or set(saved.get('reports_by_symbol', {})) != set(result.get('excluded_candidates', {}))
+            or set(saved.get('adversary_by_symbol', {})) != set(result.get('excluded_candidates', {}))):
+        raise ResearchBatchError('candidate recovery integrity mismatch')
+    selected = _variant_evidence(evidence, documents)
+    prompt_version = manifest['batch_identity'].get('execution_config', {}).get('prompt_format_version', 1)
+    variant_key = f"{result['variant']['author']}/{result['variant']['version_id']}"
+    authorized = authenticated_failed_checkpoints(evidence=evidence, manifest=manifest,
+        skill_snapshots={variant_key: {'documents': documents}}, failed_variants={variant_key: {}}, calls=calls)
+    task_lookup, expected = {}, {}
+    for domain in sorted(DOMAINS):
+        for task in _tasks_for_domain(selected, domain, prompt_format_version=prompt_version):
+            task_lookup[task['task_id']] = task
+            if not task['evidence'] or task['collection_status'] != 'collected':
+                expected[(task['symbol'], domain)] = _deterministic_empty_report(task)
+    reviews = {}
+    if not saved.get('model_call_audits'):
+        raise ResearchBatchError('candidate recovery has no verified model calls')
+    for audit in saved['model_call_audits']:
+        call = calls.get(audit.get('cache_key'))
+        if (call is None or audit.get('cache_key') not in authorized
+                or audit.get('cache_document_sha256') != call.get('cache_document_sha256')):
+            raise ResearchBatchError('candidate recovery model call mismatch')
+        for row in call['result'].get('results', []):
+            task = task_lookup.get(row.get('task_id'))
+            if task:
+                expected[(task['symbol'], task['domain'])] = _bind_verified_lineage(
+                    row['report'], evidence.lineage['evidence_to_roots'])
+            elif row.get('symbol') and audit.get('domain') == 'adversary':
+                reviews[row['symbol']] = validate_adversary_report(row['report'])
+    for symbol, reports in saved['reports_by_symbol'].items():
+        by_domain = {r.get('domain'): r for r in reports}
+        if len(reports) != len(DOMAINS) or set(by_domain) != set(DOMAINS):
+            raise ResearchBatchError('candidate recovery reports incomplete')
+        for domain, report in by_domain.items():
+            if report != expected.get((symbol, domain)):
+                raise ResearchBatchError('candidate recovery report differs from verified model call')
+        if saved['adversary_by_symbol'][symbol] != reviews.get(symbol):
+            raise ResearchBatchError('candidate recovery review differs from verified model call')
+
+
+def _recover_candidates(*, result, variant_root, evidence, documents, review_timing_contract_version=0, **kwargs):
+    """Complete missing research separately; never replace a published selection."""
+    destination = variant_root / 'candidate_recovery.json'
+    if destination.is_file():
+        saved = json.loads(destination.read_text(encoding='utf-8'))
+        calls = {p.stem: kwargs['cache']._verified_document(p, cache_key=p.stem)
+                 for p in kwargs['snapshot_root'].glob('*.json')}
+        manifest = json.loads((kwargs['snapshot_root'].parent/'batch_manifest.json').read_text(encoding='utf-8'))
+        validate_candidate_recovery(saved, result, evidence, documents, manifest, calls)
+        return
+    symbols = set(result['excluded_candidates'])
+    recovered = {symbol: [] for symbol in symbols}
+    audits, failures = [], {}
+    recovered_reviews = {}
+    if kwargs.get('prompt_format_version', 1) >= 3:
+        candidates = [candidate for candidate in evidence.candidate_intake['candidates']
+                      if str(candidate['symbol']).upper() in symbols]
+        shared_failure = threading.Event()
+        with ThreadPoolExecutor(max_workers=min(kwargs['profile'].max_concurrency, len(candidates)),
+                                thread_name_prefix='shaq-recovery') as executor:
+            futures = {str(candidate['symbol']).upper(): executor.submit(_run_candidate_analysis,
+                candidate=candidate, evidence=evidence, documents=documents, shared_failure=shared_failure,
+                review_timing_contract_version=review_timing_contract_version,
+                recover_rejected_cache=True, **kwargs) for candidate in candidates}
+            for symbol, future in futures.items():
+                reports, calls, candidate_failures, reviews = future.result()
+                recovered[symbol] = reports
+                audits.extend(calls)
+                recovered_reviews.update(reviews)
+                if candidate_failures:
+                    failures[symbol] = candidate_failures
+        if failures:
+            return
+    else:
+        # Older formats retain original groups, including successful siblings.
+        for domain in sorted(DOMAINS):
+            try:
+                reports, domain_audits = _run_domain(domain=domain, evidence=evidence,
+                    documents=documents, recover_rejected_cache=True, **kwargs)
+            except IncompleteDomainError as exc:
+                reports, domain_audits = exc.reports, exc.audits
+                failures.update(exc.failures)
+            audits.extend(domain_audits)
+            for candidate, report in zip(evidence.candidate_intake['candidates'], reports, strict=True):
+                symbol = str(candidate['symbol']).upper()
+                if symbol in symbols and report is not None:
+                    recovered[symbol].append(report)
+        if failures:
+            return
+        for symbol in symbols:
+            from .review_timing import review_timing_context
+            group = {symbol: recovered[symbol]}
+            timing = review_timing_context(evidence, group) if review_timing_contract_version == 1 else None
+            try:
+                review, review_audit, _ = kwargs['cache'].call(profile=kwargs['profile'], secret=kwargs['secret'],
+                    prompt=_adversary_prompt(reports_by_symbol=group, documents=documents, timing_context=timing),
+                    schema=_adversary_schema(), caller=kwargs['caller'],
+                    execution_policy=kwargs['execution_policy'], snapshot_root=kwargs['snapshot_root'],
+                    validate=lambda value: _validated_adversary(value, {symbol}), recover_rejected_cache=True)
+            except Exception:
+                return
+            recovered_reviews.update(_validated_adversary(review, {symbol}))
+            audits.append({**review_audit, 'domain': 'adversary'})
+    unsigned = {'schema_version': 1, 'variant_result_sha256': result['variant_result_sha256'],
+        'completed_at_et': datetime.now(ZoneInfo('America/New_York')).isoformat(),
+        'reports_by_symbol': recovered, 'adversary_by_symbol': recovered_reviews, 'model_call_audits': audits,
+        'predictions_unchanged': True}
+    _write_json_once(destination, {**unsigned, 'recovery_sha256': sha256_payload(unsigned)})
+
+
+def _run_adversary_group(*, reports_by_symbol, documents, timing_context, profile, secret,
+                        cache, caller, observer, batch_id, variant_key, execution_policy,
+                        snapshot_root, prompt_format_version, recover_rejected_cache):
+    schema = _adversary_schema()
+    symbols = sorted(reports_by_symbol)
+    prompt = _adversary_prompt(reports_by_symbol=reports_by_symbol,
+        documents=documents, timing_context=timing_context)
+    call_id = _progress_call_id(profile, prompt, schema)
+    safe_observe(observer, stage='adversary', batch_id=batch_id,
+        variant_key=variant_key, symbols=symbols, status='running')
+    result, audit, cache_hit = cache.call(
+        profile=profile, secret=secret, prompt=prompt, schema=schema, caller=caller,
+        on_attempt_event=lambda **fields: safe_observe(observer, batch_id=batch_id,
+            variant_key=variant_key, domain='adversary', symbols=symbols,
+            call_id=call_id, **fields),
+        execution_policy=execution_policy, snapshot_root=snapshot_root,
+        group_symbols=symbols, allow_legacy_cache=prompt_format_version == 1,
+        validate=lambda value: _validated_adversary(value, reports_by_symbol),
+        recover_rejected_cache=recover_rejected_cache)
+    return _validated_adversary(result, reports_by_symbol), {
+        **audit, 'domain': 'adversary', 'cache_hit': cache_hit}
+
+
+def _run_candidate_analysis(*, candidate, evidence, documents, shared_failure,
+                            review_timing_contract_version=0, **kwargs):
+    """Run the same isolated, bounded work chain for fresh and recovery passes."""
+    symbol = str(candidate['symbol']).upper()
+    # Format 3 already uses one-stock groups. Selecting one intake row preserves
+    # the original evidence hash, task IDs and canonical inputs.
+    selected = replace(evidence, candidate_intake={**evidence.candidate_intake,
+                                                   'candidates': [candidate]})
+    reports, calls, failures, reviews = [], [], [], {}
+    for domain in sorted(DOMAINS):
+        if shared_failure.is_set():
+            return reports, calls, failures, reviews
+        try:
+            domain_reports, domain_audits = _run_domain(
+                domain=domain, evidence=selected, documents=documents, **kwargs)
+        except IncompleteDomainError as exc:
+            calls.extend(exc.audits)
+            reports.extend(report for report in exc.reports if report is not None)
+            failures.extend(exc.failures.values())
+            return reports, calls, failures, reviews
+        except Exception:
+            shared_failure.set()
+            raise
+        reports.extend(domain_reports)
+        calls.extend(domain_audits)
+    if not shared_failure.is_set():
+        from .review_timing import review_timing_context
+        group = {symbol: reports}
+        timing = review_timing_context(evidence, group) if review_timing_contract_version == 1 else None
+        try:
+            reviews, audit = _run_adversary_group(reports_by_symbol=group, documents=documents,
+                                                timing_context=timing, **kwargs)
+        except Exception as exc:
+            if not _candidate_local_failure(exc):
+                shared_failure.set()
+                raise
+            failures.append({'domain': 'adversary', 'error_type': type(exc).__name__,
+                'message': safe_model_error_summary(exc, sensitive_values=(kwargs['secret'],))})
+            safe_observe(kwargs['observer'], stage='failure', batch_id=kwargs['batch_id'],
+                variant_key=kwargs['variant_key'], domain='adversary', symbols=[symbol],
+                status='failed', message='该股票反方审查未完成')
+        else:
+            calls.append(audit)
+    return reports, calls, failures, reviews
 
 
 def run_variant(
@@ -1125,6 +1455,7 @@ def run_variant(
     recover_rejected_cache: bool = False,
     synthesis_citation_contract_version: int = 2,
     review_timing_contract_version: int = 0,
+    candidate_isolation: bool = False,
 ) -> dict[str, Any]:
     variant_key = f"{variant.author}/{variant.version_id}"
     stage_started = time.monotonic()
@@ -1138,9 +1469,28 @@ def run_variant(
         unsigned = {key: value for key, value in result.items() if key != "variant_result_sha256"}
         if declared != sha256_payload(unsigned):
             raise ResearchBatchError("stored variant result hash mismatch")
+        if result.get('excluded_candidates'):
+            documents = documents_snapshot if documents_snapshot is not None else registry.effective_skills(variant.version_id, variant.author)
+            try:
+                _recover_candidates(result=result, variant_root=variant_root,
+                    evidence=_variant_evidence(evidence, documents), documents=documents,
+                    profile=profile, secret=secret, cache=cache, caller=caller, observer=observer,
+                    batch_id=batch_id, variant_key=variant_key, execution_policy=execution_policy,
+                    review_timing_contract_version=review_timing_contract_version,
+                    prompt_format_version=prompt_format_version, snapshot_root=output_root.parent/'model_calls')
+            except Exception as exc:
+                if (variant_root/'candidate_recovery.json').is_file():
+                    raise  # A saved supplement must pass its integrity check.
+                failure = {'error_type': type(exc).__name__,
+                    'message': safe_model_error_summary(exc, sensitive_values=(secret,)),
+                    'at_et': datetime.now(ZoneInfo('America/New_York')).isoformat()}
+                _write_json_once(variant_root/'recovery_attempts'/f'{sha256_payload(failure)}.json', failure)
+                safe_observe(observer, stage='failure', batch_id=batch_id, variant_key=variant_key,
+                    status='failed', message='补充分析暂未完成，已发布结果不受影响')
+        recovery_pending = result.get('excluded_candidates') and not (variant_root/'candidate_recovery.json').is_file()
         safe_observe(observer, stage="variant_reused", batch_id=batch_id,
                      variant_key=variant_key, symbols=sorted(result.get("reports_by_symbol", {})),
-                     status="complete", elapsed_seconds=round(time.monotonic()-stage_started, 3))
+                     status="incomplete" if recovery_pending else "complete", elapsed_seconds=round(time.monotonic()-stage_started, 3))
         for symbol, reports in result.get("reports_by_symbol", {}).items():
             for report in reports:
                 safe_observe(observer, stage="report_validated", batch_id=batch_id,
@@ -1166,66 +1516,109 @@ def run_variant(
     tasks.append({'task_id': 'decision'})
     safe_observe(observer, stage='tasks_planned', batch_id=batch_id, variant_key=variant_key,
                  symbols=sorted(reports_by_symbol), tasks=tasks)
-    audits, domain_failures = [], []
-    for domain in sorted(DOMAINS):
-        try:
-            reports, domain_audits = _run_domain(
-                domain=domain, evidence=evidence, documents=documents,
-                profile=profile, secret=secret, cache=cache, caller=caller,
-                observer=observer, batch_id=batch_id, variant_key=variant_key,
-                execution_policy=execution_policy, prompt_format_version=prompt_format_version,
-                snapshot_root=output_root.parent / 'model_calls',
-                recover_rejected_cache=recover_rejected_cache,
-            )
-        except Exception as exc:
-            domain_failures.append(f'{domain}: {type(exc).__name__}: {exc}')
-            continue
-        for candidate, report in zip(evidence.candidate_intake["candidates"], reports, strict=True):
-            reports_by_symbol[str(candidate["symbol"]).upper()].append(report)
-        audits.extend(domain_audits)
-    if domain_failures:
-        raise ResearchBatchError('Required reports incomplete; synthesis blocked: ' + '; '.join(domain_failures))
     if review_timing_contract_version not in {0, 1}:
         raise ResearchBatchError('unsupported review timing contract')
     from .review_timing import review_timing_context
+    independent_candidates = candidate_isolation and prompt_format_version >= 3
+    audits, domain_failures, excluded_candidates = [], [], {}
+    adversary_by_symbol = {}
+
+    def review(group):
+        return _run_adversary_group(reports_by_symbol=group, documents=documents,
+            timing_context=review_timing_context(evidence, group) if review_timing_contract_version == 1 else None,
+            profile=profile, secret=secret, cache=cache, caller=caller, observer=observer,
+            batch_id=batch_id, variant_key=variant_key, execution_policy=execution_policy,
+            snapshot_root=output_root.parent / 'model_calls', prompt_format_version=prompt_format_version,
+            recover_rejected_cache=recover_rejected_cache)
+
+    if independent_candidates and reports_by_symbol:
+        shared_failure = threading.Event()
+        candidates = evidence.candidate_intake['candidates']
+        with ThreadPoolExecutor(max_workers=min(profile.max_concurrency, len(candidates)),
+                                thread_name_prefix='shaq-candidate') as executor:
+            futures = {str(candidate['symbol']).upper(): executor.submit(_run_candidate_analysis,
+                candidate=candidate, evidence=evidence, documents=documents, shared_failure=shared_failure,
+                review_timing_contract_version=review_timing_contract_version,
+                profile=profile, secret=secret, cache=cache, caller=caller, observer=observer,
+                batch_id=batch_id, variant_key=variant_key, execution_policy=execution_policy,
+                prompt_format_version=prompt_format_version, snapshot_root=output_root.parent / 'model_calls',
+                recover_rejected_cache=recover_rejected_cache) for candidate in candidates}
+            # Collect in frozen candidate order; worker timing must not reorder
+            # published reports or audits. Each worker owns its callback state.
+            for symbol, future in futures.items():
+                try:
+                    reports, calls, failures, reviews = future.result()
+                except Exception as exc:
+                    domain_failures.append(f'{symbol}: {type(exc).__name__}: {exc}')
+                    continue
+                reports_by_symbol[symbol] = reports
+                audits.extend(calls)
+                adversary_by_symbol.update(reviews)
+                if failures:
+                    excluded_candidates[symbol] = failures
+    elif not independent_candidates:
+        for domain in sorted(DOMAINS):
+            try:
+                reports, domain_audits = _run_domain(
+                    domain=domain, evidence=evidence, documents=documents,
+                    profile=profile, secret=secret, cache=cache, caller=caller,
+                    observer=observer, batch_id=batch_id, variant_key=variant_key,
+                    execution_policy=execution_policy, prompt_format_version=prompt_format_version,
+                    snapshot_root=output_root.parent / 'model_calls',
+                    recover_rejected_cache=recover_rejected_cache,
+                )
+            except IncompleteDomainError as exc:
+                if not candidate_isolation:
+                    domain_failures.append(str(exc))
+                    continue
+                reports, domain_audits = exc.reports, exc.audits
+                for symbol, failure in exc.failures.items():
+                    excluded_candidates.setdefault(symbol, []).append(failure)
+            except Exception as exc:
+                domain_failures.append(f'{domain}: {type(exc).__name__}: {exc}')
+                continue
+            for candidate, report in zip(evidence.candidate_intake['candidates'], reports, strict=True):
+                if report is not None:
+                    reports_by_symbol[str(candidate['symbol']).upper()].append(report)
+            audits.extend(domain_audits)
+    if domain_failures:
+        raise ResearchBatchError('Required reports incomplete; synthesis blocked: ' + '; '.join(domain_failures))
+    partial_reports = {symbol: reports_by_symbol.pop(symbol) for symbol in excluded_candidates}
+    if excluded_candidates and not reports_by_symbol:
+        raise ResearchBatchError('全部候选仍有未完成分析；已保存成功报告，可继续恢复')
     timing_context = (review_timing_context(evidence, reports_by_symbol)
                       if review_timing_contract_version == 1 else None)
-    adversary_prompt = _adversary_prompt(
-        reports_by_symbol=reports_by_symbol, documents=documents, timing_context=timing_context
-    )
-    if reports_by_symbol:
+    review_groups = [reports_by_symbol] if reports_by_symbol and not independent_candidates else []
+    for review_group in review_groups:
         adversary_started = time.monotonic()
-        adversary_schema = _adversary_schema()
-        adversary_symbols = sorted(reports_by_symbol)
-        adversary_call_id = _progress_call_id(profile, adversary_prompt, adversary_schema)
-        safe_observe(observer, stage="adversary", batch_id=batch_id,
-                     variant_key=variant_key, symbols=sorted(reports_by_symbol), status="running")
-        adversary_result, adversary_audit, cache_hit = cache.call(
-            profile=profile, secret=secret, prompt=adversary_prompt,
-            schema=adversary_schema, caller=caller,
-            on_attempt_event=lambda **fields: safe_observe(observer, batch_id=batch_id,
-                variant_key=variant_key, domain='adversary', symbols=adversary_symbols,
-                call_id=adversary_call_id, **fields),
-            execution_policy=execution_policy, snapshot_root=output_root.parent / 'model_calls',
-            group_symbols=sorted(reports_by_symbol),
-            allow_legacy_cache=prompt_format_version == 1,
-            validate=lambda value: _validated_adversary(value, reports_by_symbol),
-            recover_rejected_cache=recover_rejected_cache,
-        )
-    else:
-        adversary_result, adversary_audit, cache_hit = {"results": []}, {}, False
-    adversary_by_symbol = _validated_adversary(adversary_result, reports_by_symbol)
+        adversary_symbols = sorted(review_group)
+        try:
+            reviews, adversary_audit = review(review_group)
+        except Exception as exc:
+            if not candidate_isolation or len(review_group) != 1 or not _candidate_local_failure(exc):
+                raise
+            symbol = adversary_symbols[0]
+            excluded_candidates.setdefault(symbol, []).append({'domain': 'adversary',
+                'error_type': type(exc).__name__, 'message': safe_model_error_summary(exc, sensitive_values=(secret,))})
+            partial_reports[symbol] = reports_by_symbol.pop(symbol)
+            safe_observe(observer, stage='failure', batch_id=batch_id, variant_key=variant_key,
+                domain='adversary', symbols=[symbol], status='failed', message='该股票反方审查未完成')
+            continue
+        adversary_by_symbol.update(reviews)
+        audits.append(adversary_audit)
+    if excluded_candidates and not reports_by_symbol:
+        raise ResearchBatchError('全部候选仍有未完成分析；已保存成功报告，可继续恢复')
     safe_observe(observer, stage="adversary", batch_id=batch_id,
                  variant_key=variant_key, symbols=sorted(reports_by_symbol), status="complete",
-                 elapsed_seconds=round(time.monotonic() - adversary_started, 3) if reports_by_symbol else 0.0)
-    if reports_by_symbol:
-        audits.append({**adversary_audit, "domain": "adversary", "cache_hit": cache_hit})
+                 **({'elapsed_seconds': round(time.monotonic() - adversary_started, 3)}
+                    if review_groups else {}))
     del integration_policy  # Decision policy is versioned code, not a hidden Python threshold.
     decision_input = build_decision_input(
         as_of_et=str(evidence.manifest["as_of_et"]),
         reports_by_symbol=reports_by_symbol,
         adversary_by_symbol=adversary_by_symbol,
-        candidate_intake=evidence.candidate_intake,
+        candidate_intake={**evidence.candidate_intake, 'candidates': [row for row in
+            evidence.candidate_intake['candidates'] if str(row['symbol']).upper() in reports_by_symbol]},
         root_component_types=evidence.lineage["root_component_types"],
     )
     mode = decision_mode(documents["decision/cases.json"])
@@ -1299,6 +1692,10 @@ def run_variant(
         audit["decision_evidence_root_ids"] = row["evidence_root_ids"]
         if row["action"] == "reject":
             audit["rejection_reasons"] = [row["reason"]]
+    for symbol in excluded_candidates:
+        audit_by_symbol[symbol] = {'published': False,
+            'rejection_reasons': ['该股票部分分析未完成，暂不参与选择；其他股票正常输出'],
+            'decision_reason': '分析未完成，已保留成功部分'}
     safe_observe(observer, stage="decision_complete", batch_id=batch_id,
                  variant_key=variant_key, symbols=sorted(reports_by_symbol),
                  status="complete")
@@ -1318,7 +1715,7 @@ def run_variant(
         "model_profile_sha256": profile.identity(),
         "reports_by_symbol": {
             symbol: sorted(reports, key=lambda row: row["domain"])
-            for symbol, reports in sorted(reports_by_symbol.items())
+            for symbol, reports in sorted({**reports_by_symbol, **partial_reports}.items())
         },
         "adversary_by_symbol": dict(sorted(adversary_by_symbol.items())),
         "predictions": predictions,
@@ -1331,6 +1728,7 @@ def run_variant(
         "orders": [],
         "broker_modules_loaded": False,
         "research_mode": True,
+        **({'excluded_candidates': excluded_candidates} if excluded_candidates else {}),
         **({"synthesis": synthesis} if mode == "synthesis" else {}),
     }
     result = {
@@ -1473,7 +1871,8 @@ class ResearchBatchRunner:
             "selected_skill_commits": selected_commits,
             "skill_snapshot_sha256s": skill_snapshot_sha256s,
             "cutoff_status": evidence.manifest.get("cutoff_status"),
-            "execution_config": {"prompt_format_version": 2, "price_volume_group_size": 1,
+            "execution_config": {"prompt_format_version": 3, "price_volume_group_size": 1,
+                                 "candidate_isolation": True,
                                  "synthesis_citation_contract_version": 2,
                                  **({'review_timing_contract_version': 1} if
                                      evidence.manifest.get('cutoff_status') == 'late_research_only' else {})},
@@ -1483,7 +1882,7 @@ class ResearchBatchRunner:
         batch_id = (_resume_manifest['batch_id'] if _resume_manifest is not None else
                     "LAB-" + str(evidence.manifest["as_of_et"])[:10] + "-" + sha256_payload(identity)[:12])
         prompt_format_version = identity.get('execution_config', {}).get('prompt_format_version', 1)
-        if prompt_format_version not in {1, 2}:
+        if prompt_format_version not in {1, 2, 3}:
             raise ResearchBatchError('unsupported original prompt format')
         root = self.batches_root / batch_id
         root.mkdir(parents=True, exist_ok=True)
@@ -1532,6 +1931,7 @@ class ResearchBatchRunner:
                     'synthesis_citation_contract_version', 1),
                 review_timing_contract_version=identity.get('execution_config', {}).get(
                     'review_timing_contract_version', 0),
+                candidate_isolation=identity.get('execution_config', {}).get('candidate_isolation', False),
             )
             self.cache.snapshot_calls(
                 value.get("model_call_audits", []),
@@ -1563,10 +1963,16 @@ class ResearchBatchRunner:
                     }
                     if progress:
                         progress(key, 'failed')
+        incomplete = {key: {'error_type': 'IncompleteCandidates',
+            'message': '部分股票分析未完成；其他股票结果已保存，可继续未完成分析',
+            'symbols': sorted(value['excluded_candidates'])}
+            for key, value in results.items() if value.get('excluded_candidates') and not
+            (root/'variants'/f"{_safe_name(value['variant']['author'])}--{_safe_name(value['variant']['version_id'])}"/'candidate_recovery.json').is_file()}
         status_unsigned = {
             "schema_version": 2, "batch_id": batch_id,
             "completed_variants": sorted(results), "failed_variants": failures,
-            "all_variants_completed": not failures and len(results) == len(variants),
+            "all_variants_completed": not failures and not incomplete and len(results) == len(variants),
+            "incomplete_variants": incomplete,
             "orders": [], "research_mode": True,
             "skill_snapshot_count": len(skill_snapshots),
             "model_call_document_count": len(list((root / "model_calls").glob("*.json"))),

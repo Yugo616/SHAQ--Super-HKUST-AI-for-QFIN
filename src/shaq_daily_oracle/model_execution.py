@@ -22,12 +22,15 @@ from .windows_process_tree import WindowsProcessJob
 class ExecutionPolicy:
     timeout_seconds: int = 600
     transient_retries: int = 1
+    citation_retries: int = 1
 
     def __post_init__(self):
         if type(self.timeout_seconds) is not int or self.timeout_seconds <= 0:
             raise ValueError('call timeout must be a positive integer')
         if type(self.transient_retries) is not int or not 0 <= self.transient_retries <= 1:
             raise ValueError('transient retries must be zero or one')
+        if type(self.citation_retries) is not int or not 0 <= self.citation_retries <= 1:
+            raise ValueError('citation retries must be zero or one')
 
     def public_dict(self):
         return asdict(self)
@@ -47,6 +50,29 @@ def execution_policy_scope(policy: ExecutionPolicy):
 
 def call_timeout_seconds():
     return _POLICY.get().timeout_seconds
+
+
+class CitationValidationError(ValueError):
+    """A returned report has malformed, duplicate or out-of-task references."""
+    kind = 'citation_validation'
+
+
+CITATION_RETRY_PREFIX = (
+    'REFERENCE VALIDATION RETRY: Your previous report contained invalid or duplicate '
+    'evidence_ids. Regenerate the complete requested response from the SAME frozen input. '
+    'For each task, copy evidence_ids exactly from that task\'s evidence list; never shorten, '
+    'invent, repeat or borrow an ID from another task. Do not change task identities, '
+    'use new information, or force a direction. No prediction was accepted.\n\n'
+)
+
+
+def verified_request_prompt(document):
+    """Keep logical cache input and the actual corrective request separately auditable."""
+    original = document['prompt']
+    actual = document.get('request_prompt', original)
+    if actual not in (original, CITATION_RETRY_PREFIX + original):
+        raise ValueError('model corrective request differs from frozen input')
+    return actual
 
 
 QUOTA_ERROR_CODES = frozenset({'insufficient_quota', 'usage_limit_reached', 'quota_exceeded'})

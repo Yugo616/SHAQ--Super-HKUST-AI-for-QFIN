@@ -1,5 +1,37 @@
 # Software updates
 
+## 0.7.12: isolated analysis and a simpler desktop
+
+- The three main pages are now **Run Analysis**, **Edit Methods** and **View Results**,
+  with a flat sidebar, compact method selection and fewer explanatory labels.
+  Local activity updates only the affected progress content. Expanded reports,
+  reading position and manual selections are preserved; elapsed clocks advance
+  independently of completed task counts.
+- New batches analyze each candidate independently within the saved model's
+  concurrency limit. A candidate that exhausts bounded retries is excluded from
+  that attempt while healthy candidates continue. Recovery reuses verified
+  successes and stops further fresh calls for a candidate that fails again.
+  Shared authentication and integrity failures still stop the affected method.
+- Invalid citation references receive one bounded repair using the same frozen
+  evidence. Recovery retains the original records and verifies earlier partial
+  checkpoints, including the healthy subset from an earlier failed attempt.
+- Earnings-calendar entries reach company-event analysis as scheduled risk.
+  Calendar-only evidence does not support a directional realized company event.
+  Existing necessary free sources, method packages and account rules are retained.
+- Eligibility continues to require actual decision completion strictly before the
+  exchange opens, normally 09:30 ET. Completion at or after the open remains
+  research-only. Model/provider response time is not a guaranteed completion time.
+- Software discovery runs automatically even when automatic installation is off.
+  A circular header control appears only for a newer release, its active download,
+  or a retryable failed download. Manual checks remain in **Connection Settings**.
+  App and installer icons share the new flat Q and market-signal mark.
+- The Windows checks include native notification shutdown and icon assets before
+  compilation. Test workers are drained before their temporary files are removed.
+
+Platform packages are available only after their matching native acceptance records
+and update feeds are published. Frozen research, saved model settings and account
+identities are preserved. No new research run is needed to install this update.
+
 ## 0.7.10: saved connections, supplemental data and research recovery
 
 - Research scoring now requires evidence before decision and decision strictly
@@ -127,7 +159,7 @@ Application updates and research-method updates are separate. **0.7.0 is the fir
 
 ## Platform downloads and acceptance
 
-Primary 0.7.8 downloads: [Windows](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.8-windows), [Apple Silicon / Intel Mac](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.8-macos). Each is available only once its matching packages, checksums and acceptance records appear. Publication requires separate native acceptance for each architecture from the same frozen source, including an upgrade from the matching public base recorded in its acceptance report. Previous downloads:
+Primary 0.7.12 downloads: [Windows](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.12-windows), [Apple Silicon / Intel Mac](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.12-macos). Each is available only once its matching packages, checksums and acceptance records appear. Publication requires separate native acceptance for each architecture from the same frozen source, including an upgrade from the matching public base recorded in its acceptance report. Previous downloads:
 
 - [0.7.7 Windows release page](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.7-windows)
 - [0.7.7 macOS release page](https://github.com/Yugo616/SHAQ--Super-HKUST-AI-for-QFIN/releases/tag/lab-v0.7.7-macos)
@@ -162,7 +194,7 @@ Old program files may be replaced/removed before the target application starts. 
 
 ## Subsequent managed native updates
 
-Open **Software Update** in the app header. A managed, supported installation can check the official release for its operating system and architecture, download a verified update, and offer **Update and Restart**. Matching deltas are preferred when available; a verified full package is the fallback. Missing/corrupt packages or the wrong architecture/feed must fail safely rather than install unverified content. Source and unmanaged installs retain installer-only guidance.
+The app checks automatically for newer releases. When one is available, use the circular download control in the header; manual checks are in **Connection Settings → Software Update**. A managed, supported installation can download a verified update for its operating system and architecture, then offer **Update and Restart**. Matching deltas are preferred when available; a verified full package is the fallback. Missing/corrupt packages or the wrong architecture/feed must fail safely rather than install unverified content. Source and unmanaged installs retain installer-only guidance.
 
 Downloads do not end active work. Apply waits for analysis, settlement and background writes to finish; unsaved GUI edits must be resolved before restart. Cross-process runtime admission prevents an old window or scheduled worker from resuming writes after installation. A queued manual update can be cancelled before installation begins. Automatic software updates are a separate saved preference and remain off until explicitly enabled; turning them on does not enable automatic research.
 

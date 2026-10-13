@@ -65,6 +65,7 @@ console.log(JSON.stringify(vm.runInContext(`SHAQComparison.html({
   get_lab_state:()=>new Promise(resolve=>{finish=resolve}),
   get_lab_activity:async()=>({ok:true,value:{changed:true,revision:'new',
    jobs:[{job_id:'active',status:'running',message:'new progress'}],
+   formal_operator:{connected:true,service:{state:'workflow_complete'}},
    result_refresh:{status:'idle'},clock:{trade_date:'today'},observed_at:'now'}})
  }};
  vm.runInContext(`state.data={jobs:[],dashboard:{marker:'old'},clock:{},settings:{},result_refresh:{status:'idle'}};
@@ -72,13 +73,15 @@ console.log(JSON.stringify(vm.runInContext(`SHAQComparison.html({
  updateRunClockStatus=()=>{};preserveReadingView=()=>()=>{};`,ctx);
  const pending=vm.runInContext('load(false)',ctx);
  await vm.runInContext('pollDesktopActivity()',ctx);
- finish({ok:true,value:{jobs:[],dashboard:{marker:'new'},clock:{},settings:{},result_refresh:{status:'idle'}}});
+ finish({ok:true,value:{jobs:[],dashboard:{marker:'new'},clock:{},settings:{},result_refresh:{status:'idle'},
+  formal_operator:{connected:true,service:{state:'workflow_running'}}}});
  await pending;
- console.log(vm.runInContext('JSON.stringify({dashboard:state.data.dashboard.marker,jobs:state.data.jobs})',ctx));
+ console.log(vm.runInContext('JSON.stringify({dashboard:state.data.dashboard.marker,jobs:state.data.jobs,formal:state.data.formal_operator})',ctx));
 })().catch(error=>{console.error(error);process.exitCode=1});
 ''')
         self.assertEqual(value['dashboard'],'new')
         self.assertEqual(value['jobs'][0]['message'],'new progress')
+        self.assertEqual(value['formal']['service']['state'],'workflow_complete')
 
     def test_failed_batch_detail_is_read_again_after_recovery(self):
         value=self.bundle(r'''
