@@ -5,10 +5,10 @@ on:
       target:
         description: Complete acceptance for Windows, macOS, or all platforms at this commit
         type: choice
-        options: [windows, windows-check, windows-layout, windows-validated, macos, macos-arm64, macos-intel, all]
+        options: [windows, windows-check, windows-layout, windows-validated, macos, macos-arm64, macos-intel, macos-intel-validated, all]
         default: windows
       application_ref:
-        description: Exact application commit for Windows layout or validated Windows release route
+        description: Exact application commit for external layout or validated release routes
         type: string
       native_run_id:
         description: Official native workflow run providing optional verified dependency wheels
@@ -136,13 +136,28 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON((inputs.target == 'windows' || inputs.target == 'windows-validated') && '[{"runner":"windows-latest","platform":"Windows-x64"}]' || inputs.target == 'macos-arm64' && '[{"runner":"macos-15","platform":"macOS-Apple-Silicon","arch":"arm64"}]' || inputs.target == 'macos-intel' && '[{"runner":"macos-15-intel","platform":"macOS-Intel","arch":"x86_64"}]' || inputs.target == 'macos' && '[{"runner":"macos-15","platform":"macOS-Apple-Silicon","arch":"arm64"},{"runner":"macos-15-intel","platform":"macOS-Intel","arch":"x86_64"}]' || '[{"runner":"windows-latest","platform":"Windows-x64"},{"runner":"macos-15","platform":"macOS-Apple-Silicon","arch":"arm64"},{"runner":"macos-15-intel","platform":"macOS-Intel","arch":"x86_64"}]') }}
+        include: ${{ fromJSON((inputs.target == 'windows' || inputs.target == 'windows-validated') && '[{"runner":"windows-latest","platform":"Windows-x64"}]' || inputs.target == 'macos-arm64' && '[{"runner":"macos-15","platform":"macOS-Apple-Silicon","arch":"arm64"}]' || (inputs.target == 'macos-intel' || inputs.target == 'macos-intel-validated') && '[{"runner":"macos-15-intel","platform":"macOS-Intel","arch":"x86_64"}]' || inputs.target == 'macos' && '[{"runner":"macos-15","platform":"macOS-Apple-Silicon","arch":"arm64"},{"runner":"macos-15-intel","platform":"macOS-Intel","arch":"x86_64"}]' || '[{"runner":"windows-latest","platform":"Windows-x64"},{"runner":"macos-15","platform":"macOS-Apple-Silicon","arch":"arm64"},{"runner":"macos-15-intel","platform":"macOS-Intel","arch":"x86_64"}]') }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
+      - name: Stage only the Intel layout harness outside frozen application source
+        if: inputs.target == 'macos-intel-validated'
+        shell: bash
+        env:
+          APPLICATION_REF: ${{ inputs.application_ref }}
+        run: |
+          [[ "$APPLICATION_REF" =~ ^[a-fA-F0-9]{40}$ ]] || { echo 'Exact application SHA required'; exit 1; }
+          validation_sha=$(git rev-parse HEAD)
+          test "$validation_sha" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain)"
+          harness_root="$RUNNER_TEMP/shaq-intel-layout"
+          mkdir -p "$harness_root"
+          git archive "$validation_sha" tests/native_layout_check.py tests/native_geometry.py | tar -x -C "$harness_root"
+          echo "SHAQ_LAYOUT_VALIDATION_SHA=$validation_sha" >> "$GITHUB_ENV"
+          echo "SHAQ_EXTERNAL_LAYOUT_HARNESS=$harness_root/tests/native_layout_check.py" >> "$GITHUB_ENV"
       - name: Stage immutable external layout harness outside application checkout
         if: inputs.target == 'windows-validated'
         shell: pwsh
@@ -167,9 +182,33 @@ jobs:
           "SHAQ_EXTERNAL_DISPLAY_PREFLIGHT=$harnessRoot/packaging/windows_ci_display.py" | Out-File -FilePath $env:GITHUB_ENV -Append
           "SHAQ_EXTERNAL_PACKAGING=$harnessRoot/packaging" | Out-File -FilePath $env:GITHUB_ENV -Append
       - uses: actions/checkout@v4
-        if: inputs.target == 'windows-validated'
+        if: inputs.target == 'windows-validated' || inputs.target == 'macos-intel-validated'
         with:
           ref: ${{ inputs.application_ref }}
+      - name: Record Intel harness hashes and verify frozen application identity
+        if: inputs.target == 'macos-intel-validated'
+        shell: bash
+        env:
+          APPLICATION_REF: ${{ inputs.application_ref }}
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, subprocess
+          from pathlib import Path
+          application = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+          assert application == os.environ['APPLICATION_REF']
+          assert not subprocess.check_output(['git', 'status', '--porcelain'], text=True).strip()
+          harness = Path(os.environ['SHAQ_EXTERNAL_LAYOUT_HARNESS'])
+          proof = {'application_sha': application,
+                   'validation_sha': os.environ['SHAQ_LAYOUT_VALIDATION_SHA'],
+                   'layout_sha256': hashlib.sha256(harness.read_bytes()).hexdigest(),
+                   'geometry_sha256': hashlib.sha256(harness.with_name('native_geometry.py').read_bytes()).hexdigest(),
+                   'application_clean_before': True, 'application_clean_after': False}
+          path = Path('dist/diagnostic/external-layout-source.json')
+          path.parent.mkdir(parents=True, exist_ok=True)
+          path.write_text(json.dumps(proof, indent=2) + '\n')
+          with open(os.environ['GITHUB_ENV'], 'a') as output:
+              output.write('SHAQ_LAYOUT_APPLICATION_SHA=' + application + '\n')
+          PY
       - name: Verify frozen application checkout and record both identities
         if: inputs.target == 'windows-validated'
         shell: pwsh
@@ -292,8 +331,17 @@ jobs:
           python "$env:SHAQ_EXTERNAL_PACKAGING/validation_tests.py" --application "$PWD" --output "$PWD/dist/diagnostic/validation-tests.json"
           exit $LASTEXITCODE
       - name: Check native desktop layout at normal and narrow widths
-        if: inputs.target != 'windows-validated'
+        if: inputs.target != 'windows-validated' && inputs.target != 'macos-intel-validated'
         run: python tests/native_layout_check.py --output dist/diagnostic/desktop-layout.json
+      - name: Check unchanged Intel application using clock-consistent layout fixture
+        if: inputs.target == 'macos-intel-validated'
+        shell: bash
+        env:
+          PYTHONPATH: ${{ github.workspace }}/src
+        run: |
+          python "$SHAQ_EXTERNAL_LAYOUT_HARNESS" --output dist/diagnostic/desktop-layout.json 2>&1 | tee dist/diagnostic/desktop-layout.log
+          test "$(git rev-parse HEAD)" = "$SHAQ_LAYOUT_APPLICATION_SHA"
+          test -z "$(git status --porcelain)"
       - name: Check frozen application with reviewed external native layout harness
         if: inputs.target == 'windows-validated'
         shell: pwsh
@@ -353,6 +401,20 @@ jobs:
         env:
           SHAQ_BUILD_GITHUB_TOKEN: ${{ github.token }}
         run: python packaging/public_base_update_acceptance.py --feed dist/update-feed --target-version ${{ steps.native-config.outputs.candidate }} --output dist/public-base-update.json
+      - name: Verify Intel application remained unchanged through all installed acceptance
+        if: inputs.target == 'macos-intel-validated'
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json, os, subprocess
+          from pathlib import Path
+          assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == os.environ['SHAQ_LAYOUT_APPLICATION_SHA']
+          assert not subprocess.check_output(['git', 'status', '--porcelain'], text=True).strip()
+          path = Path('dist/diagnostic/external-layout-source.json')
+          proof = json.loads(path.read_text())
+          proof['application_clean_after'] = True
+          path.write_text(json.dumps(proof, indent=2) + '\n')
+          PY
       - name: Retain installers, checksums, provenance, native sources and acceptance evidence
         if: always()
         uses: actions/upload-artifact@v4
