@@ -43,7 +43,17 @@ def schedule_status(paths):
     value["local_start"] = "下次启动：" + target.astimezone().strftime("%Y-%m-%d %H:%M %Z")
     status_path = paths.research_root / "schedule_status.json"
     status = json.loads(status_path.read_text(encoding="utf-8")) if status_path.exists() else {}
-    value["status_message"] = status.get("message", "")
+    value["status_message"] = ""
+    value["status_session_date"] = ""
+    try:
+        recorded = datetime.fromisoformat(status.get("heartbeat") or status.get("recorded_at", ""))
+    except (TypeError, ValueError):
+        recorded = None
+    if recorded is not None and recorded.tzinfo is not None and recorded <= now:
+        recorded_day = recorded.astimezone(ET).date()
+        if recorded_day == now.date():
+            value["status_message"] = status.get("message", "")
+            value["status_session_date"] = recorded_day.isoformat()
     return value
 
 
@@ -243,7 +253,8 @@ def run_research_worker(paths):
             return 0
         if state == "missed":
             _atomic_json(ledger, {"status": "missed", "recorded_at": now.isoformat()})
-            _atomic_json(paths.research_root / "schedule_status.json", {"message": "错过自动运行窗口，可手动运行练习"})
+            _atomic_json(paths.research_root / "schedule_status.json", {
+                "message": "错过自动运行窗口，可手动运行练习", "recorded_at": now.isoformat()})
             return 0
         recovery_count = saved.get('collection_recovery_count', 0)
         if recovering:

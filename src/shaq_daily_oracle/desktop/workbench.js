@@ -160,11 +160,17 @@ async function renderAutomatic(force=false){
     const x=await api('get_research_schedule');
     if(!target.isConnected||request!==wb.scheduleRequest)return;
     summary.textContent=SHAQProgress.scheduleText(x);
-    if(target.querySelector('#auto-time')&&!force)return;
+    const nextStart=x.enabled?x.local_start||'':'';
+    const statusText=x.status_session_date&&x.status_message?`自动运行记录 · ${x.status_session_date}（美东）：${x.status_message}`:'';
+    if(target.querySelector('#auto-time')&&!force){
+      target.querySelector('#auto-next-start').textContent=nextStart;
+      const status=target.querySelector('#auto-status');status.textContent=statusText;status.hidden=!statusText;
+      return;
+    }
     const versions=state.data.versions||[], profiles=state.data.settings.model_profiles||[];
     const chosen=new Set(SHAQAccounts.normalizeSelections(versions,x.selections||[]).map(v=>`${v.author}/${v.version_id}`));
     wb.autoModelChoice={profile_id:x.model_profile_id,model:x.model||profiles.find(p=>p.profile_id===x.model_profile_id)?.model||''};
-    target.innerHTML=`<label class="check-row"><input id="auto-enabled" type="checkbox" ${x.enabled?'checked':''}>每天自动运行</label><label>美东启动时间 <input id="auto-time" type="time" value="${esc(x.start_et.slice(0,5))}"></label><p>${esc(x.local_start||'')} ${esc(x.status_message||'')}</p><div class="run-models"><label class="run-model">连接<select id="auto-model"></select></label><label class="run-model">自动运行模型<select id="auto-model-name" disabled></select></label><button type="button" class="text-button" id="refresh-auto-models">刷新模型</button></div><p id="auto-model-status" class="inline-status" role="status" hidden></p><p>自动运行的版本（独立于手动运行选择）</p>${versions.map(v=>`<label class="check-row"><input class="auto-version" type="checkbox" data-author="${esc(v.author)}" data-version="${esc(v.version_id)}" ${chosen.has(versionKey(v))?'checked':''}>${esc(versionName(v))}</label>`).join('')}<p>保存只修改后续任务。电脑需要保持开机、联网。</p><button class="secondary" id="save-automatic">保存自动运行设置</button>`;
+    target.innerHTML=`<label class="check-row"><input id="auto-enabled" type="checkbox" ${x.enabled?'checked':''}>每天自动运行</label><label>美东启动时间 <input id="auto-time" type="time" value="${esc(x.start_et.slice(0,5))}"></label><p id="auto-next-start">${esc(nextStart)}</p><p id="auto-status"${statusText?'':' hidden'}>${esc(statusText)}</p><div class="run-models"><label class="run-model">连接<select id="auto-model"></select></label><label class="run-model">自动运行模型<select id="auto-model-name" disabled></select></label><button type="button" class="text-button" id="refresh-auto-models">刷新模型</button></div><p id="auto-model-status" class="inline-status" role="status" hidden></p><p>自动运行的版本（独立于手动运行选择）</p>${versions.map(v=>`<label class="check-row"><input class="auto-version" type="checkbox" data-author="${esc(v.author)}" data-version="${esc(v.version_id)}" ${chosen.has(versionKey(v))?'checked':''}>${esc(versionName(v))}</label>`).join('')}<p>保存只修改后续任务。电脑需要保持开机、联网。</p><button class="secondary" id="save-automatic">保存自动运行设置</button>`;
     void bindAnalysisModel('#auto-model','#auto-model-name','#auto-model-status','#refresh-auto-models',wb.autoModelChoice);
     target.oninput=target.onchange=()=>{wb.autoRevision=(wb.autoRevision||0)+1};
     q('#save-automatic').onclick=async()=>{

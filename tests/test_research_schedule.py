@@ -6,6 +6,7 @@ import tempfile
 import threading
 import unittest
 import uuid
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -16,6 +17,39 @@ from shaq_daily_oracle.background_process import background_process_options
 
 
 class ResearchScheduleTests(unittest.TestCase):
+    def test_schedule_does_not_attach_an_old_result_to_the_next_start(self):
+        now = datetime.fromisoformat('2026-10-13T07:00:00-04:00')
+        with tempfile.TemporaryDirectory() as directory:
+            paths = SimpleNamespace(research_root=Path(directory))
+            config = {'enabled': True, 'start_et': '08:35', 'selections': [], 'model_profile_id': 'local'}
+            (paths.research_root / 'schedule.json').write_text(json.dumps(config))
+            status_path = paths.research_root / 'schedule_status.json'
+            for stamp in ('2026-10-12T08:55:53-04:00', '', 'invalid', '2026-10-13T07:00:00'):
+                with self.subTest(stamp=stamp):
+                    status_path.write_text(json.dumps({'heartbeat': stamp, 'message': 'one complete, one failed'}))
+                    before = status_path.read_bytes()
+                    with patch.object(schedule, 'datetime', wraps=datetime) as clock:
+                        clock.now.return_value = now
+                        result = schedule.schedule_status(paths)
+                    self.assertEqual(result['status_message'], '')
+                    self.assertEqual(result.get('status_session_date', ''), '')
+                    self.assertEqual(status_path.read_bytes(), before)
+            self.assertEqual(json.loads((paths.research_root / 'schedule.json').read_text()), config)
+
+    def test_schedule_keeps_today_diagnostics_with_their_eastern_date(self):
+        now = datetime.fromisoformat('2026-10-13T23:45:00-04:00')
+        for field in ('heartbeat', 'recorded_at'):
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as directory:
+                paths = SimpleNamespace(research_root=Path(directory))
+                # UTC is already tomorrow, but this remains the same trading day.
+                (paths.research_root / 'schedule_status.json').write_text(json.dumps({
+                    field: '2026-10-14T03:40:00+00:00', 'message': 'connection failed'}))
+                with patch.object(schedule, 'datetime', wraps=datetime) as clock:
+                    clock.now.return_value = now
+                    result = schedule.schedule_status(paths)
+                self.assertEqual(result['status_message'], 'connection failed')
+                self.assertEqual(result.get('status_session_date'), '2026-10-13')
+
     def test_schedule_retains_explicit_model_and_passes_it_to_the_worker(self):
         selected = []
         class Lab:
