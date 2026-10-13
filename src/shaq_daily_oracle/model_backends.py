@@ -457,6 +457,10 @@ def _local_call_failure(backend, completed, *, prompt='', json_events=False):
     # model text. Publish an allowlisted description, not raw stderr/evidence.
     errors = re.findall(r'(?im)^ERROR:\s*(.+)$', output)
     for line in reversed(errors):
+        if re.match(r'(?i)selected model is at capacity\b', line):
+            return ModelBackendError(f'{backend}：所选模型服务繁忙，可稍后重试',
+                diagnostic={'kind': 'capacity', 'backend': backend,
+                            'returncode': completed.returncode})
         status_match = re.search(r'(?i)\b(?:unexpected status|HTTP(?:/\d(?:\.\d)?)?)\s+(\d{3})\b', line)
         if status_match:
             status = int(status_match.group(1))

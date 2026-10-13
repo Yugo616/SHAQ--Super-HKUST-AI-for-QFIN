@@ -54,6 +54,26 @@ def schedule_status(paths):
         if recorded_day == now.date():
             value["status_message"] = status.get("message", "")
             value["status_session_date"] = recorded_day.isoformat()
+            # A manual resume belongs to the original automatic batch. Read its
+            # current state without replacing the original failure/history.
+            try:
+                ledger = json.loads((paths.research_root / 'automatic_runs' /
+                                     f'{recorded_day}.json').read_text(encoding='utf-8'))
+                batch_id = ledger.get('batch_id', '')
+                if not re.fullmatch(r'LAB-' + str(recorded_day) + r'-[A-Za-z0-9_-]+', batch_id):
+                    return value
+                job_id = 'resume-' + batch_id
+                recovery = json.loads((paths.research_root / 'jobs' /
+                                       f'{job_id}.json').read_text(encoding='utf-8'))
+                started = datetime.fromisoformat(recovery.get('started_at_et', ''))
+                if (recovery.get('job_id') == job_id and recovery.get('batch_id') == batch_id
+                        and started.tzinfo is not None and recorded <= started <= now):
+                    from .job_corrections import observed_job_status
+                    recovery = observed_job_status(paths.research_root, recovery)
+                    if recovery.get('message'):
+                        value['status_message'] = '原批次恢复：' + recovery['message']
+            except (OSError, ValueError, TypeError, AttributeError):
+                pass
     return value
 
 

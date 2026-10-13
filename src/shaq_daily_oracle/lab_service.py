@@ -1423,12 +1423,13 @@ class LabService:
                 observer=observe,
             )
             completed = result["status"]["all_variants_completed"]
-            completed_count = len(result['status'].get('completed_variants', []))
+            published = set(result['status'].get('completed_variants', []))
             variant_errors = {**result['status'].get('failed_variants', {}),
                               **result['status'].get('incomplete_variants', {})}
+            completed_count = len(published - variant_errors.keys())
             for key in result['status'].get('incomplete_variants', {}):
                 self._variant_progress(job_id, key, 'partial_failure')
-            final_status = 'complete' if completed else ('partial_failure' if completed_count else 'failed')
+            final_status = 'complete' if completed else ('partial_failure' if published else 'failed')
             self._set_job(
                 job_id, status=final_status,
                 completed_at_et=datetime.now(ET).isoformat(),
@@ -1508,7 +1509,8 @@ class LabService:
             return {'job_id': job_id, 'batch_id': batch_id, 'status': 'running', 'message': '原批次正在恢复'}
         try:
             saved_status = json.loads((root / 'batch_status.json').read_text(encoding='utf-8'))
-            completed = set(saved_status.get('completed_variants', []))
+            completed = (set(saved_status.get('completed_variants', []))
+                         - saved_status.get('incomplete_variants', {}).keys())
             self._set_job(job_id, batch_id=batch_id, status='queued',
                 execution_lock_protocol=1,
                 message='已恢复，正在继续未完成分析',

@@ -51,6 +51,17 @@ class CliFailureClassificationTests(unittest.TestCase):
         error = self.failure('Error: failed to refresh available models: request timed out\n')
         self.assertTrue(transient_model_failure(error))
 
+    def test_codex_capacity_error_retains_specific_retryable_reason(self):
+        import json
+        message='Selected model is at capacity. Please try a different model.'
+        for event in ({'type':'error','message':message},
+                      {'type':'turn.failed','error':{'message':message}}):
+            error=_local_call_failure('Codex',subprocess.CompletedProcess([],1,json.dumps(event),''),
+                                      json_events=True)
+            self.assertTrue(transient_model_failure(error))
+            self.assertEqual(error.diagnostic['kind'],'capacity')
+            self.assertIn('繁忙',str(error))
+
 
     def test_http_status_classification_keeps_permissions_nonretryable(self):
         for status, retry in ((429, True), (503, True), (401, False), (403, False), (400, False)):

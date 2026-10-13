@@ -28,7 +28,10 @@ class CandidateIsolationTests(unittest.TestCase):
     def test_stock_review_failure_is_isolated(self):
         self.exercise(adversary_failure=True)
 
-    def exercise(self, shared=False, failed_recovery=False, partial_recovery=False, tamper=False, adversary_failure=False):
+    def test_cli_process_exit_retries_only_bad_stock_and_preserves_siblings(self):
+        self.exercise(process_exit=True)
+
+    def exercise(self, shared=False, failed_recovery=False, partial_recovery=False, tamper=False, adversary_failure=False, process_exit=False):
         with tempfile.TemporaryDirectory() as name:
             root=Path(name); helper=fixtures.ResearchBatchTests(); registry=helper.registry(root)
             stamp='2026-09-04T08:49:00-04:00'
@@ -51,6 +54,7 @@ class CandidateIsolationTests(unittest.TestCase):
                 integration_policy=helper.policy())
             model=fixtures.FakeModel()
             failed_symbols={'AAPL','NVDA'} if partial_recovery else {'AAPL'}
+            failed_calls=[]
             def fail_one(**kw):
                 value,audit=model(**kw)
                 if adversary_failure and 'REPORTS:\n' in kw['prompt']:
@@ -59,6 +63,11 @@ class CandidateIsolationTests(unittest.TestCase):
                 elif not adversary_failure and 'FROZEN TASKS:' in kw['prompt']:
                     tasks=json.loads(kw['prompt'].split('FROZEN TASKS:\n')[1])
                     if any(t['symbol'] in failed_symbols and t['domain']=='price_volume' for t in tasks):
+                        if process_exit:
+                            from shaq_daily_oracle.model_backends import ModelBackendError
+                            failed_calls.append(kw['prompt'])
+                            raise ModelBackendError('CLI exited', diagnostic={
+                                'kind':'local_call','backend':'Codex','returncode':1})
                         if shared:
                             from shaq_daily_oracle.model_backends import ModelBackendError
                             raise ModelBackendError('forbidden',diagnostic={'kind':'authentication','status':403})
@@ -72,6 +81,9 @@ class CandidateIsolationTests(unittest.TestCase):
                 self.assertIn('team/main',first['status']['failed_variants'])
                 return
             self.assertIn('team/main',first['results'],first['status'])
+            if process_exit:
+                self.assertEqual(len(failed_calls),2)
+                self.assertEqual(failed_calls[0],failed_calls[1])
             result=first['results']['team/main']
             self.assertEqual(set(result['excluded_candidates']),failed_symbols)
             self.assertEqual({p['symbol'] for p in result['predictions']},set(symbols)-failed_symbols)

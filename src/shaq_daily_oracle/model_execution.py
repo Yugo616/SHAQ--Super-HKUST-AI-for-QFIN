@@ -79,7 +79,7 @@ QUOTA_ERROR_CODES = frozenset({'insufficient_quota', 'usage_limit_reached', 'quo
 
 
 def transient_model_failure(error: Exception) -> bool:
-    """Fail closed: transport failures only, never arbitrary provider text."""
+    """Allow diagnosed transport/capacity failures, never arbitrary provider text."""
     seen = set()
     current = error
     while current is not None and id(current) not in seen:
@@ -92,7 +92,7 @@ def transient_model_failure(error: Exception) -> bool:
             return status == 429 or 500 <= status <= 599
         if diagnostic.get('kind') in {'authentication', 'permission', 'schema'}:
             return False
-        if diagnostic.get('kind') in {'timeout', 'connection'}:
+        if diagnostic.get('kind') in {'timeout', 'connection', 'capacity'}:
             return True
         if isinstance(current, (TimeoutError, ConnectionError, subprocess.TimeoutExpired)):
             return True
@@ -104,6 +104,23 @@ def transient_model_failure(error: Exception) -> bool:
             return True
         current = current.__cause__
     return False
+
+
+def retryable_model_failure(error: Exception) -> bool:
+    """Retry a failed CLI process within the same bounded transport budget.
+
+    An unexplained nonzero exit is not proof of a network outage or a shared
+    configuration failure. Keep that distinction in the audit and quarantine
+    only its task if retrying fails. Explicit shared failures remain terminal.
+    """
+    if transient_model_failure(error):
+        return True
+    diagnostic = getattr(error, 'diagnostic', None) or {}
+    return (diagnostic.get('kind') == 'local_call'
+            and type(diagnostic.get('returncode')) is int
+            and diagnostic['returncode'] != 0
+            and diagnostic.get('status') is None
+            and diagnostic.get('provider_code') not in QUOTA_ERROR_CODES)
 
 
 def run_model_process(command, *, timeout, input=None, capture_output=False, check=False, **kwargs):

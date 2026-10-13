@@ -17,6 +17,36 @@ from shaq_daily_oracle.background_process import background_process_options
 
 
 class ResearchScheduleTests(unittest.TestCase):
+    def test_today_automatic_record_reflects_same_batch_recovery_without_rewriting_history(self):
+        now=datetime.fromisoformat('2026-10-13T10:00:00-04:00')
+        with tempfile.TemporaryDirectory() as directory:
+            paths=SimpleNamespace(research_root=Path(directory))
+            batch_id='LAB-2026-10-13-fixture'
+            job_id='resume-'+batch_id
+            status_path=paths.research_root/'schedule_status.json'
+            status_path.write_text(json.dumps({'heartbeat':'2026-10-13T09:02:00-04:00',
+                                               'message':'0 complete, 2 failed'}))
+            ledger=paths.research_root/'automatic_runs/2026-10-13.json'
+            ledger.parent.mkdir()
+            ledger.write_text(json.dumps({'batch_id':batch_id,'status':'failed'}))
+            job_path=paths.research_root/'jobs'/f'{job_id}.json'
+            job_path.parent.mkdir()
+            job={'job_id':job_id,'batch_id':batch_id,'status':'complete',
+                 'started_at_et':'2026-10-13T09:40:00-04:00',
+                 'message':'所选版本已完成'}
+            originals={p:p.read_bytes() for p in [status_path,ledger]}
+            for changed,expected in [({},'原批次恢复：所选版本已完成'),
+                                      ({'batch_id':'LAB-2026-10-12-other'},'0 complete, 2 failed'),
+                                      ({'started_at_et':'2026-10-14T10:00:00-04:00'},'0 complete, 2 failed')]:
+                with self.subTest(changed=changed):
+                    job_path.write_text(json.dumps({**job,**changed}))
+                    with patch.object(schedule,'datetime',wraps=datetime) as clock:
+                        clock.now.return_value=now
+                        value=schedule.schedule_status(paths)
+                    self.assertEqual(value['status_message'],expected)
+            for p,content in originals.items():
+                self.assertEqual(p.read_bytes(),content)
+
     def test_schedule_does_not_attach_an_old_result_to_the_next_start(self):
         now = datetime.fromisoformat('2026-10-13T07:00:00-04:00')
         with tempfile.TemporaryDirectory() as directory:

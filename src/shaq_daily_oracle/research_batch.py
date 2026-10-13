@@ -25,6 +25,7 @@ from .hashing import sha256_file, sha256_payload
 from .lineage import build_lineage_graph
 from .model_backends import ModelProfile, call_structured, safe_model_error_summary, _validate_result
 from .model_execution import (ExecutionPolicy, execution_policy_scope, transient_model_failure,
+                              retryable_model_failure,
                               compact_market_tables, CitationValidationError,
                               CITATION_RETRY_PREFIX, verified_request_prompt)
 from .research_progress import safe_observe
@@ -56,7 +57,7 @@ class CandidateReportError(ResearchBatchError):
 
 def _candidate_local_failure(exc):
     return (isinstance(exc, (CitationValidationError, CandidateReportError))
-            or transient_model_failure(exc)
+            or retryable_model_failure(exc)
             or (getattr(exc, 'diagnostic', None) or {}).get('kind') in {'output_schema', 'output_json'})
 
 
@@ -589,6 +590,7 @@ class ContentAddressedModelCache:
                         _write_json_same_or_once(rejected_root / 'rejected_model_calls' / f'{rejected_hash}.json',
                             {**rejected, 'rejected_document_sha256': rejected_hash})
                     transient = transient_model_failure(exc)
+                    retryable = retryable_model_failure(exc)
                     correctable = isinstance(exc, CitationValidationError) and rejected_output is not None
                     diagnostic = getattr(exc, 'diagnostic', None) or {}
                     safe_diagnostic = {key: value for key, value in diagnostic.items()
@@ -617,7 +619,7 @@ class ContentAddressedModelCache:
                     if correctable and citation_retries < policy.citation_retries:
                         citation_retries += 1
                         request_prompt = CITATION_RETRY_PREFIX + prompt
-                    elif transient and transport_retries < policy.transient_retries:
+                    elif retryable and transport_retries < policy.transient_retries:
                         transport_retries += 1
                     else:
                         raise
@@ -625,7 +627,8 @@ class ContentAddressedModelCache:
                         safe_observe(on_attempt_event, stage='model_retry_scheduled', attempt=attempt + 2,
                                          max_attempts=max_attempts,
                                          status='scheduled',
-                                         retry_reason='citation_validation' if correctable else 'transport',
+                                         retry_reason=('citation_validation' if correctable else
+                                                       'transport' if transient else 'local_process'),
                                          waiting_for='rate_slot')
                     continue
                 attempts.append({'attempt': attempt + 1, 'started_at_et': timestamp,

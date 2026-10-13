@@ -15,6 +15,28 @@ from shaq_daily_oracle.hashing import sha256_file
 
 
 class CollectionFailureStateTests(unittest.TestCase):
+    def test_published_partial_variants_are_not_counted_as_fully_completed(self):
+        for incomplete_keys,complete_count in [(['team/b'],1),(['team/a','team/b'],0)]:
+            with self.subTest(incomplete_keys=incomplete_keys), tempfile.TemporaryDirectory() as name:
+                root=Path(name)
+                service=self.service(root)
+                service.paths.package_root=Path(__file__).resolve().parents[1]
+                service.paths.batches_root=root/'batches'
+                service.registry=SimpleNamespace()
+                service.settings.execution_policy=lambda:None
+                incomplete={key:{'error_type':'IncompleteCandidates','symbols':['TEST']} for key in incomplete_keys}
+                outcome={'status':{'all_variants_completed':False,'completed_variants':['team/a','team/b'],
+                                   'failed_variants':{},'incomplete_variants':incomplete,'batch_id':'LAB-test'}}
+                with patch.object(service,'_today_evidence',return_value=object()), \
+                     patch('shaq_daily_oracle.lab_service.ResearchBatchRunner') as runner, \
+                     patch.object(service,'start_result_refresh',return_value={'status':'not_due'}):
+                    runner.return_value.run.return_value=outcome
+                    service._run_batch_job(job_id='job-fixture',variants=[],profile=None,secret='')
+                saved=json.loads((root/'jobs/job-fixture.json').read_text())
+                self.assertEqual(saved['status'],'partial_failure')
+                self.assertEqual(saved['completed_variant_count'],complete_count)
+                self.assertEqual(saved['completed_variant_count']+saved['failed_variant_count'],2)
+
     def test_no_completed_variants_is_failure_not_partial_success(self):
         with tempfile.TemporaryDirectory() as name:
             root = Path(name)
