@@ -13,6 +13,7 @@ class ModelSelectionTests(unittest.TestCase):
     def test_selected_catalog_model_reaches_job_without_changing_saved_or_scheduled_model(self):
         import threading
         from shaq_daily_oracle.lab_service import LabService
+        from shaq_daily_oracle.update_admission import start_guarded_thread
         for protocol in ('codex-cli', 'claude-code'):
             with self.subTest(protocol=protocol), tempfile.TemporaryDirectory() as tmp:
                 lab = LabService(foundation.ResearchLabFoundationTests().paths(Path(tmp)))
@@ -22,6 +23,10 @@ class ModelSelectionTests(unittest.TestCase):
                 schedule.write_text(json.dumps({'enabled': False, 'model_profile_id': 'connection', 'model': 'scheduled-model'}))
                 before = schedule.read_bytes()
                 done, captured = threading.Event(), {}
+                owned_threads=[]
+                def start_owned(paths,thread):
+                    owned_threads.append(thread)
+                    start_guarded_thread(paths,thread)
                 def run(**kwargs):
                     captured['profile'] = kwargs['profile']
                     kwargs['task_lock'].release()
@@ -29,10 +34,18 @@ class ModelSelectionTests(unittest.TestCase):
                 with patch.object(lab, '_require_today_available'), \
                      patch.object(lab, '_resolve_variants', return_value=[]), \
                      patch.object(lab, '_run_batch_job', side_effect=run), \
+                     patch('shaq_daily_oracle.lab_service.start_guarded_thread',side_effect=start_owned), \
                      patch('shaq_daily_oracle.model_catalog.local_model_catalog', return_value={
                          'protocol': protocol, 'models': [{'id': 'selected-model', 'label': 'Selected'}]}):
-                    job = lab.start_batch(selections=[], model_profile_id='connection', model='selected-model')
-                    self.assertTrue(done.wait(5))
+                    try:
+                        job = lab.start_batch(selections=[], model_profile_id='connection', model='selected-model')
+                        self.assertTrue(done.wait(5))
+                    finally:
+                        # The callback signals before the work lease's finally
+                        # block. Wait for that owner before removing its directory.
+                        for thread in owned_threads:
+                            thread.join(timeout=5)
+                        self.assertFalse(any(thread.is_alive() for thread in owned_threads))
                 self.assertEqual(job.get('model'), 'selected-model')
                 self.assertEqual(captured['profile'].model, 'selected-model')
                 self.assertEqual(captured['profile'].protocol, protocol)
